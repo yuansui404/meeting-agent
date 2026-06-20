@@ -1,0 +1,30 @@
+# Java
+backend/target/
+*.class
+*.jar
+*.war
+*.log
+
+# Node
+frontend/node_modules/
+frontend/build/
+frontend/.env.local
+
+# Docker
+docker/postgres/data/
+
+# IDE
+.idea/
+*.iml
+.vscode/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+*.local.*
+
+# Models
+models/

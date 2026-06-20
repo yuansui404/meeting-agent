@@ -1,0 +1,72 @@
+version: '3.8'
+
+services:
+  # PostgreSQL 数据库
+  postgres:
+    image: postgres:15
+    environment:
+      POSTGRES_DB: meeting_agent
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: password
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init-db.sql:/docker-entrypoint-initdb.d/init-db.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U user -d meeting_agent"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # FunASR 模型服务
+  funasr-service:
+    build:
+      context: ./funasr
+      dockerfile: Dockerfile
+    ports:
+      - "8501:8501"
+    environment:
+      - DEVICE=cpu
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8501/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Spring Boot 后端服务
+  backend:
+    build:
+      context: ../backend
+      dockerfile: ../docker/backend/Dockerfile
+    ports:
+      - "8080:8080"
+    environment:
+      - SPRING_PROFILES_ACTIVE=docker
+      - DB_URL=jdbc:postgresql://postgres:5432/meeting_agent
+      - DB_USERNAME=user
+      - DB_PASSWORD=password
+      - FUNASR_URL=http://funasr-service:8501
+    depends_on:
+      postgres:
+        condition: service_healthy
+      funasr-service:
+        condition: service_healthy
+    volumes:
+      - meeting_data:/app/data
+
+  # React 前端服务
+  frontend:
+    build:
+      context: ../frontend
+      dockerfile: ../docker/frontend/Dockerfile
+    ports:
+      - "3000:3000"
+    environment:
+      - REACT_APP_API_URL=http://localhost:8080/api
+    depends_on:
+      - backend
+
+volumes:
+  postgres_data:
+  meeting_data:
