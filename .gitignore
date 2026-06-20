@@ -13,10 +13,14 @@ frontend/.env.local
 # Docker
 docker/postgres/data/
 
-# IDE
-.idea/
+# IDE (user-specific files only)
+.idea/workspace.xml
+.idea/tasks.xml
+.idea/shelf/
+.idea/dictionaries/
 *.iml
-.vscode/
+!backend/meeting-agent.iml
+!meeting-agent-root.iml
 
 # OS
 .DS_Store
