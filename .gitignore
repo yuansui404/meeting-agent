@@ -21,6 +21,7 @@ docker/postgres/data/
 *.iml
 !backend/meeting-agent.iml
 !meeting-agent-root.iml
+!.idea/frontend.iml
 
 # OS
 .DS_Store
