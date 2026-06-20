@@ -2,9 +2,7 @@
 <project version="4">
   <component name="ProjectModuleManager">
     <modules>
-      <module fileurl="file://$PROJECT_DIR$/backend/meeting-agent.iml" filepath="$PROJECT_DIR$/backend/meeting-agent.iml" />
-      <module fileurl="file://$PROJECT_DIR$/meeting-agent-root.iml" filepath="$PROJECT_DIR$/meeting-agent-root.iml" />
-      <module fileurl="file://$PROJECT_DIR$/.idea/frontend.iml" filepath="$PROJECT_DIR$/.idea/frontend.iml" />
+      <module fileurl="file://$PROJECT_DIR$/.idea/meeting-agent.iml" filepath="$PROJECT_DIR$/.idea/meeting-agent.iml" />
     </modules>
   </component>
 </project>
