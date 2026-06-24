@@ -26,6 +26,9 @@ public class DialogueMessage {
     @Column(name = "meeting_context_id")
     private Long meetingContextId;
 
+    @Column(columnDefinition = "TEXT")
+    private String metadata;
+
     private LocalDateTime timestamp;
 
     @PrePersist
@@ -46,6 +49,8 @@ public class DialogueMessage {
     public void setMessageType(String messageType) { this.messageType = messageType; }
     public Long getMeetingContextId() { return meetingContextId; }
     public void setMeetingContextId(Long meetingContextId) { this.meetingContextId = meetingContextId; }
+    public String getMetadata() { return metadata; }
+    public void setMetadata(String metadata) { this.metadata = metadata; }
     public LocalDateTime getTimestamp() { return timestamp; }
     public void setTimestamp(LocalDateTime timestamp) { this.timestamp = timestamp; }
 }

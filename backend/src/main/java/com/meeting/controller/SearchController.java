@@ -22,14 +22,15 @@ public class SearchController {
     @GetMapping("/search")
     public ResponseEntity<?> search(
             @RequestParam String query,
-            @RequestParam(required = false) Long dialogueId) {
+            @RequestParam(required = false) Long dialogueId,
+            @RequestParam(defaultValue = "false") boolean kbOnly) {
 
         // 如果有对话上下文，记录搜索消息
         if (dialogueId != null) {
             dialogueService.addMessage(dialogueId, "user", query, "search");
         }
 
-        var results = searchService.search(query, 20);
+        var results = searchService.search(query, 20, kbOnly);
         return ResponseEntity.ok(Map.of(
                 "query", query,
                 "results", results

@@ -34,6 +34,21 @@ public class MeetingMinutes {
     @Column(length = 20)
     private String status;
 
+    @Column(name = "knowledge_base", nullable = false)
+    private Boolean knowledgeBase = false;
+
+    @Column(name = "dialogue_id")
+    private Long dialogueId;
+
+    @Column(name = "md_file_path")
+    private String mdFilePath;
+
+    @Column(name = "style_exemplar")
+    private Boolean styleExemplar = false;
+
+    @Column(name = "style_tags", length = 500)
+    private String styleTags;
+
     @PrePersist
     protected void onCreate() {
         createdAt = LocalDateTime.now();
@@ -64,4 +79,14 @@ public class MeetingMinutes {
     public void setUpdatedAt(LocalDateTime updatedAt) { this.updatedAt = updatedAt; }
     public String getStatus() { return status; }
     public void setStatus(String status) { this.status = status; }
+    public Boolean getKnowledgeBase() { return knowledgeBase; }
+    public void setKnowledgeBase(Boolean knowledgeBase) { this.knowledgeBase = knowledgeBase; }
+    public Long getDialogueId() { return dialogueId; }
+    public void setDialogueId(Long dialogueId) { this.dialogueId = dialogueId; }
+    public String getMdFilePath() { return mdFilePath; }
+    public void setMdFilePath(String mdFilePath) { this.mdFilePath = mdFilePath; }
+    public Boolean getStyleExemplar() { return styleExemplar; }
+    public void setStyleExemplar(Boolean styleExemplar) { this.styleExemplar = styleExemplar; }
+    public String getStyleTags() { return styleTags; }
+    public void setStyleTags(String styleTags) { this.styleTags = styleTags; }
 }

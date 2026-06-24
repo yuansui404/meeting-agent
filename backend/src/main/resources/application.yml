@@ -2,6 +2,15 @@ server:
   port: 8080
 
 spring:
+  config:
+    import: optional:nacos:meeting-agent.yaml
+  cloud:
+    nacos:
+      config:
+        server-addr: ${NACOS_ADDR:localhost:8848}
+        group: DEFAULT_GROUP
+        file-extension: yaml
+        refresh-enabled: true
   datasource:
     url: jdbc:postgresql://localhost:5432/meeting_agent
     username: user
@@ -15,8 +24,53 @@ spring:
       hibernate:
         dialect: org.hibernate.dialect.PostgreSQLDialect
 
+embedding:
+  provider: ${EMBEDDING_PROVIDER:simple}
+  api-key: ${EMBEDDING_API_KEY:}
+  model: ${EMBEDDING_MODEL:text-embedding-ada-002}
+  url: ${EMBEDDING_URL:https://api.openai.com/v1/embeddings}
+
+deepseek:
+  api-key: ${DEEPSEEK_API_KEY:}
+  model: deepseek-chat
+  url: https://api.deepseek.com
+
+# 智谱多模态模型（用于图片分析）
+zhipu:
+  api-key: ${ZHIPU_API_KEY:bd986bb8c1da40ce9d58c3e0c069020c.Be4WaBn3AoAwoVg0}
+  model: glm-4v
+  url: https://open.bigmodel.cn/api/paas/v4
+
+rag:
+  chunk:
+    strategy: structural
+    size: 512
+    overlap: 128
+  retrieval:
+    vector-topk: 20
+    fts-topk: 20
+    rrf-k: 60
+    rerank-enabled: false
+    rerank-topk: 5
+  evidence:
+    threshold: 0.35
+    adaptive: true
+    adaptive-step: 0.05
+    adaptive-max: 0.5
+  time-decay:
+    enabled: true
+    recent-days: 30
+    recent-weight: 1.2
+    normal-weight: 1.0
+    old-weight: 0.8
+    archive-weight: 0.5
+  conversation:
+    summary-trigger: 3000
+    max-visible-messages: 10
+    max-context-tokens: 32000
+
 funasr:
-  url: http://localhost:8501
+  url: http://localhost:10095
 
 file:
   upload-dir: ${user.home}/meeting-agent/uploads
@@ -26,11 +80,61 @@ spring:
   config:
     activate:
       on-profile: docker
+    import: optional:nacos:meeting-agent.yaml
+  cloud:
+    nacos:
+      config:
+        server-addr: ${NACOS_ADDR:nacos:8848}
+        group: DEFAULT_GROUP
+        file-extension: yaml
+        refresh-enabled: true
   datasource:
     url: jdbc:postgresql://postgres:5432/meeting_agent
     username: user
     password: password
   jpa:
     show-sql: false
+rag:
+  chunk:
+    strategy: structural
+    size: 512
+    overlap: 128
+  retrieval:
+    vector-topk: 20
+    fts-topk: 20
+    rrf-k: 60
+    rerank-enabled: false
+    rerank-topk: 5
+  evidence:
+    threshold: 0.35
+    adaptive: true
+    adaptive-step: 0.05
+    adaptive-max: 0.5
+  time-decay:
+    enabled: true
+    recent-days: 30
+    recent-weight: 1.2
+    normal-weight: 1.0
+    old-weight: 0.8
+    archive-weight: 0.5
+  conversation:
+    summary-trigger: 3000
+    max-visible-messages: 10
+    max-context-tokens: 32000
 funasr:
-  url: http://funasr-service:8501
+  url: http://funasr-service:10095
+file:
+  upload-dir: /app/data/uploads
+zhipu:
+  api-key: ${ZHIPU_API_KEY:bd986bb8c1da40ce9d58c3e0c069020c.Be4WaBn3AoAwoVg0}
+  model: glm-4v
+  url: https://open.bigmodel.cn/api/paas/v4
+embedding:
+  provider: openai
+  api-key: ${ZHIPU_API_KEY:bd986bb8c1da40ce9d58c3e0c069020c.Be4WaBn3AoAwoVg0}
+  model: embedding-2
+  url: https://open.bigmodel.cn/api/paas/v4/embeddings
+deepseek:
+  api-key: ${DEEPSEEK_API_KEY:}
+  model: deepseek-chat
+  url: https://api.deepseek.com

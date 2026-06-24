@@ -18,9 +18,9 @@ public class FileProcessingAgent {
         this.fileProcessingService = fileProcessingService;
     }
 
-    public MeetingMinutes processFile(MultipartFile file) {
+    public MeetingMinutes processFile(MultipartFile file, Long dialogueId) {
         try {
-            return fileProcessingService.uploadFile(file);
+            return fileProcessingService.uploadFile(file, dialogueId);
         } catch (java.io.IOException e) {
             throw new RuntimeException("File processing failed: " + e.getMessage(), e);
         }

@@ -35,6 +35,11 @@ public class DialogueService {
 
     @Transactional
     public DialogueMessage addMessage(Long dialogueId, String role, String content, String messageType) {
+        return addMessage(dialogueId, role, content, messageType, null);
+    }
+
+    @Transactional
+    public DialogueMessage addMessage(Long dialogueId, String role, String content, String messageType, String metadata) {
         Dialogue dialogue = dialogueRepository.findById(dialogueId)
                 .orElseThrow(() -> new IllegalArgumentException("Dialogue not found: " + dialogueId));
 
@@ -44,6 +49,7 @@ public class DialogueService {
         message.setContent(content);
         message.setMessageType(messageType != null ? messageType : "text");
         message.setTimestamp(LocalDateTime.now());
+        message.setMetadata(metadata);
         message = messageRepository.save(message);
 
         // 更新对话时间戳
@@ -84,6 +90,19 @@ public class DialogueService {
 
         dialogue.setImported(true);
         dialogueRepository.save(dialogue);
+    }
+
+    @Transactional
+    public void deleteDialogue(Long dialogueId) {
+        dialogueRepository.deleteById(dialogueId);
+    }
+
+    @Transactional
+    public Dialogue updateTitle(Long dialogueId, String title) {
+        Dialogue dialogue = dialogueRepository.findById(dialogueId)
+                .orElseThrow(() -> new IllegalArgumentException("Dialogue not found: " + dialogueId));
+        dialogue.setTitle(title);
+        return dialogueRepository.save(dialogue);
     }
 
     public String getDialogueContext(Long dialogueId) {

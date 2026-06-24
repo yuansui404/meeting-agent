@@ -16,11 +16,14 @@ public class MeetingVector {
     @Column(columnDefinition = "TEXT", nullable = false)
     private String content;
 
-    @Column(columnDefinition = "VECTOR(1536)")
+    @Column(columnDefinition = "VECTOR(1024)")
     private float[] embedding;
 
     @Column(name = "chunk_index")
     private Integer chunkIndex;
+
+    @Column(name = "priority_score")
+    private Double priorityScore = 0.0;
 
     @Column(name = "created_at")
     private java.time.LocalDateTime createdAt;
@@ -42,4 +45,6 @@ public class MeetingVector {
     public void setChunkIndex(Integer chunkIndex) { this.chunkIndex = chunkIndex; }
     public java.time.LocalDateTime getCreatedAt() { return createdAt; }
     public void setCreatedAt(java.time.LocalDateTime createdAt) { this.createdAt = createdAt; }
+    public Double getPriorityScore() { return priorityScore; }
+    public void setPriorityScore(Double priorityScore) { this.priorityScore = priorityScore; }
 }

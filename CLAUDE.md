@@ -37,6 +37,11 @@ meeting_agent/
 - 使用Sentence-BERT生成文本向量
 - 搜索功能结合全文检索和向量检索
 
+## 必须遵守
+- 完成某一项需要更新开发计划.md
+- 开发计划没有的任务需要进行添加
+- --dangerously-skip-permissions
+
 ## 相关文档
 - [设计文档](docs/superpowers/specs/2026-06-19-meeting-agent-design.md)
 - [需求文档](prd/需求.md)
