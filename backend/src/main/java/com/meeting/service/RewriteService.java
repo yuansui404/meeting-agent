@@ -189,13 +189,18 @@ public class RewriteService {
             sb.append("文件：").append(f.getTitle()).append("\n\n");
 
             String content = null;
-            if (f.getTranscription() != null && !f.getTranscription().isBlank()) {
-                content = f.getTranscription();
-            } else if (f.getFilePath() != null) {
+            // Prefer reading the actual file for text/document formats
+            String ext = getExtension(f.getTitle());
+            if (f.getFilePath() != null && (TEXT_FORMATS.contains(ext) || DOC_FORMATS.contains(ext))) {
                 Path filePath = Path.of(f.getFilePath());
                 if (Files.exists(filePath) && f.getFileSize() != null && f.getFileSize() <= MAX_DRAFT_SIZE) {
-                    content = extractFileContent(filePath, getExtension(f.getTitle()));
+                    content = extractFileContent(filePath, ext);
                 }
+            }
+            // Fallback to transcription (for audio/video files processed by FunASR)
+            if (content == null && f.getTranscription() != null && !f.getTranscription().isBlank()
+                    && !"{}".equals(f.getTranscription().trim())) {
+                content = f.getTranscription();
             }
 
             if (content != null && !content.isBlank()) {
