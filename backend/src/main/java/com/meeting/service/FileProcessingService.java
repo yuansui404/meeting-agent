@@ -78,6 +78,7 @@ public class FileProcessingService {
         meeting.setFileSize(file.getSize());
         meeting.setDialogueId(dialogueId);
         meeting.setStatus(isTranscribable(ext) ? "processing" : "completed");
+        meeting.setMeetingDate(LocalDateTime.now());
 
         return meetingRepository.save(meeting);
     }

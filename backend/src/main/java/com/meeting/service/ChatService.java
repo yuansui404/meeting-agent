@@ -46,6 +46,7 @@ public class ChatService {
     private final HarnessAgent agent;
     private final DialogueService dialogueService;
     private final DialogueRepository dialogueRepository;
+    private final UploadToKnowledgeBaseTool uploadToKnowledgeBaseTool;
     private final MeetingMinutesRepository meetingRepository;
     private final VectorizationService vectorizationService;
     private final ExecutorService executor = Executors.newCachedThreadPool();
@@ -64,11 +65,13 @@ public class ChatService {
                        DialogueService dialogueService,
                        DialogueRepository dialogueRepository,
                        MeetingMinutesRepository meetingRepository,
-                       VectorizationService vectorizationService) {
+                       VectorizationService vectorizationService,
+                       UploadToKnowledgeBaseTool uploadToKnowledgeBaseTool) {
         this.dialogueService = dialogueService;
         this.dialogueRepository = dialogueRepository;
         this.meetingRepository = meetingRepository;
         this.vectorizationService = vectorizationService;
+        this.uploadToKnowledgeBaseTool = uploadToKnowledgeBaseTool;
         this.deepseekApiKey = apiKey;
         this.zhipuApiKey = zhipuApiKey;
         this.zhipuModel = zhipuModel;
@@ -82,11 +85,14 @@ public class ChatService {
                 .stream(true)
                 .build();
 
+        Toolkit toolkit = new Toolkit();
+        toolkit.registerAgentTool(uploadToKnowledgeBaseTool);
+
         this.agent = HarnessAgent.builder()
                 .name("MeetingAssistant")
                 .sysPrompt(SYSTEM_PROMPT)
                 .model(model)
-                .toolkit(new Toolkit())
+                .toolkit(toolkit)
                 .disableMemoryHooks()
                 .disableFilesystemTools()
                 .build();

@@ -20,6 +20,7 @@ import {
   DislikeOutlined,
   DownloadOutlined,
   EditOutlined,
+  EyeOutlined,
 } from '@ant-design/icons';
 import ReactMarkdown from 'react-markdown';
 import {
@@ -40,6 +41,7 @@ import {
   api,
   submitRewriteFeedback,
   getRewriteResult,
+  getRewriteFileUrl,
   RewriteResultData,
 } from '../services/api';
 
@@ -894,124 +896,137 @@ const StreamingBubble: React.FC<{ content: string }> = ({ content }) => {
   );
 };
 
-// Rewrite message bubble with paragraph-level feedback
+// Rewrite message bubble with document-level feedback and preview
 const RewriteBubble: React.FC<{ message: DisplayMessage; rewriteResultId: number }> = ({ message, rewriteResultId }) => {
-  const [docxPath, setDocxPath] = React.useState<string | null>(null);
-  const [feedbackState, setFeedbackState] = React.useState<Record<number, 'like' | 'dislike' | null>>({});
-  const paragraphs = React.useMemo(() => {
-    // Split by double newlines or markdown headings
-    const parts = message.content.split(/\n\n+|(?=\n## )/);
-    return parts.filter(p => p.trim().length > 0);
-  }, [message.content]);
+  const [docFeedback, setDocFeedback] = React.useState<'like' | 'dislike' | null>(null);
+  const [previewOpen, setPreviewOpen] = React.useState(false);
 
-  React.useEffect(() => {
-    // Fetch docx path from rewrite result
-    getRewriteResult(rewriteResultId).then(res => {
-      if (res.data.docxPath) setDocxPath(res.data.docxPath);
-    }).catch(() => {});
-  }, [rewriteResultId]);
-
-  const handleFeedback = async (index: number, action: 'like' | 'dislike') => {
-    // Toggle: if same action clicked again, cancel
-    if (feedbackState[index] === action) {
-      setFeedbackState(prev => ({ ...prev, [index]: null }));
+  const handleFeedback = async (action: 'like' | 'dislike') => {
+    if (docFeedback === action) {
+      setDocFeedback(null);
       return;
     }
-    setFeedbackState(prev => ({ ...prev, [index]: action }));
+    setDocFeedback(action);
     try {
-      await submitRewriteFeedback(rewriteResultId, index, action);
+      // paragraphIndex=-1 means document-level feedback
+      await submitRewriteFeedback(rewriteResultId, -1, action);
     } catch {
-      setFeedbackState(prev => ({ ...prev, [index]: null }));
+      setDocFeedback(null);
     }
   };
 
   return (
-    <div style={{ display: 'flex', padding: '12px 24px', justifyContent: 'flex-start' }}>
-      <div style={{ display: 'flex', maxWidth: '80%', gap: 12, alignItems: 'flex-start' }}>
-        <div style={{
-          width: 36, height: 36, borderRadius: 8,
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-          flexShrink: 0, background: '#f0f0f0', color: '#666', fontSize: 16,
-        }}>
-          <EditOutlined />
-        </div>
-        <div style={{ flex: 1 }}>
-          {/* Header */}
+    <>
+      <div style={{ display: 'flex', padding: '12px 24px', justifyContent: 'flex-start' }}>
+        <div style={{ display: 'flex', maxWidth: '80%', gap: 12, alignItems: 'flex-start' }}>
           <div style={{
-            padding: '8px 16px', background: '#fff',
-            borderRadius: '12px 12px 0 0',
-            border: '1px solid #e8e8e8', borderBottom: 'none',
-            fontSize: 13, fontWeight: 600, color: '#1677ff',
+            width: 36, height: 36, borderRadius: 8,
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            flexShrink: 0, background: '#f0f0f0', color: '#666', fontSize: 16,
           }}>
-            <FileTextOutlined style={{ marginRight: 6 }} />
-            改写结果
+            <EditOutlined />
           </div>
-          {/* Paragraphs */}
-          <div style={{
-            background: '#fff',
-            border: '1px solid #e8e8e8', borderTop: 'none',
-          }}>
-            {paragraphs.map((para, index) => (
-              <div key={index} style={{
-                padding: '12px 16px 8px',
-                borderBottom: index < paragraphs.length - 1 ? '1px solid #f0f0f0' : 'none',
-              }}>
-                <div style={{
-                  fontSize: 14, lineHeight: 1.7, whiteSpace: 'pre-wrap',
-                  wordBreak: 'break-word', marginBottom: 6,
-                }}>
-                  <ReactMarkdown>{para}</ReactMarkdown>
-                </div>
-                {/* Feedback buttons */}
-                <div style={{ display: 'flex', gap: 4, justifyContent: 'flex-end', opacity: 0.6 }}>
-                  <Button
-                    type="text"
-                    size="small"
-                    icon={<LikeOutlined />}
-                    onClick={() => handleFeedback(index, 'like')}
-                    style={{
-                      fontSize: 12, color: feedbackState[index] === 'like' ? '#1677ff' : '#999',
-                    }}
-                  />
-                  <Button
-                    type="text"
-                    size="small"
-                    icon={<DislikeOutlined />}
-                    onClick={() => handleFeedback(index, 'dislike')}
-                    style={{
-                      fontSize: 12, color: feedbackState[index] === 'dislike' ? '#ff4d4f' : '#999',
-                    }}
-                  />
-                </div>
+          <div style={{ flex: 1 }}>
+            {/* Header */}
+            <div style={{
+              padding: '8px 16px', background: '#fff',
+              borderRadius: '12px 12px 0 0',
+              border: '1px solid #e8e8e8', borderBottom: 'none',
+              fontSize: 13, fontWeight: 600, color: '#1677ff',
+            }}>
+              <FileTextOutlined style={{ marginRight: 6 }} />
+              改写结果
+            </div>
+            {/* Content */}
+            <div style={{
+              background: '#fff',
+              border: '1px solid #e8e8e8', borderTop: 'none',
+              padding: '12px 16px',
+              fontSize: 14, lineHeight: 1.7, whiteSpace: 'pre-wrap',
+              wordBreak: 'break-word',
+            }}>
+              <ReactMarkdown>{message.content}</ReactMarkdown>
+            </div>
+            {/* Footer with preview, download, feedback */}
+            <div style={{
+              padding: '8px 16px', background: '#fafafa',
+              borderRadius: '0 0 12px 12px',
+              border: '1px solid #e8e8e8', borderTop: 'none',
+              display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+            }}>
+              <div style={{ display: 'flex', gap: 4 }}>
+                <Button
+                  type="link"
+                  size="small"
+                  icon={<EyeOutlined />}
+                  onClick={() => setPreviewOpen(true)}
+                  style={{ fontSize: 12 }}
+                >
+                  预览
+                </Button>
+                <Button
+                  type="link"
+                  size="small"
+                  icon={<DownloadOutlined />}
+                  href={getRewriteFileUrl(rewriteResultId)}
+                  target="_blank"
+                  style={{ fontSize: 12 }}
+                >
+                  下载对照版
+                </Button>
               </div>
-            ))}
-          </div>
-          {/* Footer with download */}
-          <div style={{
-            padding: '8px 16px', background: '#fafafa',
-            borderRadius: '0 0 12px 12px',
-            border: '1px solid #e8e8e8', borderTop: 'none',
-            display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-          }}>
-            <Text type="secondary" style={{ fontSize: 11 }}>
-              {paragraphs.length} 段 · 有帮到你的话别忘了点赞
-            </Text>
-            {docxPath && (
-              <Button
-                type="link"
-                size="small"
-                icon={<DownloadOutlined />}
-                href={api.defaults.baseURL + '/../' + docxPath}
-                target="_blank"
-                style={{ fontSize: 12 }}
-              >
-                下载对照版
-              </Button>
-            )}
+              <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+                <Text type="secondary" style={{ fontSize: 11, marginRight: 8 }}>文档评价</Text>
+                <Button
+                  type="text"
+                  size="small"
+                  icon={<LikeOutlined />}
+                  onClick={() => handleFeedback('like')}
+                  style={{
+                    fontSize: 12, color: docFeedback === 'like' ? '#1677ff' : '#999',
+                  }}
+                />
+                <Button
+                  type="text"
+                  size="small"
+                  icon={<DislikeOutlined />}
+                  onClick={() => handleFeedback('dislike')}
+                  style={{
+                    fontSize: 12, color: docFeedback === 'dislike' ? '#ff4d4f' : '#999',
+                  }}
+                />
+              </div>
+            </div>
           </div>
         </div>
       </div>
-    </div>
+      {/* Preview Drawer */}
+      <Drawer
+        title="改写结果预览"
+        placement="right"
+        onClose={() => setPreviewOpen(false)}
+        open={previewOpen}
+        width={600}
+        extra={
+          <Button
+            type="primary"
+            size="small"
+            icon={<DownloadOutlined />}
+            href={getRewriteFileUrl(rewriteResultId)}
+            target="_blank"
+          >
+            下载对照版
+          </Button>
+        }
+      >
+        <div style={{
+          fontSize: 14, lineHeight: 1.8, whiteSpace: 'pre-wrap',
+          wordBreak: 'break-word',
+        }}>
+          <ReactMarkdown>{message.content}</ReactMarkdown>
+        </div>
+      </Drawer>
+    </>
   );
 };
 

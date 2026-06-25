@@ -31,14 +31,17 @@ public class TranscriptionService {
 
     private final MeetingMinutesRepository meetingRepository;
     private final FileProcessingService fileProcessingService;
+    private final MeetingDateExtractor meetingDateExtractor;
 
     @Value("${funasr.url}")
     private String funasrUrl;
 
     public TranscriptionService(MeetingMinutesRepository meetingRepository,
-                                FileProcessingService fileProcessingService) {
+                                FileProcessingService fileProcessingService,
+                                MeetingDateExtractor meetingDateExtractor) {
         this.meetingRepository = meetingRepository;
         this.fileProcessingService = fileProcessingService;
+        this.meetingDateExtractor = meetingDateExtractor;
     }
 
     @Async
@@ -64,6 +67,17 @@ public class TranscriptionService {
                 meeting.setTranscription(result);
                 meeting.setStatus("completed");
                 meetingRepository.save(meeting);
+
+                // Extract meeting date from transcript
+                try {
+                    var md = meetingDateExtractor.extract(result);
+                    if (md != null) {
+                        meeting.setMeetingDate(md);
+                        meetingRepository.save(meeting);
+                    }
+                } catch (Exception e) {
+                    log.warn("Meeting date extraction failed for transcription {}: {}", meetingId, e.getMessage());
+                }
 
                 // Generate markdown file
                 try {

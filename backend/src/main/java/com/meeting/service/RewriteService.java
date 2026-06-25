@@ -44,10 +44,12 @@ public class RewriteService {
     private final String deepseekApiKey;
     private final String deepseekModel;
     private final String deepseekUrl;
+    private final String uploadDir;
 
     public RewriteService(@Value("${deepseek.api-key:}") String apiKey,
                           @Value("${deepseek.model:deepseek-chat}") String modelName,
                           @Value("${deepseek.url:https://api.deepseek.com}") String apiUrl,
+                          @Value("${file.upload-dir:/app/data/uploads}") String uploadDir,
                           MeetingMinutesRepository meetingRepository,
                           RewriteResultRepository rewriteResultRepository,
                           DialogueService dialogueService,
@@ -59,6 +61,7 @@ public class RewriteService {
         this.deepseekApiKey = apiKey;
         this.deepseekModel = modelName;
         this.deepseekUrl = apiUrl;
+        this.uploadDir = uploadDir;
     }
 
     public void streamRewrite(Long dialogueId, List<Long> sourceFileIds, List<Long> manualReferenceIds, SseEmitter emitter) {
@@ -324,7 +327,7 @@ public class RewriteService {
 
     private String generateComparisonDocx(List<MeetingMinutes> sourceFiles, String rewrittenContent,
                                            Long dialogueId, int version) {
-        Path outputDir = Path.of("uploads", "rewrite");
+        Path outputDir = Path.of(uploadDir, "rewrite");
         try {
             Files.createDirectories(outputDir);
             String filename = "rewrite_" + dialogueId + "_v" + version + "_"

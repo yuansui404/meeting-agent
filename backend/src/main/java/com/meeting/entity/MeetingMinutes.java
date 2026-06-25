@@ -43,6 +43,9 @@ public class MeetingMinutes {
     @Column(name = "md_file_path")
     private String mdFilePath;
 
+    @Column(name = "meeting_date")
+    private LocalDateTime meetingDate;
+
     @Column(name = "style_exemplar")
     private Boolean styleExemplar = false;
 
@@ -85,6 +88,8 @@ public class MeetingMinutes {
     public void setDialogueId(Long dialogueId) { this.dialogueId = dialogueId; }
     public String getMdFilePath() { return mdFilePath; }
     public void setMdFilePath(String mdFilePath) { this.mdFilePath = mdFilePath; }
+    public LocalDateTime getMeetingDate() { return meetingDate; }
+    public void setMeetingDate(LocalDateTime meetingDate) { this.meetingDate = meetingDate; }
     public Boolean getStyleExemplar() { return styleExemplar; }
     public void setStyleExemplar(Boolean styleExemplar) { this.styleExemplar = styleExemplar; }
     public String getStyleTags() { return styleTags; }

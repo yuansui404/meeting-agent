@@ -4,9 +4,14 @@ import com.meeting.entity.Dialogue;
 import com.meeting.entity.RewriteResult;
 import com.meeting.service.DialogueService;
 import com.meeting.service.RewriteService;
+import org.springframework.core.io.FileSystemResource;
+import org.springframework.core.io.Resource;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
+import java.nio.file.Path;
 import java.util.Map;
 
 @RestController
@@ -123,5 +128,28 @@ public class DialogueController {
                         "createdAt", r.getCreatedAt()
                 )).toList();
         return ResponseEntity.ok(results);
+    }
+
+    @GetMapping("/rewrite-result/{id}/file")
+    public ResponseEntity<?> downloadRewriteFile(@PathVariable Long id) {
+        return rewriteService.getRewriteResult(id)
+                .map(result -> {
+                    String docxPath = result.getDocxPath();
+                    if (docxPath == null || docxPath.isBlank()) {
+                        return ResponseEntity.notFound().build();
+                    }
+                    Path filePath = Path.of(docxPath);
+                    if (!filePath.toFile().exists()) {
+                        return ResponseEntity.notFound().build();
+                    }
+                    Resource resource = new FileSystemResource(filePath);
+                    String filename = "rewrite_" + result.getDialogueId() + "_v" + result.getVersion() + ".docx";
+                    return ResponseEntity.ok()
+                            .contentType(MediaType.APPLICATION_OCTET_STREAM)
+                            .header(HttpHeaders.CONTENT_DISPOSITION,
+                                    "attachment; filename*=UTF-8''" + filename)
+                            .body(resource);
+                })
+                .orElse(ResponseEntity.notFound().build());
     }
 }

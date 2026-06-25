@@ -11,6 +11,7 @@ import org.springframework.transaction.annotation.Transactional;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
@@ -38,44 +39,66 @@ public class VectorizationService {
         try {
             float[] queryEmbedding = embeddingService.generateEmbedding(query);
             String embeddingStr = formatVector(queryEmbedding);
-            String sql;
-            Object[] params;
+
+            // Query limit * 3 to expand candidate pool for randomization
+            int queryLimit = limit * 3;
+
+            StringBuilder sql = new StringBuilder();
+            List<Object> params = new ArrayList<>();
+            params.add(embeddingStr);
+
+            sql.append("SELECT mv.id, mv.meeting_id, mv.content, mv.chunk_index, ")
+                    .append("  1 - (mv.embedding <=> CAST(? AS vector)) AS similarity, ")
+                    .append("  mm.style_exemplar ")
+                    .append("FROM meeting_vectors mv ")
+                    .append("JOIN meeting_minutes mm ON mv.meeting_id = mm.id ");
+
             if (excludeFileIds != null && !excludeFileIds.isEmpty()) {
-                String placeholders = excludeFileIds.stream().map(id -> "?").collect(java.util.stream.Collectors.joining(","));
-                sql = "SELECT id, meeting_id, content, chunk_index, similarity "
-                        + "FROM ("
-                        + "  SELECT id, meeting_id, content, chunk_index, "
-                        + "    1 - (embedding <=> CAST(? AS vector)) AS similarity, "
-                        + "    COALESCE(priority_score, 0) AS ps "
-                        + "  FROM meeting_vectors"
-                        + "  WHERE meeting_id NOT IN (" + placeholders + ")"
-                        + ") sub "
-                        + "ORDER BY similarity * (1 + 0.2 * ps) DESC LIMIT ?";
-                params = new Object[excludeFileIds.size() + 2];
-                params[0] = embeddingStr;
-                for (int i = 0; i < excludeFileIds.size(); i++) {
-                    params[i + 1] = excludeFileIds.get(i);
-                }
-                params[params.length - 1] = limit;
-            } else {
-                sql = "SELECT id, meeting_id, content, chunk_index, similarity "
-                        + "FROM ("
-                        + "  SELECT id, meeting_id, content, chunk_index, "
-                        + "    1 - (embedding <=> CAST(? AS vector)) AS similarity, "
-                        + "    COALESCE(priority_score, 0) AS ps "
-                        + "  FROM meeting_vectors"
-                        + ") sub "
-                        + "ORDER BY similarity * (1 + 0.2 * ps) DESC LIMIT ?";
-                params = new Object[]{embeddingStr, limit};
+                String placeholders = excludeFileIds.stream().map(id -> "?").collect(Collectors.joining(","));
+                sql.append("WHERE mv.meeting_id NOT IN (").append(placeholders).append(") ");
+                params.addAll(excludeFileIds);
             }
-            List<Map<String, Object>> rows = jdbcTemplate.queryForList(sql, params);
-            return rows.stream().map(r -> new ScoredVector(
-                    ((Number) r.get("id")).longValue(),
-                    ((Number) r.get("meeting_id")).longValue(),
-                    (String) r.get("content"),
-                    r.get("chunk_index") != null ? ((Number) r.get("chunk_index")).intValue() : null,
-                    ((Number) r.get("similarity")).doubleValue()
-            )).toList();
+
+            sql.append("ORDER BY mm.style_exemplar DESC, ")
+                    .append("  similarity * (1 + 0.2 * COALESCE(mv.priority_score, 0)) DESC ")
+                    .append("LIMIT ?");
+            params.add(queryLimit);
+
+            List<Map<String, Object>> rows = jdbcTemplate.queryForList(sql.toString(), params.toArray());
+
+            // Separate starred and non-starred for randomization
+            List<ScoredVector> starred = new ArrayList<>();
+            List<ScoredVector> nonStarred = new ArrayList<>();
+
+            for (Map<String, Object> r : rows) {
+                ScoredVector sv = new ScoredVector(
+                        ((Number) r.get("id")).longValue(),
+                        ((Number) r.get("meeting_id")).longValue(),
+                        (String) r.get("content"),
+                        r.get("chunk_index") != null ? ((Number) r.get("chunk_index")).intValue() : null,
+                        ((Number) r.get("similarity")).doubleValue()
+                );
+                boolean isStarred = r.get("style_exemplar") != null && Boolean.TRUE.equals(r.get("style_exemplar"));
+                if (isStarred) {
+                    starred.add(sv);
+                } else {
+                    nonStarred.add(sv);
+                }
+            }
+
+            // Shuffle both groups for randomness
+            Collections.shuffle(starred);
+            Collections.shuffle(nonStarred);
+
+            // Combine: starred first, then non-starred, take top limit
+            List<ScoredVector> result = new ArrayList<>();
+            result.addAll(starred);
+            result.addAll(nonStarred);
+            if (result.size() > limit) {
+                result = result.subList(0, limit);
+            }
+
+            return result;
         } catch (Exception e) {
             log.error("Style example search failed for query '{}': {}", query, e.getMessage(), e);
             return List.of();

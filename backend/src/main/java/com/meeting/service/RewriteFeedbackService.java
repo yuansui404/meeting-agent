@@ -69,6 +69,7 @@ public class RewriteFeedbackService {
 
     private List<Long> parseIdList(String json) {
         String trimmed = json.trim();
+        if (trimmed.isBlank() || "{}".equals(trimmed) || "[]".equals(trimmed)) return List.of();
         if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
             trimmed = trimmed.substring(1, trimmed.length() - 1);
         }

@@ -17,6 +17,8 @@ export interface Meeting {
   filePath?: string;
   dialogueId?: number | null;
   mdFilePath?: string | null;
+  meetingDate?: string | null;
+  styleExemplar?: boolean;
 }
 
 export interface Dialogue {
@@ -59,6 +61,10 @@ export const uploadFile = (file: File, dialogueId?: number) => {
 // 获取会议详情
 export const getMeeting = (id: number) =>
   api.get<Meeting>(`/meeting/${id}`);
+
+// 获取会议文本内容（用于预览）
+export const getMeetingTextContent = (id: number) =>
+  api.get<{ content: string; warning?: string }>(`/meeting/${id}/text-content`);
 
 // 获取所有会议
 export const listMeetings = () =>
@@ -239,6 +245,10 @@ export interface RewriteResultData {
 // 获取改写结果详情
 export const getRewriteResult = (id: number) =>
   api.get<RewriteResultData>(`/rewrite-result/${id}`);
+
+// 获取改写结果文件的下载 URL
+export const getRewriteFileUrl = (rewriteResultId: number) =>
+  `${api.defaults.baseURL || 'http://localhost:8080/api'}/rewrite-result/${rewriteResultId}/file`;
 
 // 获取对话的改写历史
 export const getRewriteHistory = (dialogueId: number) =>

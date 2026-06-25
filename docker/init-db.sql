@@ -11,7 +11,8 @@ CREATE TABLE IF NOT EXISTS meeting_minutes (
     status VARCHAR(20) DEFAULT 'processing',
     knowledge_base BOOLEAN DEFAULT FALSE,
     dialogue_id BIGINT REFERENCES dialogues(id) ON DELETE SET NULL,
-    md_file_path VARCHAR(500)
+    md_file_path VARCHAR(500),
+    meeting_date TIMESTAMP
 );
 
 -- 会议向量表（需要 pgvector 扩展）

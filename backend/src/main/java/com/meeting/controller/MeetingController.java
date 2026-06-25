@@ -19,6 +19,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 
+import com.meeting.service.MeetingDateExtractor;
 import com.meeting.service.RewriteFeedbackService;
 
 import java.io.IOException;
@@ -50,6 +51,7 @@ public class MeetingController {
     private final MeetingVectorRepository vectorRepository;
     private final VectorizationService vectorizationService;
     private final RewriteFeedbackService rewriteFeedbackService;
+    private final MeetingDateExtractor meetingDateExtractor;
     private final JdbcTemplate jdbcTemplate;
 
     public MeetingController(FileProcessingService fileProcessingService,
@@ -58,6 +60,7 @@ public class MeetingController {
                              MeetingVectorRepository vectorRepository,
                              VectorizationService vectorizationService,
                              RewriteFeedbackService rewriteFeedbackService,
+                             MeetingDateExtractor meetingDateExtractor,
                              JdbcTemplate jdbcTemplate) {
         this.fileProcessingService = fileProcessingService;
         this.transcriptionService = transcriptionService;
@@ -65,6 +68,7 @@ public class MeetingController {
         this.vectorRepository = vectorRepository;
         this.vectorizationService = vectorizationService;
         this.rewriteFeedbackService = rewriteFeedbackService;
+        this.meetingDateExtractor = meetingDateExtractor;
         this.jdbcTemplate = jdbcTemplate;
     }
 
@@ -78,6 +82,21 @@ public class MeetingController {
             String ext = FileProcessingService.getExtension(file.getOriginalFilename());
             if (FileProcessingService.isTranscribable(ext)) {
                 transcriptionService.startTranscription(meeting.getId());
+            } else {
+                // Document files: try to extract meeting date from content
+                try {
+                    Path savedPath = Path.of(meeting.getFilePath());
+                    String content = readFileContent(savedPath, ext);
+                    if (content != null && !content.isBlank()) {
+                        var md = meetingDateExtractor.extract(content);
+                        if (md != null) {
+                            meeting.setMeetingDate(md);
+                            meetingRepository.save(meeting);
+                        }
+                    }
+                } catch (Exception e) {
+                    log.warn("Meeting date extraction failed for {}: {}", meeting.getId(), e.getMessage());
+                }
             }
 
             java.util.Map<String, Object> uploadResult = new java.util.HashMap<>();
@@ -107,6 +126,7 @@ public class MeetingController {
                     result.put("knowledgeBase", meeting.getKnowledgeBase());
                     result.put("dialogueId", meeting.getDialogueId());
                     result.put("mdFilePath", meeting.getMdFilePath());
+                    result.put("meetingDate", meeting.getMeetingDate());
                     return ResponseEntity.ok(result);
                 })
                 .orElse(ResponseEntity.notFound().build());
@@ -181,8 +201,20 @@ public class MeetingController {
             Path filePath = uploadPath.resolve(savedFilename);
             Files.copy(file.getInputStream(), filePath, StandardCopyOption.REPLACE_EXISTING);
 
-            // Read file content as transcription
-            String content = Files.readString(filePath, StandardCharsets.UTF_8);
+            // Read file content as transcription (support text and document formats)
+            String content;
+            Set<String> textFormats = Set.of(".txt", ".md", ".csv", ".json", ".xml", ".html", ".yaml", ".yml", ".properties", ".log");
+            Set<String> docFormats = Set.of(".pdf", ".doc", ".docx");
+            if (textFormats.contains(ext)) {
+                content = Files.readString(filePath, StandardCharsets.UTF_8);
+            } else if (docFormats.contains(ext)) {
+                content = DocumentTextExtractor.extractText(filePath, ext);
+            } else {
+                content = Files.readString(filePath, StandardCharsets.UTF_8);
+            }
+            if (content == null || content.isBlank()) {
+                return ResponseEntity.badRequest().body(Map.of("error", "无法提取文件内容，请确认文件格式正确"));
+            }
 
             // Create MeetingMinutes
             MeetingMinutes meeting = new MeetingMinutes();
@@ -192,7 +224,19 @@ public class MeetingController {
             meeting.setStatus("completed");
             meeting.setKnowledgeBase(true);
             meeting.setTranscription(content);
+            meeting.setMeetingDate(LocalDateTime.now());
             meeting = meetingRepository.save(meeting);
+
+            // Extract meeting date from content
+            try {
+                var md = meetingDateExtractor.extract(content);
+                if (md != null) {
+                    meeting.setMeetingDate(md);
+                    meetingRepository.save(meeting);
+                }
+            } catch (Exception e) {
+                log.warn("Meeting date extraction failed for KB upload {}: {}", meeting.getId(), e.getMessage());
+            }
 
             // Vectorize
             try {
@@ -346,6 +390,22 @@ public class MeetingController {
             return ResponseEntity.ok(Map.of("success", true));
         } catch (Exception e) {
             return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    private String readFileContent(Path filePath, String ext) {
+        try {
+            Set<String> textFormats = Set.of(".txt", ".md", ".csv", ".json", ".xml", ".html", ".yaml", ".yml", ".properties", ".log");
+            Set<String> docFormats = Set.of(".pdf", ".doc", ".docx");
+            if (textFormats.contains(ext)) {
+                return Files.readString(filePath, StandardCharsets.UTF_8);
+            } else if (docFormats.contains(ext)) {
+                return DocumentTextExtractor.extractText(filePath, ext);
+            }
+            return null;
+        } catch (Exception e) {
+            log.warn("Failed to read file content: {}", e.getMessage());
+            return null;
         }
     }
 }
