@@ -1,19 +1,22 @@
 package com.meeting.service;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.meeting.config.DeepSeekChatClient;
 import com.meeting.entity.MeetingMinutes;
 import com.meeting.entity.MeetingVector;
 import com.meeting.repository.MeetingMinutesRepository;
 import com.meeting.repository.MeetingVectorRepository;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.List;
-import java.util.Map;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.*;
 import java.util.stream.Collectors;
 
 @Service
@@ -60,11 +63,13 @@ public class VectorizationService {
             }
 
             sql.append("ORDER BY mm.style_exemplar DESC, ")
-                    .append("  similarity * (1 + 0.2 * COALESCE(mv.priority_score, 0)) DESC ")
+                    .append("  (1 - (mv.embedding <=> CAST(? AS vector))) * (1 + 0.2 * COALESCE(mv.priority_score, 0)) DESC ")
                     .append("LIMIT ?");
+            params.add(embeddingStr);
             params.add(queryLimit);
 
             List<Map<String, Object>> rows = jdbcTemplate.queryForList(sql.toString(), params.toArray());
+            log.info("searchStyleExamples returned {} rows for query '{}'", rows.size(), query.length() > 50 ? query.substring(0, 50) + "..." : query);
 
             // Separate starred and non-starred for randomization
             List<ScoredVector> starred = new ArrayList<>();
@@ -109,15 +114,21 @@ public class VectorizationService {
     private final MeetingVectorRepository vectorRepository;
     private final EmbeddingService embeddingService;
     private final JdbcTemplate jdbcTemplate;
+    private final DeepSeekChatClient deepSeekChatClient;
+    private final String uploadDir;
 
     public VectorizationService(MeetingMinutesRepository meetingRepository,
                                 MeetingVectorRepository vectorRepository,
                                 EmbeddingService embeddingService,
-                                JdbcTemplate jdbcTemplate) {
+                                JdbcTemplate jdbcTemplate,
+                                DeepSeekChatClient deepSeekChatClient,
+                                @Value("${file.upload-dir:/app/data/uploads}") String uploadDir) {
         this.meetingRepository = meetingRepository;
         this.vectorRepository = vectorRepository;
         this.embeddingService = embeddingService;
         this.jdbcTemplate = jdbcTemplate;
+        this.deepSeekChatClient = deepSeekChatClient;
+        this.uploadDir = uploadDir;
     }
 
     @Transactional
@@ -154,6 +165,101 @@ public class VectorizationService {
         // Mark meeting as knowledge base
         meeting.setKnowledgeBase(true);
         meetingRepository.save(meeting);
+
+        // Collect participants into global 与会人.md
+        collectParticipants(meeting);
+    }
+
+    /**
+     * Extract participant names from meeting transcription via LLM,
+     * merge into the global 与会人.md file (deduplicated).
+     */
+    private void collectParticipants(MeetingMinutes meeting) {
+        String transcription = meeting.getTranscription();
+        if (transcription == null || transcription.isBlank()) return;
+
+        try {
+            String sample = transcription.length() > 3000 ? transcription.substring(0, 3000) : transcription;
+
+            List<Map<String, String>> messages = List.of(
+                    Map.of("role", "system", "content",
+                            "你是一个会议助手。从以下会议纪要文本中提取'与会人'栏目的名单。"
+                                    + "返回逗号分隔的姓名列表，不要其他任何内容。"
+                                    + "如果找不到与会人列表，返回空字符串。"),
+                    Map.of("role", "user", "content", sample)
+            );
+
+            JsonNode response = deepSeekChatClient.chat(messages, false);
+            String extracted = extractContentText(response);
+            if (extracted == null || extracted.isBlank() || "null".equals(extracted.trim())) {
+                log.info("collectParticipants: no participants found for meeting {}", meeting.getId());
+                return;
+            }
+
+            // Parse names (separated by Chinese/English commas or 、)
+            String[] newNames = extracted.split("[，,、]");
+            Set<String> newNameSet = new LinkedHashSet<>();
+            for (String name : newNames) {
+                String trimmed = name.trim();
+                if (trimmed.length() >= 2 && trimmed.length() <= 4) {
+                    newNameSet.add(trimmed);
+                }
+            }
+            if (newNameSet.isEmpty()) {
+                log.info("collectParticipants: extracted empty name list for meeting {}", meeting.getId());
+                return;
+            }
+
+            // Read existing 与会人.md
+            Path participantsFile = Path.of(uploadDir, "knowledge-base", "与会人.md");
+            Set<String> existingNames = new LinkedHashSet<>();
+            if (Files.exists(participantsFile)) {
+                List<String> lines = Files.readAllLines(participantsFile, StandardCharsets.UTF_8);
+                for (String line : lines) {
+                    String trimmed = line.trim();
+                    if (trimmed.startsWith("- ")) {
+                        existingNames.add(trimmed.substring(2).trim());
+                    }
+                }
+            }
+
+            // Merge new names
+            int addedCount = 0;
+            for (String name : newNameSet) {
+                if (!existingNames.contains(name)) {
+                    existingNames.add(name);
+                    addedCount++;
+                }
+            }
+            if (addedCount == 0) {
+                log.info("collectParticipants: no new names to add for meeting {}", meeting.getId());
+                return;
+            }
+
+            // Write back
+            StringBuilder content = new StringBuilder();
+            content.append("# 公司常与会人名单\n\n");
+            content.append("以下名单从历史会议纪要中提取，用于校对时验证人名准确性。\n\n");
+            for (String name : existingNames) {
+                content.append("- ").append(name).append("\n");
+            }
+
+            Files.createDirectories(participantsFile.getParent());
+            Files.writeString(participantsFile, content.toString(), StandardCharsets.UTF_8);
+            log.info("collectParticipants: updated 与会人.md with {} names (+{} new) from meeting {}",
+                    existingNames.size(), addedCount, meeting.getId());
+
+        } catch (Exception e) {
+            log.warn("collectParticipants failed for meeting {}: {}", meeting.getId(), e.getMessage());
+        }
+    }
+
+    private String extractContentText(JsonNode response) {
+        try {
+            return response.get("choices").get(0).get("message").get("content").asText();
+        } catch (Exception e) {
+            return null;
+        }
     }
 
     public List<MeetingVector> searchSimilar(String query, int limit) {

@@ -11,6 +11,8 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.*;
 import java.net.HttpURLConnection;
 import java.net.URI;
@@ -45,6 +47,7 @@ public class RewriteService {
     private final String deepseekModel;
     private final String deepseekUrl;
     private final String uploadDir;
+    private final ObjectMapper objectMapper;
 
     public RewriteService(@Value("${deepseek.api-key:}") String apiKey,
                           @Value("${deepseek.model:deepseek-chat}") String modelName,
@@ -53,7 +56,8 @@ public class RewriteService {
                           MeetingMinutesRepository meetingRepository,
                           RewriteResultRepository rewriteResultRepository,
                           DialogueService dialogueService,
-                          StyleLearningService styleLearningService) {
+                          StyleLearningService styleLearningService,
+                          ObjectMapper objectMapper) {
         this.meetingRepository = meetingRepository;
         this.rewriteResultRepository = rewriteResultRepository;
         this.dialogueService = dialogueService;
@@ -62,6 +66,7 @@ public class RewriteService {
         this.deepseekModel = modelName;
         this.deepseekUrl = apiUrl;
         this.uploadDir = uploadDir;
+        this.objectMapper = objectMapper;
     }
 
     public void streamRewrite(Long dialogueId, List<Long> sourceFileIds, List<Long> manualReferenceIds, SseEmitter emitter) {
@@ -105,13 +110,39 @@ public class RewriteService {
                     excludeIds.addAll(manualReferenceIds);
                 }
 
-                String styleExamples = styleLearningService.buildStyleExamples(sourceContent, excludeIds);
+                String styleExamples = styleLearningService.buildFullDocumentReferences(sourceContent, excludeIds, manualReferenceIds);
+                log.info("Full document references for dialogue {}: {} chars, excludeIds={}, manualRefs={}",
+                        dialogueId, styleExamples != null ? styleExamples.length() : 0, excludeIds, manualReferenceIds);
 
                 // 3. Build prompt
-                String prompt = buildRewritePrompt(sourceContent, styleExamples, referenceIds);
+                String prompt = buildRewritePrompt(sourceContent, styleExamples);
 
                 // 4. Call DeepSeek API (SSE streaming)
                 String apiResponse = streamDeepSeek(prompt, emitter, fullResponse);
+
+                // 4.5 Proofreading pass (non-streaming)
+                if (fullResponse.length() > 0) {
+                    try {
+                        String proofreadResult = proofreadContent(
+                                fullResponse.toString(), sourceContent);
+                        if (proofreadResult != null && !proofreadResult.equals(fullResponse.toString())) {
+                            log.info("Proofreading applied corrections for dialogue {}, original={} chars, corrected={} chars",
+                                    dialogueId, fullResponse.length(), proofreadResult.length());
+                            fullResponse = new StringBuilder(proofreadResult);
+                            // Notify client with corrected content
+                            try {
+                                emitter.send(SseEmitter.event().name("corrected").data(proofreadResult));
+                            } catch (IOException ignored) {
+                                // Client may have disconnected
+                            }
+                        } else {
+                            log.info("Proofreading: no corrections needed for dialogue {}", dialogueId);
+                        }
+                    } catch (Exception e) {
+                        log.warn("Proofreading failed for dialogue {}, continuing with original: {}",
+                                dialogueId, e.getMessage());
+                    }
+                }
 
                 // 5. Save rewrite result
                 if (fullResponse.length() > 0) {
@@ -148,24 +179,18 @@ public class RewriteService {
         });
     }
 
-    private String buildRewritePrompt(String sourceContent, String styleExamples, List<Long> referenceIds) {
+    private String buildRewritePrompt(String sourceContent, String documentReferences) {
         StringBuilder sb = new StringBuilder();
-        sb.append("你是一个专业的会议纪要撰写助手。请根据以下原始内容，润色改写为正式的会议纪要。\n\n");
+        sb.append("请根据以下原始内容，润色改写为正式的会议纪要。\n\n");
 
-        if (styleExamples != null && !styleExamples.isEmpty()) {
-            sb.append(styleExamples).append("\n\n");
-        }
-
-        sb.append("请遵循以下要求：\n");
-        sb.append("1. 保持事实准确，不添加原文没有的信息\n");
-        sb.append("2. 使用正式、专业的书面语言\n");
-        sb.append("3. 结构化组织：按主题/议程分段\n");
-        sb.append("4. 每段包含明确的主题句\n");
-        sb.append("5. 保留关键数据和决策结论\n");
-        sb.append("6. 使用段落之间用空行分隔\n\n");
-
-        if (styleExamples == null || styleExamples.isEmpty()) {
-            sb.append("注意：没有可参考的历史风格示例，请使用通用的正式会议纪要风格。\n\n");
+        if (documentReferences != null && !documentReferences.isEmpty()) {
+            sb.append(documentReferences).append("\n\n");
+        } else {
+            sb.append("基本格式要求：\n");
+            sb.append("1. 保持事实准确，不添加原文没有的信息\n");
+            sb.append("2. 按主题/议程分段组织\n");
+            sb.append("3. 保留关键数据和决策结论\n\n");
+            sb.append("注意：没有可参考的历史记录，请使用通用的正式会议纪要格式。\n\n");
         }
 
         sb.append("以下是需要改写的原始内容：\n");
@@ -373,13 +398,8 @@ public class RewriteService {
             rewRun.setFontSize(14);
             rewRun.setText("改写后内容");
 
-            String[] paragraphs = rewrittenContent.split("\\n\\n+");
-            for (String para : paragraphs) {
-                XWPFParagraph p = doc.createParagraph();
-                XWPFRun r = p.createRun();
-                r.setFontSize(11);
-                r.setText(para.trim());
-            }
+            // Parse rewritten content: render tab-separated lines as real Word tables
+            renderRichContent(doc, rewrittenContent);
 
             try (FileOutputStream fos = new FileOutputStream(outputPath.toFile())) {
                 doc.write(fos);
@@ -391,6 +411,77 @@ public class RewriteService {
             log.error("Failed to generate .docx for dialogue {}: {}", dialogueId, e.getMessage(), e);
             return null;
         }
+    }
+
+    /**
+     * Render rewritten content with table-aware line parsing.
+     * Tab-separated consecutive lines become real Word tables;
+     * plain text lines become paragraphs; "---" separators add spacing.
+     */
+    private void renderRichContent(XWPFDocument doc, String content) {
+        String[] lines = content.split("\\n", -1);
+        List<String> currentTable = null;
+
+        for (String line : lines) {
+            String trimmed = line.trim();
+
+            if (trimmed.equals("---")) {
+                flushTable(doc, currentTable);
+                currentTable = null;
+                // Add spacing paragraph
+                doc.createParagraph();
+                continue;
+            }
+
+            if (trimmed.contains("\t")) {
+                if (currentTable == null) {
+                    currentTable = new ArrayList<>();
+                }
+                currentTable.add(trimmed);
+            } else {
+                flushTable(doc, currentTable);
+                currentTable = null;
+                if (!trimmed.isEmpty()) {
+                    XWPFParagraph p = doc.createParagraph();
+                    XWPFRun r = p.createRun();
+                    r.setFontSize(11);
+                    r.setText(trimmed);
+                }
+            }
+        }
+        flushTable(doc, currentTable);
+    }
+
+    private void flushTable(XWPFDocument doc, List<String> rows) {
+        if (rows == null || rows.isEmpty()) return;
+
+        // Determine column count from the row with the most tabs
+        int cols = rows.stream()
+                .mapToInt(row -> row.split("\t", -1).length)
+                .max().orElse(1);
+
+        XWPFTable table = doc.createTable(rows.size(), cols);
+        table.setWidth("100%");
+
+        for (int i = 0; i < rows.size(); i++) {
+            String[] cells = rows.get(i).split("\t", -1);
+            XWPFTableRow row = table.getRow(i);
+            for (int j = 0; j < cols; j++) {
+                XWPFTableCell cell = j < cells.length ? row.getCell(j) : row.getCell(cols - 1);
+                if (cell == null) continue;
+                String cellText = j < cells.length ? cells[j] : "";
+                // Clear default paragraph and set text
+                cell.removeParagraph(0);
+                XWPFParagraph cp = cell.addParagraph();
+                cp.setAlignment(ParagraphAlignment.LEFT);
+                XWPFRun cr = cp.createRun();
+                cr.setFontSize(10);
+                cr.setText(cellText);
+            }
+        }
+
+        // Add spacing after table
+        doc.createParagraph();
     }
 
     private String objectToJson(Object obj) {
@@ -457,5 +548,117 @@ public class RewriteService {
 
     public Optional<RewriteResult> getRewriteResult(Long resultId) {
         return rewriteResultRepository.findById(resultId);
+    }
+
+    /**
+     * Proofread the rewritten content:
+     * 1. Validate participant names against 与会人.md
+     * 2. Check ICT terminology and logic consistency
+     * 3. Return corrected content (or original if no issues)
+     */
+    private String proofreadContent(String draftContent, String sourceContent) {
+        // Read global 与会人.md
+        String participantsContext = "";
+        Path participantsFile = Path.of(uploadDir, "knowledge-base", "与会人.md");
+        if (Files.exists(participantsFile)) {
+            try {
+                participantsContext = Files.readString(participantsFile, StandardCharsets.UTF_8);
+            } catch (IOException e) {
+                log.warn("Failed to read 与会人.md: {}", e.getMessage());
+            }
+        }
+
+        // Build proofreading prompt
+        StringBuilder sb = new StringBuilder();
+        sb.append("你是专业的文档校对专家，请对以下会议纪要改写结果进行严格校对。\n\n");
+        sb.append("## 校对要求（按优先级排序）\n\n");
+        sb.append("### 1. 人名准确性（最高优先级）\n");
+        sb.append("逐一核对改写结果中出现的每个姓名是否在公司常与会人名单中。\n");
+        sb.append("如果某个姓名不在名单位中，但名单中存在读音相似或字形近似的正确写法（如名单有\"张弢\"但文中写\"张涛\"），必须更正为名单中的正确姓名。\n");
+        sb.append("人名更正没有例外——即使原始内容中使用了错误姓名，也必须按名单修正。\n\n");
+        sb.append("### 2. 部门/机构名称准确性\n");
+        sb.append("逐一核对改写结果中出现的所有部门名、机构名是否与原始会议内容完全一致。\n");
+        sb.append("特别注意：不要随意增减或改变部门名称（如\"运营管理部\"不要写成\"一营管理部\"或\"运营部\"）。\n");
+        sb.append("如果改写结果改变了原始内容中的部门名称，必须更正回原始名称。\n\n");
+        sb.append("### 3. ICT 行业术语\n");
+        sb.append("确保使用的术语符合 ICT/通信行业规范（如\"TP价\"、\"代表处\"、\"BG\"、\"OP\"、\"毛利率\"、\"虚拟毛利\"等）。\n\n");
+        sb.append("### 4. 逻辑一致性\n");
+        sb.append("内容连贯、逻辑通顺、事实准确。\n\n");
+        sb.append("### 5. 错别字与语法\n");
+        sb.append("修正错别字、用词不当、语病。\n\n");
+
+        if (!participantsContext.isBlank()) {
+            sb.append("## 参考文献\n");
+            sb.append("公司常与会人名单（以此为准核对所有人名）：\n");
+            sb.append(participantsContext).append("\n\n");
+        }
+
+        sb.append("## 输出要求\n");
+        sb.append("- 必须逐字检查每个人名，确保无一遗漏\n");
+        sb.append("- 如果内容没有问题，原样返回\n");
+        sb.append("- 如果发现问题，修正后**返回完整的修正版全文**\n");
+        sb.append("- 保持原文的改写风格和格式\n");
+        sb.append("- 不要添加原文没有的信息\n");
+        sb.append("- 直接输出会议纪要全文，不要额外解释\n\n");
+
+        sb.append("原始会议内容：\n");
+        sb.append("====================\n");
+        sb.append(sourceContent);
+        sb.append("\n====================\n\n");
+
+        sb.append("待校对的改写结果：\n");
+        sb.append("====================\n");
+        sb.append(draftContent);
+        sb.append("\n====================\n");
+
+        try {
+            return callDeepSeekNonStreaming("你是专业的文档校对专家，擅长校对会议纪要。", sb.toString(), 8192);
+        } catch (Exception e) {
+            log.warn("Proofreading DeepSeek call failed: {}", e.getMessage());
+            return draftContent;
+        }
+    }
+
+    /**
+     * Non-streaming DeepSeek API call with configurable max_tokens.
+     */
+    private String callDeepSeekNonStreaming(String systemMessage, String userMessage, int maxTokens) throws IOException {
+        Map<String, Object> requestBody = new LinkedHashMap<>();
+        requestBody.put("model", deepseekModel);
+        requestBody.put("stream", false);
+        requestBody.put("max_tokens", maxTokens);
+
+        List<Map<String, String>> messages = new ArrayList<>();
+        messages.add(Map.of("role", "system", "content", systemMessage));
+        messages.add(Map.of("role", "user", "content", userMessage));
+        requestBody.put("messages", messages);
+
+        String jsonBody = objectToJson(requestBody);
+
+        HttpURLConnection conn = (HttpURLConnection) URI.create(deepseekUrl + "/chat/completions").toURL().openConnection();
+        conn.setRequestMethod("POST");
+        conn.setRequestProperty("Content-Type", "application/json");
+        conn.setRequestProperty("Authorization", "Bearer " + deepseekApiKey);
+        conn.setDoOutput(true);
+        conn.setConnectTimeout(30000);
+        conn.setReadTimeout(120000);
+
+        try (OutputStream os = conn.getOutputStream()) {
+            os.write(jsonBody.getBytes(StandardCharsets.UTF_8));
+        }
+
+        int responseCode = conn.getResponseCode();
+        if (responseCode != 200) {
+            String errorBody = new String(conn.getErrorStream().readAllBytes(), StandardCharsets.UTF_8);
+            throw new IOException("DeepSeek API error " + responseCode + ": " + errorBody);
+        }
+
+        String responseBody = new String(conn.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+        try {
+            JsonNode root = objectMapper.readTree(responseBody);
+            return root.get("choices").get(0).get("message").get("content").asText();
+        } catch (Exception e) {
+            throw new IOException("Failed to parse DeepSeek response: " + e.getMessage());
+        }
     }
 }

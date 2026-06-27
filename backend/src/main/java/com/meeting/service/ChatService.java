@@ -161,18 +161,28 @@ public class ChatService {
                     })
                     .blockLast();
 
+            // Save assistant message BEFORE sending done event,
+            // so the frontend's loadMessages() call on done can see it
+            if (fullResponse.length() > 0) {
+                try {
+                    dialogueService.addMessage(dialogueId, "assistant", fullResponse.toString(), "text");
+                } catch (Exception e) {
+                    log.warn("Failed to save assistant message for dialogue {}: {}", dialogueId, e.getMessage());
+                }
+            }
+
             if (!clientDisconnected[0]) {
                 emitter.send(SseEmitter.event().name("done").data(""));
                 emitter.complete();
             }
         } catch (Exception e) {
-            handleStreamError(emitter, e);
-        } finally {
+            // On error, try to save partial response
             if (fullResponse.length() > 0) {
                 try {
                     dialogueService.addMessage(dialogueId, "assistant", fullResponse.toString(), "text");
                 } catch (Exception ignored) {}
             }
+            handleStreamError(emitter, e);
         }
     }
 
@@ -266,22 +276,31 @@ public class ChatService {
                 }
             }
 
+            // Save assistant message BEFORE sending done event
+            if (fullResponse.length() > 0) {
+                try {
+                    dialogueService.addMessage(dialogueId, "assistant", fullResponse.toString(), "text");
+                } catch (Exception e) {
+                    log.warn("Failed to save assistant message for dialogue {}: {}", dialogueId, e.getMessage());
+                }
+            }
+
             if (!clientDisconnected) {
                 emitter.send(SseEmitter.event().name("done").data(""));
                 emitter.complete();
             }
 
         } catch (Exception e) {
-            try {
-                emitter.send(SseEmitter.event().name("error").data("智谱调用失败: " + e.getMessage()));
-            } catch (IOException ignored) {}
-            emitter.completeWithError(e);
-        } finally {
+            // On error, try to save partial response
             if (fullResponse.length() > 0) {
                 try {
                     dialogueService.addMessage(dialogueId, "assistant", fullResponse.toString(), "text");
                 } catch (Exception ignored) {}
             }
+            try {
+                emitter.send(SseEmitter.event().name("error").data("智谱调用失败: " + e.getMessage()));
+            } catch (IOException ignored) {}
+            emitter.completeWithError(e);
         }
     }
 
