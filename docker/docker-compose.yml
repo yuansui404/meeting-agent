@@ -48,32 +48,6 @@ services:
       timeout: 5s
       retries: 10
 
-  # FunASR 官方语音识别服务（WebSocket 协议）
-  funasr-service:
-    image: registry.cn-hangzhou.aliyuncs.com/funasr_repo/funasr:funasr-runtime-sdk-cpu-0.4.7
-    ports:
-      - "10095:10095"
-    volumes:
-      - funasr_models:/workspace/models
-    command: >
-      /workspace/FunASR/runtime/websocket/build/bin/funasr-wss-server-2pass
-      --download-model-dir /workspace/models
-      --model-dir damo/speech_paraformer-large-vad-punc_asr_nat-zh-cn-16k-common-vocab8404-onnx
-      --online-model-dir damo/speech_paraformer-large_asr_nat-zh-cn-16k-common-vocab8404-online-onnx
-      --vad-dir damo/speech_fsmn_vad_zh-cn-16k-common-onnx
-      --punc-dir damo/punc_ct-transformer_zh-cn-common-vad_realtime-vocab272727-onnx
-      --itn-dir thuduj12/fst_itn_zh
-      --lm-dir damo/speech_ngram_lm_zh-cn-ai-wesp-fst
-      --port 10095
-      --certfile ""
-      --keyfile ""
-    healthcheck:
-      test: ["CMD", "pidof", "funasr-wss-server-2pass"]
-      interval: 30s
-      timeout: 5s
-      retries: 10
-      start_period: 120s
-
   # Spring Boot 后端服务
   backend:
     build:
@@ -86,16 +60,14 @@ services:
       - DB_URL=jdbc:postgresql://postgres:5432/meeting_agent
       - DB_USERNAME=user
       - DB_PASSWORD=password
-      - FUNASR_URL=http://funasr-service:10095
       - REDIS_URL=redis://redis:6379
       - NACOS_ADDR=nacos:8848
       - FILE_UPLOAD_DIR=/app/data/uploads
       - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY:-placeholder}
+      - MIMO_API_KEY=${MIMO_API_KEY:-placeholder}
     depends_on:
       postgres:
         condition: service_healthy
-      funasr-service:
-        condition: service_started
       nacos:
         condition: service_started
     volumes:
@@ -116,4 +88,3 @@ services:
 volumes:
   postgres_data:
   redis_data:
-  funasr_models:

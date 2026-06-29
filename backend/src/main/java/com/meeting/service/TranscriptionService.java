@@ -1,9 +1,6 @@
 package com.meeting.service;
 
-import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.node.ArrayNode;
-import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.meeting.entity.MeetingMinutes;
 import com.meeting.repository.MeetingMinutesRepository;
 import org.slf4j.Logger;
@@ -12,17 +9,14 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 
+import java.io.OutputStream;
+import java.net.HttpURLConnection;
 import java.net.URI;
-import java.net.http.HttpClient;
-import java.net.http.WebSocket;
-import java.nio.ByteBuffer;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
-import java.util.Arrays;
-import java.util.concurrent.CompletionStage;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.TimeUnit;
+import java.util.*;
 
 @Service
 public class TranscriptionService {
@@ -33,8 +27,11 @@ public class TranscriptionService {
     private final FileProcessingService fileProcessingService;
     private final MeetingDateExtractor meetingDateExtractor;
 
-    @Value("${funasr.url}")
-    private String funasrUrl;
+    @Value("${mimo.api-key:}")
+    private String mimoApiKey;
+
+    @Value("${mimo.url:https://token-plan-cn.xiaomimimo.com}")
+    private String mimoUrl;
 
     public TranscriptionService(MeetingMinutesRepository meetingRepository,
                                 FileProcessingService fileProcessingService,
@@ -61,8 +58,8 @@ public class TranscriptionService {
                     audioPath = audioFilePath.toString();
                 }
 
-                // Call FunASR WebSocket service
-                String result = callFunASR(audioPath);
+                // Call MiMo-V2.5-ASR HTTP API
+                String result = callMiMoASR(audioPath);
 
                 meeting.setTranscription(result);
                 meeting.setStatus("completed");
@@ -98,129 +95,73 @@ public class TranscriptionService {
         });
     }
 
-    public String callFunASR(String audioPath) {
+    public String callMiMoASR(String audioPath) {
         Path path = Path.of(audioPath);
         if (!Files.exists(path)) {
             return "转写失败: 音频文件不存在 " + audioPath;
         }
 
         try {
-            // Read WAV file and extract raw PCM data
-            byte[] wavBytes = Files.readAllBytes(path);
-            if (wavBytes.length < 44) {
-                return "转写失败: 无效的 WAV 文件";
+            // 1. Read audio file and base64 encode
+            byte[] audioBytes = Files.readAllBytes(path);
+            String base64Audio = Base64.getEncoder().encodeToString(audioBytes);
+            String ext = audioPath.toLowerCase().endsWith(".wav") ? "wav" : "mp3";
+
+            // 2. Build OpenAI-compatible request
+            Map<String, Object> requestBody = new LinkedHashMap<>();
+            requestBody.put("model", "MiMo-V2.5-ASR");
+            requestBody.put("messages", List.of(Map.of(
+                    "role", "user",
+                    "content", List.of(Map.of(
+                            "type", "audio",
+                            "audio", Map.of(
+                                    "data", base64Audio,
+                                    "format", ext
+                            )
+                    ))
+            )));
+
+            // 3. HTTP POST to MiMo API
+            String apiUrl = mimoUrl + "/v1/chat/completions";
+            HttpURLConnection conn = (HttpURLConnection) URI.create(apiUrl).toURL().openConnection();
+            conn.setRequestMethod("POST");
+            conn.setRequestProperty("Content-Type", "application/json");
+            conn.setRequestProperty("api-key", mimoApiKey);
+            conn.setDoOutput(true);
+            conn.setConnectTimeout(60000);
+            conn.setReadTimeout(300000);
+
+            ObjectMapper mapper = new ObjectMapper();
+            try (OutputStream os = conn.getOutputStream()) {
+                os.write(mapper.writeValueAsBytes(requestBody));
             }
 
-            // Parse sample rate from WAV header (bytes 24-27, little-endian)
-            int sampleRate = (wavBytes[24] & 0xFF)
-                    | ((wavBytes[25] & 0xFF) << 8)
-                    | ((wavBytes[26] & 0xFF) << 16)
-                    | ((wavBytes[27] & 0xFF) << 24);
-
-            // Find "data" chunk (scan after the RIFF/WAVE header)
-            int dataOffset = -1;
-            for (int i = 12; i < wavBytes.length - 8; ) {
-                int chunkLen = (wavBytes[i + 4] & 0xFF)
-                        | ((wavBytes[i + 5] & 0xFF) << 8)
-                        | ((wavBytes[i + 6] & 0xFF) << 16)
-                        | ((wavBytes[i + 7] & 0xFF) << 24);
-                if (wavBytes[i] == 'd' && wavBytes[i + 1] == 'a'
-                        && wavBytes[i + 2] == 't' && wavBytes[i + 3] == 'a') {
-                    dataOffset = i + 8;
-                    break;
-                }
-                i += 8 + chunkLen;
-                if (chunkLen % 2 != 0) i++; // padding byte
+            // 4. Parse response
+            int responseCode = conn.getResponseCode();
+            if (responseCode != 200) {
+                String errorBody = new String(conn.getErrorStream().readAllBytes(), StandardCharsets.UTF_8);
+                log.warn("MiMo ASR HTTP {}: {}", responseCode, errorBody);
+                return "转写失败: MiMo API 返回 " + responseCode;
             }
 
-            if (dataOffset < 0) {
-                return "转写失败: 未找到音频数据块";
+            String responseBody = new String(conn.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+            log.info("MiMo ASR raw response length={}", responseBody.length());
+
+            // Extract content from response: {"choices":[{"message":{"content":"..."}}]}
+            int contentStart = responseBody.indexOf("\"content\":\"");
+            if (contentStart < 0) {
+                log.warn("MiMo ASR response missing content field: {}", responseBody);
+                return "转写完成（无文本输出）";
             }
+            contentStart += 11;
+            int contentEnd = responseBody.indexOf("\"", contentStart);
+            if (contentEnd < 0) return "转写完成（无文本输出）";
 
-            byte[] pcmData = Arrays.copyOfRange(wavBytes, dataOffset, wavBytes.length);
-
-            // Build WebSocket URI from funasrUrl (e.g. http://funasr-service:10095)
-            URI configUri = URI.create(funasrUrl);
-            String wsUri = "ws://" + configUri.getHost() + ":" + configUri.getPort() + "/";
-
-            StringBuilder transcript = new StringBuilder();
-            CountDownLatch latch = new CountDownLatch(1);
-            ObjectMapper objectMapper = new ObjectMapper();
-
-            HttpClient client = HttpClient.newHttpClient();
-
-            WebSocket ws = client.newWebSocketBuilder()
-                    .buildAsync(URI.create(wsUri), new WebSocket.Listener() {
-                        @Override
-                        public CompletionStage<?> onText(WebSocket webSocket, CharSequence data, boolean last) {
-                            try {
-                                JsonNode json = objectMapper.readTree(data.toString());
-                                String mode = json.has("mode") ? json.get("mode").asText() : "";
-                                String text = json.has("text") ? json.get("text").asText() : "";
-                                boolean isFinal = json.has("is_final") && json.get("is_final").asBoolean();
-                                // Only collect offline (non-streaming) results to avoid duplicates
-                                if (!text.isEmpty() && !"2pass-online".equals(mode)) {
-                                    transcript.append(text);
-                                }
-                                if (isFinal) {
-                                    latch.countDown();
-                                }
-                            } catch (Exception e) {
-                                log.warn("Parse FunASR response error: {}", data, e);
-                            }
-                            return WebSocket.Listener.super.onText(webSocket, data, last);
-                        }
-
-                        @Override
-                        public void onError(WebSocket webSocket, Throwable error) {
-                            log.error("FunASR WebSocket error", error);
-                            latch.countDown();
-                        }
-                    })
-                    .get(10, TimeUnit.SECONDS);
-
-            // Calculate chunk stride (~60ms audio per chunk)
-            // Default config: chunk_size=[5,10,5], chunk_interval=10
-            int stride = (int) (60L * 10 / 10 / 1000.0 * sampleRate * 2);
-
-            // Send initial config
-            ObjectNode config = objectMapper.createObjectNode();
-            config.put("mode", "2pass");
-            config.put("wav_name", path.getFileName().toString());
-            config.put("wav_format", "pcm");
-            config.put("audio_fs", sampleRate);
-            ArrayNode chunkSize = config.putArray("chunk_size");
-            chunkSize.add(5);
-            chunkSize.add(10);
-            chunkSize.add(5);
-            config.put("chunk_interval", 10);
-            config.put("is_speaking", true);
-            config.put("hotwords", "");
-            config.put("itn", true);
-            ws.sendText(config.toString(), true);
-
-            // Send audio chunks
-            for (int offset = 0; offset < pcmData.length; offset += stride) {
-                int end = Math.min(offset + stride, pcmData.length);
-                ws.sendBinary(ByteBuffer.wrap(pcmData, offset, end - offset), true);
-                Thread.sleep(60);
-            }
-
-            // Send end signal
-            ObjectNode endMsg = objectMapper.createObjectNode();
-            endMsg.put("is_speaking", false);
-            ws.sendText(endMsg.toString(), true);
-
-            // Wait for result (max 5 minutes)
-            if (!latch.await(300, TimeUnit.SECONDS)) {
-                log.warn("FunASR transcription timed out for {}", audioPath);
-            }
-            ws.sendClose(WebSocket.NORMAL_CLOSURE, "ok");
-
-            String result = transcript.toString().trim();
-            return !result.isEmpty() ? result : "转写完成（无文本输出）";
+            String text = responseBody.substring(contentStart, contentEnd);
+            log.info("MiMo ASR completed, text length={}", text.length());
+            return text;
         } catch (Exception e) {
-            log.error("FunASR transcription failed for {}", audioPath, e);
+            log.error("MiMo ASR failed for {}: {}", audioPath, e.getMessage());
             return "转写失败: " + e.getMessage();
         }
     }
