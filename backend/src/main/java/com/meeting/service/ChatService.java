@@ -1,16 +1,20 @@
 package com.meeting.service;
 
+import com.meeting.agent.ListMeetingsTool;
+import com.meeting.agent.SearchKnowledgeBaseTool;
+import com.meeting.agent.SearchMeetingTitlesTool;
 import com.meeting.common.DocumentTextExtractor;
-import com.meeting.entity.Dialogue;
 import com.meeting.entity.MeetingMinutes;
 import com.meeting.repository.DialogueRepository;
 import com.meeting.repository.MeetingMinutesRepository;
 import io.agentscope.core.agent.RuntimeContext;
-import io.agentscope.core.event.TextBlockDeltaEvent;
+import io.agentscope.core.event.*;
 import io.agentscope.core.formatter.openai.DeepSeekFormatter;
 import io.agentscope.core.message.*;
 import io.agentscope.core.model.OpenAIChatModel;
 import io.agentscope.core.tool.Toolkit;
+import io.agentscope.core.tool.mcp.McpClientBuilder;
+import io.agentscope.core.tool.mcp.McpClientWrapper;
 import io.agentscope.harness.agent.HarnessAgent;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -26,6 +30,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.*;
+import java.time.Duration;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.stream.Collectors;
@@ -35,8 +40,21 @@ import java.util.stream.Collectors;
 public class ChatService {
 
     private static final Logger log = LoggerFactory.getLogger(ChatService.class);
-    private static final String SYSTEM_PROMPT = "你是智能助手，回答简洁准确。";
-    private static final double RELEVANCE_THRESHOLD = 0.55;
+    private static final String SYSTEM_PROMPT = """
+            你是会议纪要智能助手，具备以下能力：
+
+            ## 工具
+            - search_knowledge_base — 搜索知识库中的会议内容，获取具体讨论、决定、与会人等信息
+            - list_meetings — 浏览会议记录列表，查看有哪些会议
+            - search_meeting_titles — 通过标题关键词搜索特定会议
+            - tavily_search — 联网搜索实时信息（如最新政策、技术文档、外部资料等）
+            - upload_to_knowledge_base — 将对话中的文件上传到知识库
+
+            ## 要求
+            - 回答简洁准确
+            - 引用知识库内容时注明来源会议名称
+            - 联网搜索结果需说明信息来源
+            """;
     private static final long MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB limit for file reading
 
     private static final Set<String> IMAGE_FORMATS = Set.of(".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp", ".svg");
@@ -47,11 +65,15 @@ public class ChatService {
     private final DialogueService dialogueService;
     private final DialogueRepository dialogueRepository;
     private final UploadToKnowledgeBaseTool uploadToKnowledgeBaseTool;
+    private final SearchKnowledgeBaseTool searchKnowledgeBaseTool;
+    private final ListMeetingsTool listMeetingsTool;
+    private final SearchMeetingTitlesTool searchMeetingTitlesTool;
     private final MeetingMinutesRepository meetingRepository;
     private final VectorizationService vectorizationService;
     private final ExecutorService executor = Executors.newCachedThreadPool();
 
     private final String deepseekApiKey;
+    private final String deepseekApiUrl;
     private final String zhipuApiKey;
     private final String zhipuModel;
     private final String zhipuUrl;
@@ -62,17 +84,25 @@ public class ChatService {
                        @Value("${zhipu.api-key:}") String zhipuApiKey,
                        @Value("${zhipu.model:glm-4v}") String zhipuModel,
                        @Value("${zhipu.url:https://open.bigmodel.cn/api/paas/v4}") String zhipuUrl,
+                       @Value("${tavily.api-key:}") String tavilyApiKey,
                        DialogueService dialogueService,
                        DialogueRepository dialogueRepository,
                        MeetingMinutesRepository meetingRepository,
                        VectorizationService vectorizationService,
-                       UploadToKnowledgeBaseTool uploadToKnowledgeBaseTool) {
+                       UploadToKnowledgeBaseTool uploadToKnowledgeBaseTool,
+                       SearchKnowledgeBaseTool searchKnowledgeBaseTool,
+                       ListMeetingsTool listMeetingsTool,
+                       SearchMeetingTitlesTool searchMeetingTitlesTool) {
         this.dialogueService = dialogueService;
         this.dialogueRepository = dialogueRepository;
         this.meetingRepository = meetingRepository;
         this.vectorizationService = vectorizationService;
         this.uploadToKnowledgeBaseTool = uploadToKnowledgeBaseTool;
+        this.searchKnowledgeBaseTool = searchKnowledgeBaseTool;
+        this.listMeetingsTool = listMeetingsTool;
+        this.searchMeetingTitlesTool = searchMeetingTitlesTool;
         this.deepseekApiKey = apiKey;
+        this.deepseekApiUrl = apiUrl;
         this.zhipuApiKey = zhipuApiKey;
         this.zhipuModel = zhipuModel;
         this.zhipuUrl = zhipuUrl;
@@ -87,6 +117,25 @@ public class ChatService {
 
         Toolkit toolkit = new Toolkit();
         toolkit.registerAgentTool(uploadToKnowledgeBaseTool);
+        toolkit.registerAgentTool(searchKnowledgeBaseTool);
+        toolkit.registerAgentTool(listMeetingsTool);
+        toolkit.registerAgentTool(searchMeetingTitlesTool);
+
+        // Tavily MCP client (with graceful degradation)
+        if (tavilyApiKey != null && !tavilyApiKey.isBlank()) {
+            try {
+                McpClientWrapper tavilyClient = McpClientBuilder.create("tavily")
+                        .stdioTransport("npx", List.of("tavily-mcp"), Map.of("TAVILY_API_KEY", tavilyApiKey))
+                        .timeout(Duration.ofSeconds(30))
+                        .buildSync();
+                toolkit.registerMcpClient(tavilyClient).block();
+                log.info("Tavily MCP client initialized successfully");
+            } catch (Exception e) {
+                log.warn("Tavily MCP client init failed (web search unavailable): {}", e.getMessage());
+            }
+        } else {
+            log.info("TAVILY_API_KEY not configured, web search disabled");
+        }
 
         this.agent = HarnessAgent.builder()
                 .name("MeetingAssistant")
@@ -104,16 +153,15 @@ public class ChatService {
                 // 1. Save user message to DB with file metadata
                 dialogueService.addMessage(dialogueId, "user", userMessage, "text", metadata);
 
-                // 2. Build file blocks (text + images) and RAG context
+                // 2. Build file blocks (text + images)
                 List<ContentBlock> fileBlocks = buildFileBlocks(dialogueId);
                 boolean hasImages = fileBlocks.stream().anyMatch(b -> b instanceof ImageBlock);
-                String ragContext = buildRagContext(dialogueId, userMessage);
 
                 // 3. ZhiPu only for multimodal (images), DeepSeek for all text
                 if (hasImages) {
-                    streamChatWithZhipu(dialogueId, userMessage, ragContext, fileBlocks, emitter);
+                    streamChatWithZhipu(dialogueId, userMessage, fileBlocks, emitter);
                 } else {
-                    streamChatWithDeepSeek(dialogueId, userMessage, ragContext, fileBlocks, emitter);
+                    streamChatWithDeepSeek(dialogueId, userMessage, fileBlocks, emitter);
                 }
             } catch (Exception e) {
                 handleStreamError(emitter, e);
@@ -122,20 +170,20 @@ public class ChatService {
     }
 
     private void streamChatWithDeepSeek(Long dialogueId, String userMessage,
-                                        String ragContext, List<ContentBlock> fileBlocks,
+                                        List<ContentBlock> fileBlocks,
                                         SseEmitter emitter) {
         StringBuilder fullResponse = new StringBuilder();
         try {
             UserMessage msg;
             String fileContext = buildFileTextContext(dialogueId);
             if (!fileBlocks.isEmpty()) {
-                String enriched = buildEnrichedMessage(ragContext, null, userMessage);
+                String enriched = buildEnrichedMessage(null, userMessage);
                 List<ContentBlock> blocks = new ArrayList<>();
                 blocks.add(TextBlock.builder().text(enriched).build());
                 blocks.addAll(fileBlocks);
                 msg = new UserMessage(blocks);
             } else {
-                String enriched = buildEnrichedMessage(ragContext, fileContext, userMessage);
+                String enriched = buildEnrichedMessage(fileContext, userMessage);
                 msg = new UserMessage(enriched);
             }
 
@@ -144,18 +192,60 @@ public class ChatService {
                     .build();
 
             final boolean[] clientDisconnected = {false};
+            final boolean[] invokedTools = {false};
             agent.streamEvents(msg, ctx)
                     .doOnNext(event -> {
-                        if (event instanceof TextBlockDeltaEvent e) {
-                            String delta = e.getDelta();
-                            fullResponse.append(delta);
-                            if (!clientDisconnected[0]) {
-                                try {
+                        if (event instanceof ToolCallStartEvent) {
+                            invokedTools[0] = true;
+                        }
+                        if (!clientDisconnected[0]) {
+                            try {
+                                if (event instanceof TextBlockDeltaEvent e) {
+                                    String delta = e.getDelta();
+                                    fullResponse.append(delta);
                                     emitter.send(SseEmitter.event().data(delta));
-                                } catch (IOException ex) {
-                                    clientDisconnected[0] = true;
-                                    log.info("Client disconnected during DeepSeek stream, continuing to accumulate response");
+                                } else if (event instanceof ThinkingBlockDeltaEvent e) {
+                                    emitter.send(SseEmitter.event().name("thinking")
+                                            .data(e.getDelta()));
+                                } else if (event instanceof ToolCallStartEvent e) {
+                                    emitter.send(SseEmitter.event().name("tool_call")
+                                            .data(objectToJson(Map.of(
+                                                    "action", "start",
+                                                    "id", e.getToolCallId(),
+                                                    "name", e.getToolCallName()
+                                            ))));
+                                } else if (event instanceof ToolCallEndEvent e) {
+                                    emitter.send(SseEmitter.event().name("tool_call")
+                                            .data(objectToJson(Map.of(
+                                                    "action", "end",
+                                                    "id", e.getToolCallId(),
+                                                    "name", e.getToolCallName()
+                                            ))));
+                                } else if (event instanceof ToolResultStartEvent e) {
+                                    emitter.send(SseEmitter.event().name("tool_result")
+                                            .data(objectToJson(Map.of(
+                                                    "action", "start",
+                                                    "id", e.getToolCallId(),
+                                                    "name", e.getToolCallName()
+                                            ))));
+                                } else if (event instanceof ToolResultTextDeltaEvent e) {
+                                    emitter.send(SseEmitter.event().name("tool_result")
+                                            .data(objectToJson(Map.of(
+                                                    "action", "delta",
+                                                    "id", e.getToolCallId(),
+                                                    "delta", e.getDelta()
+                                            ))));
+                                } else if (event instanceof ToolResultEndEvent e) {
+                                    emitter.send(SseEmitter.event().name("tool_result")
+                                            .data(objectToJson(Map.of(
+                                                    "action", "end",
+                                                    "id", e.getToolCallId(),
+                                                    "name", e.getToolCallName()
+                                            ))));
                                 }
+                            } catch (IOException ex) {
+                                clientDisconnected[0] = true;
+                                log.info("Client disconnected during DeepSeek stream, continuing to accumulate response");
                             }
                         }
                     })
@@ -163,11 +253,27 @@ public class ChatService {
 
             // Save assistant message BEFORE sending done event,
             // so the frontend's loadMessages() call on done can see it
-            if (fullResponse.length() > 0) {
+            String responseText = fullResponse.toString();
+            if (!responseText.isEmpty()) {
                 try {
-                    dialogueService.addMessage(dialogueId, "assistant", fullResponse.toString(), "text");
+                    dialogueService.addMessage(dialogueId, "assistant", responseText, "text");
                 } catch (Exception e) {
                     log.warn("Failed to save assistant message for dialogue {}: {}", dialogueId, e.getMessage());
+                }
+            }
+
+            // Self-check: validate response when tools were invoked
+            if (invokedTools[0] && !clientDisconnected[0] && !responseText.isEmpty()) {
+                try {
+                    String corrected = performSelfCheck(userMessage, responseText);
+                    if (corrected != null && !corrected.equals(responseText)) {
+                        emitter.send(SseEmitter.event().name("corrected").data(corrected));
+                        // Update the saved message
+                        dialogueService.addMessage(dialogueId, "assistant", corrected, "text");
+                        log.info("Self-check corrected response for dialogue {}", dialogueId);
+                    }
+                } catch (Exception e) {
+                    log.warn("Self-check failed for dialogue {}: {}", dialogueId, e.getMessage());
                 }
             }
 
@@ -187,14 +293,14 @@ public class ChatService {
     }
 
     private void streamChatWithZhipu(Long dialogueId, String userMessage,
-                                     String ragContext, List<ContentBlock> fileBlocks,
+                                     List<ContentBlock> fileBlocks,
                                      SseEmitter emitter) {
         StringBuilder fullResponse = new StringBuilder();
         try {
             List<Map<String, Object>> messages = new ArrayList<>();
 
             String fileContext = buildFileTextContext(dialogueId);
-            String enriched = buildEnrichedMessage(ragContext, fileContext, userMessage);
+            String enriched = buildEnrichedMessage(fileContext, userMessage);
 
             List<Map<String, Object>> contentParts = new ArrayList<>();
             contentParts.add(Map.of("type", "text", "text", enriched));
@@ -376,86 +482,94 @@ public class ChatService {
         }
     }
 
-    private String buildEnrichedMessage(String ragContext, String fileContext, String userMessage) {
-        boolean hasContext = (fileContext != null && !fileContext.isEmpty())
-                || (ragContext != null && !ragContext.isEmpty());
-        if (!hasContext) return userMessage;
-
+    private String buildEnrichedMessage(String fileContext, String userMessage) {
+        if (fileContext == null || fileContext.isEmpty()) {
+            return userMessage;
+        }
         StringBuilder sb = new StringBuilder();
         sb.append("请分析以下资料来回答问题。\n");
         sb.append("要求：答案必须直接引用资料中的原文，不得添加资料中没有的信息。\n");
-        if (fileContext != null && !fileContext.isEmpty()) {
-            sb.append("\n文件内容：\n").append(fileContext);
-        }
-        if (ragContext != null && !ragContext.isEmpty()) {
-            sb.append("\n知识库内容：\n").append(ragContext);
-        }
+        sb.append("\n文件内容：\n").append(fileContext);
         sb.append("\n\n问题：").append(userMessage);
         return sb.toString();
     }
 
-    private String buildRagContext(Long dialogueId, String userMessage) {
+    /**
+     * Self-check: validate response via non-streaming DeepSeek call.
+     * Returns corrected text if issues found, or original text if none.
+     */
+    private String performSelfCheck(String userMessage, String responseText) {
+        String checkPrompt = """
+                你是一个AI助手回答质量检查员。检查以下回答的质量：
+
+                检查要点：
+                1. 回答是否准确、完整地回应了用户的问题
+                2. 是否存在事实性错误或幻觉信息
+                3. 是否存在错别字、语法错误或表达不清晰的地方
+                4. 如果引用了外部信息，是否与问题相关
+
+                用户问题：%s
+
+                AI回答：%s
+
+                如果回答有错误或需要改进，请给出修正后的完整版本。
+                如果回答没有问题，请直接回复「无需修改」。
+                """.formatted(userMessage, responseText);
+
         try {
-            Optional<Dialogue> dialogueOpt = dialogueRepository.findById(dialogueId);
-            if (dialogueOpt.isEmpty()) return "";
+            Map<String, Object> requestBody = new LinkedHashMap<>();
+            requestBody.put("model", "deepseek-chat");
+            requestBody.put("messages", List.of(
+                    Map.of("role", "system", "content", "你是一个严谨的回答质量检查员，检查回答是否存在事实错误、幻觉和表达问题。"),
+                    Map.of("role", "user", "content", checkPrompt)
+            ));
+            requestBody.put("temperature", 0.1);
+            requestBody.put("max_tokens", 4096);
 
-            Dialogue dialogue = dialogueOpt.get();
-            Long meetingId = dialogue.getMeetingId();
-            boolean isImported = Boolean.TRUE.equals(dialogue.getImported());
+            String jsonBody = objectToJson(requestBody);
 
-            List<VectorizationService.ScoredVector> scoredVectors;
-            if (meetingId != null) {
-                scoredVectors = vectorizationService.searchSimilarByMeetingWithScores(meetingId, userMessage, 5);
-            } else if (isImported) {
-                scoredVectors = vectorizationService.searchSimilarWithScores(userMessage, 5);
-            } else {
-                scoredVectors = vectorizationService.searchSimilarWithScores(userMessage, 3);
+            HttpURLConnection conn = (HttpURLConnection) URI.create(deepseekApiUrl + "/chat/completions").toURL().openConnection();
+            conn.setRequestMethod("POST");
+            conn.setRequestProperty("Content-Type", "application/json");
+            conn.setRequestProperty("Authorization", "Bearer " + deepseekApiKey);
+            conn.setDoOutput(true);
+            conn.setConnectTimeout(10000);
+            conn.setReadTimeout(30000);
+
+            try (OutputStream os = conn.getOutputStream()) {
+                os.write(jsonBody.getBytes(StandardCharsets.UTF_8));
             }
 
-            if (scoredVectors.isEmpty()) return "";
-
-            // Relevance filter: skip RAG if the best match is below threshold
-            double bestScore = scoredVectors.get(0).similarity();
-            log.info("RAG check: best similarity={}, threshold={}, query='{}'",
-                    String.format("%.3f", bestScore), RELEVANCE_THRESHOLD, userMessage);
-            if (bestScore < RELEVANCE_THRESHOLD) {
-                return "";
+            int responseCode = conn.getResponseCode();
+            if (responseCode != 200) {
+                return responseText;
             }
 
-            log.info("RAG triggered: best similarity={}, chunks={}, query='{}'",
-                    String.format("%.3f", bestScore), scoredVectors.size(), userMessage);
+            String responseBody = new String(conn.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
 
-            // Only include vectors above threshold
-            List<VectorizationService.ScoredVector> relevant = scoredVectors.stream()
-                    .filter(v -> v.similarity() >= RELEVANCE_THRESHOLD)
-                    .toList();
+            // Extract content from: {"choices":[{"message":{"content":"..."}}]}
+            int contentStart = responseBody.indexOf("\"content\":\"");
+            if (contentStart < 0) return responseText;
+            contentStart += 11;
+            int contentEnd = responseBody.indexOf("\"", contentStart);
+            if (contentEnd < 0) return responseText;
 
-            if (relevant.isEmpty()) return "";
+            String result = responseBody.substring(contentStart, contentEnd)
+                    .replace("\\n", "\n")
+                    .replace("\\\"", "\"")
+                    .replace("\\\\", "\\")
+                    .replace("\\t", "\t")
+                    .replace("\\r", "\r");
 
-            // Build a title lookup cache for source attribution
-            Map<Long, String> titleCache = new HashMap<>();
-            for (VectorizationService.ScoredVector v : relevant) {
-                titleCache.computeIfAbsent(v.meetingId(),
-                        id -> meetingRepository.findById(id)
-                                .map(MeetingMinutes::getTitle)
-                                .orElse("未知文件"));
+            if (result.contains("无需修改") || result.contains("没有问题")) {
+                return responseText;
             }
 
-            StringBuilder sb = new StringBuilder();
-            for (int i = 0; i < relevant.size(); i++) {
-                VectorizationService.ScoredVector v = relevant.get(i);
-                String source = titleCache.get(v.meetingId());
-                if (i > 0) sb.append("\n---\n");
-                sb.append("【来源：").append(source).append("】");
-                if (v.chunkIndex() != null) {
-                    sb.append("（片段 ").append(v.chunkIndex()).append("）");
-                }
-                sb.append("\n").append(v.content());
-            }
-            return sb.toString();
+            log.info("Self-check found issues, providing corrected response");
+            return result;
         } catch (Exception e) {
-            log.warn("RAG context build failed: {}", e.getMessage());
-            return "";
+            log.warn("Self-check HTTP call failed: {}", e.getMessage());
+            return responseText;
         }
     }
 

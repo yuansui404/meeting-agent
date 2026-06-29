@@ -35,6 +35,9 @@ deepseek:
   model: deepseek-chat
   url: https://api.deepseek.com
 
+tavily:
+  api-key: ${TAVILY_API_KEY:}
+
 # 智谱多模态模型（用于图片分析）
 zhipu:
   api-key: ${ZHIPU_API_KEY:bd986bb8c1da40ce9d58c3e0c069020c.Be4WaBn3AoAwoVg0}

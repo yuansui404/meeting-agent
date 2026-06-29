@@ -21,6 +21,7 @@ import {
   DownloadOutlined,
   EditOutlined,
   EyeOutlined,
+  ToolOutlined,
 } from '@ant-design/icons';
 import ReactMarkdown from 'react-markdown';
 import {
@@ -60,6 +61,20 @@ interface StreamingState {
   active: boolean;
 }
 
+interface ToolCallEvent {
+  action: string;
+  id: string;
+  name?: string;
+  delta?: string;
+}
+
+interface ToolCallDisplay {
+  id: string;
+  name: string;
+  result: string;
+  completed: boolean;
+}
+
 const suggestions = [
   { icon: <BulbOutlined />, text: '帮我总结最近的会议内容' },
   { icon: <FileTextOutlined />, text: '搜索关于项目的讨论' },
@@ -85,6 +100,8 @@ const DialoguePanel: React.FC<Props> = ({ activeDialogue, onDialogueUpdated, onS
   const [input, setInput] = useState('');
   const [sending, setSending] = useState(false);
   const [streaming, setStreaming] = useState<StreamingState>({ content: '', active: false });
+  const [thinkingText, setThinkingText] = useState('');
+  const [toolCalls, setToolCalls] = useState<ToolCallDisplay[]>([]);
   const [searchVisible, setSearchVisible] = useState(false);
   const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
@@ -196,6 +213,8 @@ const DialoguePanel: React.FC<Props> = ({ activeDialogue, onDialogueUpdated, onS
     };
     setMessages(prev => [...prev, userMsg]);
     setStreaming({ content: '', active: true });
+    setThinkingText('');
+    setToolCalls([]);
 
     try {
       const fileIds = filesForDisplay.map(f => f.id).filter(id => id > 0);
@@ -208,6 +227,7 @@ const DialoguePanel: React.FC<Props> = ({ activeDialogue, onDialogueUpdated, onS
         () => {
           setStreaming({ content: '', active: false });
           setSending(false);
+          setThinkingText(prev => prev ? prev + '\n\n---\n' : '');
           loadMessages(dialogueId);
           onDialogueUpdated();
         },
@@ -216,7 +236,22 @@ const DialoguePanel: React.FC<Props> = ({ activeDialogue, onDialogueUpdated, onS
           setSending(false);
           antMsg.error('对话出错: ' + err.message);
         },
-        fileIds
+        fileIds,
+        (delta) => {
+          setThinkingText(prev => prev + delta);
+        },
+        (data) => {
+          if (data.action === 'start') {
+            setToolCalls(prev => [...prev, { id: data.id, name: data.name || '', result: '', completed: false }]);
+          } else if (data.action === 'end') {
+            setToolCalls(prev => prev.map(tc => tc.id === data.id ? { ...tc, completed: true } : tc));
+          }
+        },
+        (data) => {
+          if (data.action === 'delta' && data.delta) {
+            setToolCalls(prev => prev.map(tc => tc.id === data.id ? { ...tc, result: tc.result + data.delta } : tc));
+          }
+        }
       );
     } catch (err: any) {
       setStreaming({ content: '', active: false });
@@ -386,16 +421,22 @@ const DialoguePanel: React.FC<Props> = ({ activeDialogue, onDialogueUpdated, onS
             {messages.map((msg) => (
               <MessageBubble key={msg.id} message={msg} onFilePreview={handleFilePreview} />
             ))}
-            {streaming.active && streaming.content && (
-              <StreamingBubble content={streaming.content} />
-            )}
-            {streaming.active && !streaming.content && (
+            {streaming.active && !streaming.content && !thinkingText && toolCalls.length === 0 && (
               <div style={{ display: 'flex', padding: '12px 24px', alignItems: 'center' }}>
                 <div style={{ maxWidth: 800, margin: '0 auto', width: '100%', paddingLeft: 52 }}>
                   <Spin size="small" />
                   <Text type="secondary" style={{ marginLeft: 8, fontSize: 13 }}>AI 思考中...</Text>
                 </div>
               </div>
+            )}
+            {/* Thinking chain */}
+            {thinkingText && <ThinkingBlock content={thinkingText} />}
+            {/* Tool calls */}
+            {toolCalls.map(tc => (
+              <ToolCallBlock key={tc.id} toolCall={tc} />
+            ))}
+            {streaming.active && streaming.content && (
+              <StreamingBubble content={streaming.content} />
             )}
             <div ref={messagesEndRef} />
           </div>
@@ -1027,6 +1068,99 @@ const RewriteBubble: React.FC<{ message: DisplayMessage; rewriteResultId: number
         </div>
       </Drawer>
     </>
+  );
+};
+
+// Thinking block — shows AI reasoning process in italic gray
+const ThinkingBlock: React.FC<{ content: string }> = ({ content }) => {
+  return (
+    <div style={{ display: 'flex', padding: '8px 24px 2px 24px', justifyContent: 'flex-start' }}>
+      <div style={{ maxWidth: '75%', marginLeft: 48, width: '100%' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
+          <BulbOutlined style={{ fontSize: 12, color: '#999' }} />
+          <Text type="secondary" style={{ fontSize: 11, fontWeight: 600 }}>思考过程</Text>
+        </div>
+        <div style={{
+          padding: '8px 12px',
+          background: '#fafafa',
+          borderRadius: 8,
+          borderLeft: '3px solid #d9d9d9',
+          fontSize: 13,
+          lineHeight: 1.5,
+          color: '#888',
+          fontStyle: 'italic',
+          whiteSpace: 'pre-wrap',
+          wordBreak: 'break-word',
+        }}>
+          {content}
+          {content && !content.endsWith('\n') && (
+            <span style={{
+              display: 'inline-block', width: 6, height: 13,
+              background: '#bbb', marginLeft: 2,
+              animation: 'blink 1s step-end infinite',
+              verticalAlign: 'text-bottom',
+            }} />
+          )}
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// Tool call block — shows tool name and collapsible result
+const ToolCallBlock: React.FC<{ toolCall: ToolCallDisplay }> = ({ toolCall }) => {
+  const [expanded, setExpanded] = useState(false);
+  const hasResult = toolCall.result.length > 0;
+
+  return (
+    <div style={{ display: 'flex', padding: '2px 24px', justifyContent: 'flex-start' }}>
+      <div style={{ maxWidth: '75%', marginLeft: 48, width: '100%' }}>
+        <div
+          onClick={() => hasResult && setExpanded(!expanded)}
+          style={{
+            display: 'inline-flex', alignItems: 'center', gap: 6,
+            padding: '5px 12px',
+            background: expanded ? '#f5f5f5' : '#fafafa',
+            borderRadius: 8,
+            border: '1px solid #e8e8e8',
+            cursor: hasResult ? 'pointer' : 'default',
+            fontSize: 12,
+            color: '#666',
+          }}
+        >
+          <ToolOutlined style={{ fontSize: 13, color: '#722ed1' }} />
+          <span style={{ fontWeight: 500 }}>{toolCall.name}</span>
+          {toolCall.completed ? (
+            <span style={{ color: '#52c41a', fontSize: 11 }}>✓ 完成</span>
+          ) : (
+            <Spin size="small" style={{ fontSize: 10 }} />
+          )}
+          {hasResult && (
+            <Text type="secondary" style={{ fontSize: 11, marginLeft: 4 }}>
+              {expanded ? '收起' : '展开'}
+            </Text>
+          )}
+        </div>
+        {expanded && hasResult && (
+          <div style={{
+            marginTop: 4,
+            padding: '8px 12px',
+            background: '#f5f5f5',
+            borderRadius: 8,
+            border: '1px solid #e8e8e8',
+            fontSize: 12,
+            lineHeight: 1.5,
+            color: '#666',
+            whiteSpace: 'pre-wrap',
+            wordBreak: 'break-word',
+            maxHeight: 200,
+            overflow: 'auto',
+          }}>
+            {toolCall.result}
+          </div>
+        )}
+      </div>
+    </div>
   );
 };
 

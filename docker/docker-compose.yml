@@ -65,6 +65,7 @@ services:
       - FILE_UPLOAD_DIR=/app/data/uploads
       - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY:-placeholder}
       - MIMO_API_KEY=${MIMO_API_KEY:-placeholder}
+      - TAVILY_API_KEY=${TAVILY_API_KEY:-placeholder}
     depends_on:
       postgres:
         condition: service_healthy

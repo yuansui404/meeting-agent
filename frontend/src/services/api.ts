@@ -280,7 +280,10 @@ export const streamChat = (
   onToken: (token: string) => void,
   onDone: () => void,
   onError: (err: Error) => void,
-  fileIds?: number[]
+  fileIds?: number[],
+  onThinking?: (delta: string) => void,
+  onToolCall?: (data: any) => void,
+  onToolResult?: (data: any) => void,
 ): AbortController => {
   const controller = new AbortController();
   const baseUrl = api.defaults.baseURL || 'http://localhost:8080/api';
@@ -329,6 +332,18 @@ export const streamChat = (
             if (currentEvent === 'error') {
               onError(new Error(data));
               return;
+            }
+            if (currentEvent === 'thinking') {
+              onThinking?.(data);
+              continue;
+            }
+            if (currentEvent === 'tool_call') {
+              try { onToolCall?.(JSON.parse(data)); } catch { /* ignore */ }
+              continue;
+            }
+            if (currentEvent === 'tool_result') {
+              try { onToolResult?.(JSON.parse(data)); } catch { /* ignore */ }
+              continue;
             }
             if (data && data !== '[DONE]') {
               onToken(data);
