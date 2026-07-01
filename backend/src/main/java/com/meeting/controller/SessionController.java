@@ -1,9 +1,8 @@
 package com.meeting.controller;
 
-import com.meeting.entity.Dialogue;
 import com.meeting.entity.RewriteResult;
-import com.meeting.service.DialogueService;
 import com.meeting.service.RewriteService;
+import com.meeting.service.SessionService;
 import org.springframework.core.io.FileSystemResource;
 import org.springframework.core.io.Resource;
 import org.springframework.http.HttpHeaders;
@@ -16,67 +15,58 @@ import java.util.Map;
 
 @RestController
 @RequestMapping("/api")
-public class DialogueController {
+public class SessionController {
 
-    private final DialogueService dialogueService;
+    private final SessionService sessionService;
     private final RewriteService rewriteService;
 
-    public DialogueController(DialogueService dialogueService, RewriteService rewriteService) {
-        this.dialogueService = dialogueService;
+    public SessionController(SessionService sessionService, RewriteService rewriteService) {
+        this.sessionService = sessionService;
         this.rewriteService = rewriteService;
     }
 
     @PostMapping("/dialogue")
-    public ResponseEntity<?> createDialogue(@RequestBody Map<String, Object> request) {
+    public ResponseEntity<?> createSession(@RequestBody Map<String, Object> request) {
         String title = (String) request.getOrDefault("title", "新对话");
         Long meetingId = request.get("meetingId") != null
                 ? Long.valueOf(request.get("meetingId").toString()) : null;
-
-        Dialogue dialogue = dialogueService.createDialogue(title, meetingId);
-        return ResponseEntity.ok(Map.of("dialogueId", dialogue.getId()));
+        var session = sessionService.createSession(title, meetingId);
+        return ResponseEntity.ok(Map.of("dialogueId", session.getId()));
     }
 
     @PostMapping("/dialogue/{id}/message")
     public ResponseEntity<?> addMessage(@PathVariable Long id, @RequestBody Map<String, String> request) {
         try {
-            var message = dialogueService.addMessage(
-                    id,
-                    request.get("role"),
-                    request.get("content"),
-                    request.get("messageType")
-            );
-            return ResponseEntity.ok(Map.of(
-                    "messageId", message.getId(),
-                    "timestamp", message.getTimestamp()
-            ));
+            sessionService.addMessage(id, request.get("role"), request.get("content"), request.get("messageType"), null);
+            return ResponseEntity.ok(Map.of("messageId", 0, "timestamp", java.time.LocalDateTime.now().toString()));
         } catch (IllegalArgumentException e) {
             return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
         }
     }
 
     @GetMapping("/dialogue/{id}")
-    public ResponseEntity<?> getDialogue(@PathVariable Long id) {
+    public ResponseEntity<?> getSession(@PathVariable Long id) {
         try {
-            return ResponseEntity.ok(dialogueService.getDialogueHistory(id));
+            return ResponseEntity.ok(sessionService.getSessionWithMessages(id));
         } catch (IllegalArgumentException e) {
             return ResponseEntity.notFound().build();
         }
     }
 
     @GetMapping("/dialogues")
-    public ResponseEntity<?> listDialogues() {
-        return ResponseEntity.ok(dialogueService.listActiveDialogues());
+    public ResponseEntity<?> listSessions() {
+        return ResponseEntity.ok(sessionService.listSessions());
     }
 
     @PostMapping("/dialogue/{id}/archive")
-    public ResponseEntity<?> archiveDialogue(@PathVariable Long id) {
-        dialogueService.archiveDialogue(id);
+    public ResponseEntity<?> archiveSession(@PathVariable Long id) {
+        sessionService.archiveSession(id);
         return ResponseEntity.ok(Map.of("success", true));
     }
 
     @DeleteMapping("/dialogue/{id}")
-    public ResponseEntity<?> deleteDialogue(@PathVariable Long id) {
-        dialogueService.deleteDialogue(id);
+    public ResponseEntity<?> deleteSession(@PathVariable Long id) {
+        sessionService.deleteSession(id);
         return ResponseEntity.ok(Map.of("success", true));
     }
 
@@ -87,7 +77,7 @@ public class DialogueController {
             if (title == null || title.trim().isEmpty()) {
                 return ResponseEntity.badRequest().body(Map.of("error", "Title cannot be empty"));
             }
-            dialogueService.updateTitle(id, title.trim());
+            sessionService.updateTitle(id, title.trim());
             return ResponseEntity.ok(Map.of("success", true));
         } catch (IllegalArgumentException e) {
             return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
@@ -95,8 +85,8 @@ public class DialogueController {
     }
 
     @PostMapping("/dialogue/{id}/import")
-    public ResponseEntity<?> importDialogue(@PathVariable Long id) {
-        dialogueService.importToKnowledgeBase(id);
+    public ResponseEntity<?> importSession(@PathVariable Long id) {
+        sessionService.importSession(id);
         return ResponseEntity.ok(Map.of("success", true));
     }
 

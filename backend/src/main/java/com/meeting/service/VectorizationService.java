@@ -23,7 +23,7 @@ import java.util.stream.Collectors;
 public class VectorizationService {
 
     private static final Logger log = LoggerFactory.getLogger(VectorizationService.class);
-    private static final int MAX_CHUNK_SIZE = 500;
+    private static final int MAX_CHUNK_SIZE = 1500;
     private static final int CHUNK_OVERLAP = 50;
 
     /**
@@ -162,9 +162,25 @@ public class VectorizationService {
 
         vectorRepository.saveAll(vectors);
 
-        // Mark meeting as knowledge base
-        meeting.setKnowledgeBase(true);
-        meetingRepository.save(meeting);
+        // Extract participants and create dedicated vector chunk (chunk_index = -1)
+        try {
+            String participants = extractParticipantsFromTranscription(transcription);
+            if (participants != null && !participants.isBlank()) {
+                String participantContent = "与会人: " + participants;
+                float[] pEmbedding = embeddingService.generateEmbedding(participantContent);
+
+                MeetingVector pv = new MeetingVector();
+                pv.setMeetingId(meetingId);
+                pv.setContent(participantContent);
+                pv.setEmbedding(pEmbedding);
+                pv.setChunkIndex(-1);
+                vectorRepository.save(pv);
+
+                meeting.setParticipants(participants);
+            }
+        } catch (Exception e) {
+            log.warn("Failed to create participant vector for meeting {}: {}", meetingId, e.getMessage());
+        }
 
         // Collect participants into global 与会人.md
         collectParticipants(meeting);
@@ -210,8 +226,13 @@ public class VectorizationService {
                 return;
             }
 
+            // Persist to DB (this meeting's participants only)
+            String participantsStr = String.join("、", newNameSet);
+            meeting.setParticipants(participantsStr);
+            meetingRepository.save(meeting);
+
             // Read existing 与会人.md
-            Path participantsFile = Path.of(uploadDir, "knowledge-base", "与会人.md");
+            Path participantsFile = Path.of(uploadDir, "profile", "与会人.md");
             Set<String> existingNames = new LinkedHashSet<>();
             if (Files.exists(participantsFile)) {
                 List<String> lines = Files.readAllLines(participantsFile, StandardCharsets.UTF_8);
@@ -254,12 +275,70 @@ public class VectorizationService {
         }
     }
 
+    /**
+     * Backfill participants for existing knowledge-base meetings:
+     * extract from transcription, create/update chunk_index=-1 vector, persist to DB.
+     */
+    @Transactional
+    public void backfillParticipants(Long meetingId) {
+        MeetingMinutes meeting = meetingRepository.findById(meetingId)
+                .orElseThrow(() -> new IllegalArgumentException("Meeting not found: " + meetingId));
+
+        String transcription = meeting.getTranscription();
+        if (transcription == null || transcription.isBlank()) {
+            log.info("backfillParticipants: meeting {} has no transcription, skipping", meetingId);
+            return;
+        }
+
+        // Extract via regex
+        String participants = extractParticipantsFromTranscription(transcription);
+        if (participants == null || participants.isBlank()) {
+            log.info("backfillParticipants: no participants found in transcription for meeting {}", meetingId);
+            return;
+        }
+
+        // Persist to DB
+        meeting.setParticipants(participants);
+        meetingRepository.save(meeting);
+
+        // Remove old chunk_index=-1 vector if exists
+        jdbcTemplate.update("DELETE FROM meeting_vectors WHERE meeting_id = ? AND chunk_index = -1", meetingId);
+
+        // Create dedicated vector chunk
+        String participantContent = "与会人: " + participants;
+        float[] embedding = embeddingService.generateEmbedding(participantContent);
+        MeetingVector mv = new MeetingVector();
+        mv.setMeetingId(meetingId);
+        mv.setContent(participantContent);
+        mv.setEmbedding(embedding);
+        mv.setChunkIndex(-1);
+        vectorRepository.save(mv);
+
+        log.info("backfillParticipants: updated meeting {} with participants '{}'", meetingId, participants);
+    }
+
     private String extractContentText(JsonNode response) {
         try {
             return response.get("choices").get(0).get("message").get("content").asText();
         } catch (Exception e) {
             return null;
         }
+    }
+
+    /**
+     * Extract participant names from transcription text using regex.
+     * Looks for patterns like "与会人  张力、杜伟、高玉坤" or "与会人：张三、李四".
+     */
+    static String extractParticipantsFromTranscription(String transcription) {
+        if (transcription == null || transcription.isBlank()) return null;
+        java.util.regex.Pattern pattern = java.util.regex.Pattern.compile(
+                "与会人[：: \\t]+([^\\n]+)", java.util.regex.Pattern.CASE_INSENSITIVE);
+        java.util.regex.Matcher matcher = pattern.matcher(transcription);
+        if (matcher.find()) {
+            String result = matcher.group(1).trim();
+            return result.isBlank() ? null : result;
+        }
+        return null;
     }
 
     public List<MeetingVector> searchSimilar(String query, int limit) {
@@ -392,63 +471,71 @@ public class VectorizationService {
     }
 
     /**
-     * Chunk text into segments with overlap. Splits on paragraph breaks first,
-     * then sentence boundaries (。！？\n) to keep chunks under MAX_CHUNK_SIZE.
+     * Chunk text into semantic sections. First attempts to split by meeting agenda
+     * headings (关于/会议决策), then falls back to line-by-line section detection.
+     * Within each section, splits by sentences if content exceeds MAX_CHUNK_SIZE.
      */
     static List<String> chunkText(String text) {
         List<String> chunks = new ArrayList<>();
         if (text == null || text.isBlank()) return chunks;
 
-        // Split by double newlines (paragraphs)
-        String[] paragraphs = text.split("\\n\\n+");
-        StringBuilder current = new StringBuilder();
+        // Step 1: collect raw sections via two strategies
+        List<String> rawSections;
 
-        for (String para : paragraphs) {
-            para = para.trim();
-            if (para.isEmpty()) continue;
+        // Strategy A: split by semantic headings (关于/会议决策)
+        String[] byHeadings = text.split("\\n(?=关于|会议决策)");
+        if (byHeadings.length >= 3) {
+            // Good split detected — use heading-based sections
+            rawSections = Arrays.asList(byHeadings);
+        } else {
+            // Strategy B: split body by lines, each substantive line is a section
+            int bodyStart = text.indexOf("\n\n");
+            String body = (bodyStart > 0) ? text.substring(bodyStart) : text;
+            rawSections = new ArrayList<>();
 
-            if (current.length() + para.length() <= MAX_CHUNK_SIZE) {
-                if (current.length() > 0) current.append("\n\n");
-                current.append(para);
-            } else {
-                // Flush current buffer
-                if (current.length() > 0) {
-                    chunks.add(current.toString());
-                }
+            // Add header separately if present
+            if (bodyStart > 0) {
+                String header = text.substring(0, bodyStart).trim();
+                if (!header.isEmpty()) rawSections.add(header);
+            }
 
-                // If paragraph is still too long, split by sentences
-                if (para.length() > MAX_CHUNK_SIZE) {
-                    String[] sentences = para.split("(?<=[。！？\n])");
-                    StringBuilder sentenceBuf = new StringBuilder();
-                    for (String sentence : sentences) {
-                        sentence = sentence.trim();
-                        if (sentence.isEmpty()) continue;
-
-                        if (sentenceBuf.length() + sentence.length() <= MAX_CHUNK_SIZE) {
-                            sentenceBuf.append(sentence);
-                        } else {
-                            if (sentenceBuf.length() > 0) {
-                                chunks.add(sentenceBuf.toString());
-                            }
-                            sentenceBuf = new StringBuilder(sentence);
-                        }
-                    }
-                    if (sentenceBuf.length() > 0) {
-                        current = new StringBuilder(sentenceBuf);
-                    } else {
-                        current = new StringBuilder();
-                    }
-                } else {
-                    current = new StringBuilder(para);
-                }
+            for (String line : body.split("\n")) {
+                line = line.trim();
+                if (line.isBlank()) continue;
+                // Skip structural lines (会议讨论, 议题...)
+                if (line.startsWith("会议讨论") || line.startsWith("议题")) continue;
+                rawSections.add(line);
             }
         }
 
-        // Flush remaining
-        if (current.length() > 0) {
-            chunks.add(current.toString());
+        // Step 2: process each section — keep as is, or split by sentences
+        for (String section : rawSections) {
+            section = section.trim();
+            if (section.isEmpty()) continue;
+            appendChunk(chunks, section, MAX_CHUNK_SIZE);
         }
 
         return chunks;
+    }
+
+    private static void appendChunk(List<String> chunks, String text, int maxSize) {
+        if (text.length() <= maxSize) {
+            chunks.add(text);
+            return;
+        }
+        String[] sentences = text.split("(?<=[。！？\\n])");
+        StringBuilder buf = new StringBuilder();
+        for (String s : sentences) {
+            s = s.trim();
+            if (s.isEmpty()) continue;
+            if (buf.length() + s.length() <= maxSize) {
+                if (buf.length() > 0) buf.append("\n");
+                buf.append(s);
+            } else {
+                chunks.add(buf.toString());
+                buf = new StringBuilder(s);
+            }
+        }
+        if (buf.length() > 0) chunks.add(buf.toString());
     }
 }

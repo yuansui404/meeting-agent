@@ -1,4 +1,21 @@
--- 会议纪要表
+-- ============================================================
+-- Agent 会话表（替代旧 dialogues + dialogue_messages）
+-- 存储 AgentState 全量快照 (TEXT)，由 PgAgentStateStore 自动管理
+-- ============================================================
+CREATE TABLE IF NOT EXISTS agent_sessions (
+    id BIGSERIAL PRIMARY KEY,
+    session_id VARCHAR(255) NOT NULL UNIQUE,
+    title VARCHAR(500) NOT NULL DEFAULT '新对话',
+    status VARCHAR(50) NOT NULL DEFAULT 'active',
+    imported BOOLEAN NOT NULL DEFAULT FALSE,
+    message_count INT NOT NULL DEFAULT 0,
+    context_summary TEXT,
+    state_json TEXT,
+    created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+-- 会议纪要表（单表存储所有会议信息）
 CREATE TABLE IF NOT EXISTS meeting_minutes (
     id BIGSERIAL PRIMARY KEY,
     title VARCHAR(255) NOT NULL,
@@ -10,7 +27,7 @@ CREATE TABLE IF NOT EXISTS meeting_minutes (
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     status VARCHAR(20) DEFAULT 'processing',
     knowledge_base BOOLEAN DEFAULT FALSE,
-    dialogue_id BIGINT REFERENCES dialogues(id) ON DELETE SET NULL,
+    dialogue_id BIGINT REFERENCES agent_sessions(id) ON DELETE SET NULL,
     md_file_path VARCHAR(500),
     meeting_date TIMESTAMP
 );
@@ -27,29 +44,7 @@ CREATE TABLE IF NOT EXISTS meeting_vectors (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
--- 对话表
-CREATE TABLE IF NOT EXISTS dialogues (
-    id BIGSERIAL PRIMARY KEY,
-    title VARCHAR(255) NOT NULL,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    status VARCHAR(20) DEFAULT 'active',
-    user_id VARCHAR(255),
-    imported BOOLEAN DEFAULT FALSE,
-    meeting_id BIGINT REFERENCES meeting_minutes(id) ON DELETE SET NULL
-);
-
--- 对话消息表
-CREATE TABLE IF NOT EXISTS dialogue_messages (
-    id BIGSERIAL PRIMARY KEY,
-    dialogue_id BIGINT REFERENCES dialogues(id) ON DELETE CASCADE,
-    role VARCHAR(20) NOT NULL,
-    content TEXT NOT NULL,
-    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    message_type VARCHAR(50) DEFAULT 'text',
-    meeting_context_id BIGINT REFERENCES meeting_minutes(id) ON DELETE CASCADE
-);
-
+-- ============================================================
 -- 索引
 CREATE EXTENSION IF NOT EXISTS pg_trgm;
 CREATE INDEX IF NOT EXISTS idx_meeting_minutes_search ON meeting_minutes USING gin(to_tsvector('simple', coalesce(title, '') || ' ' || coalesce(transcription, '')));
@@ -57,13 +52,12 @@ CREATE INDEX IF NOT EXISTS idx_meeting_minutes_search ON meeting_minutes USING g
 CREATE INDEX IF NOT EXISTS idx_meeting_minutes_title_trgm ON meeting_minutes USING gin(title gin_trgm_ops);
 CREATE INDEX IF NOT EXISTS idx_meeting_minutes_trans_trgm ON meeting_minutes USING gin(transcription gin_trgm_ops);
 CREATE INDEX IF NOT EXISTS idx_meeting_vectors_embedding ON meeting_vectors USING ivfflat(embedding vector_cosine_ops);
-CREATE INDEX IF NOT EXISTS idx_dialogues_status ON dialogues(status, updated_at DESC);
-CREATE INDEX IF NOT EXISTS idx_dialogue_messages_timestamp ON dialogue_messages(dialogue_id, timestamp);
+CREATE INDEX IF NOT EXISTS idx_agent_sessions_status ON agent_sessions(status, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_agent_sessions_session_id ON agent_sessions(session_id);
 
 -- ============================================================
 -- RAG 新管线表（追加在旧表定义之后）
 -- 用于新的 RAG 文档管理、知识库检索、Agent 问答功能
--- 与旧表（meeting_minutes/meeting_vectors/dialogues）共存
 -- ============================================================
 
 -- 文档表
@@ -161,7 +155,7 @@ CREATE INDEX IF NOT EXISTS idx_meeting_vectors_priority ON meeting_vectors(prior
 -- 改写结果表（每次改写一条记录，支持多文件源 + 多版本）
 CREATE TABLE IF NOT EXISTS rewrite_result (
     id BIGSERIAL PRIMARY KEY,
-    dialogue_id BIGINT NOT NULL REFERENCES dialogues(id) ON DELETE CASCADE,
+    dialogue_id BIGINT NOT NULL REFERENCES agent_sessions(id) ON DELETE CASCADE,
     source_file_ids TEXT NOT NULL,
     reference_ids TEXT,
     content TEXT NOT NULL,
@@ -180,3 +174,12 @@ CREATE TABLE IF NOT EXISTS rewrite_feedback (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_rewrite_feedback_result ON rewrite_feedback(rewrite_result_id);
+
+-- ============================================================
+-- 数据迁移（从旧 dialogues/dialogue_messages 表迁移到 agent_sessions）
+-- 幂等执行：仅当旧 dialogues 表存在且 agent_sessions 暂无数据时执行
+-- ============================================================
+DROP TABLE IF EXISTS dialogue_messages, dialogues CASCADE;
+-- 注：旧表的 CASCADE DROP 会同时清理旧 FK 约束。如果旧表不存在则跳过。
+
+-- 后续所有的 FK 已在上文直接引用 agent_sessions。

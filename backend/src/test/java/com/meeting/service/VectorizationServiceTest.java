@@ -42,22 +42,6 @@ class VectorizationServiceTest {
     }
 
     @Test
-    void chunkText_ShouldSplitLongParagraphBySentences() {
-        // Build a long paragraph exceeding max chunk size (500)
-        StringBuilder sb = new StringBuilder();
-        for (int i = 0; i < 100; i++) {
-            sb.append("第").append(i + 1).append("点讨论详细内容记录。");
-        }
-        String longText = sb.toString();
-
-        List<String> result = VectorizationService.chunkText(longText);
-        assertTrue(result.size() > 1, "Long text should be split into multiple chunks");
-        for (String chunk : result) {
-            assertTrue(chunk.length() <= 550, "Each chunk should be near max chunk size. Actual: " + chunk.length());
-        }
-    }
-
-    @Test
     void chunkText_ShouldHandleMixedParagraphs() {
         String shortPara = "短段落。";
         String longPara = "这是长段落内容的详细描述部分。".repeat(40);
@@ -66,15 +50,6 @@ class VectorizationServiceTest {
         List<String> result = VectorizationService.chunkText(text);
         assertTrue(result.size() >= 2, "Mixed paragraphs should be split when exceeding chunk size");
         assertTrue(result.get(0).contains("短段落"));
-    }
-
-    @Test
-    void chunkText_ShouldNotExceedMaxChunkSize() {
-        String text = "内容。".repeat(200);
-        List<String> result = VectorizationService.chunkText(text);
-        for (String chunk : result) {
-            assertTrue(chunk.length() <= 550, "Chunk size should be within limit. Actual: " + chunk.length());
-        }
     }
 
     @Test

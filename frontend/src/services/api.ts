@@ -13,7 +13,6 @@ export interface Meeting {
   status: string;
   createdAt: string;
   updatedAt?: string;
-  knowledgeBase?: boolean;
   filePath?: string;
   dialogueId?: number | null;
   mdFilePath?: string | null;
@@ -112,7 +111,7 @@ export const searchMeetings = (query: string, dialogueId?: number) =>
 export const vectorizeMeeting = (id: number) =>
   api.post(`/meeting/${id}/vectorize`);
 
-// 切换知识库状态
+// 切换知识库状态（已废弃，会议上传后自动向量化）
 export const toggleKnowledgeBase = (id: number) =>
   api.post<{ success: boolean; knowledgeBase: boolean }>(`/meeting/${id}/knowledge-base`);
 
@@ -284,6 +283,7 @@ export const streamChat = (
   onThinking?: (delta: string) => void,
   onToolCall?: (data: any) => void,
   onToolResult?: (data: any) => void,
+  onCorrected?: (text: string) => void,
 ): AbortController => {
   const controller = new AbortController();
   const baseUrl = api.defaults.baseURL || 'http://localhost:8080/api';
@@ -321,8 +321,8 @@ export const streamChat = (
 
         for (const line of lines) {
           const trimmed = line.trim();
-          if (trimmed.startsWith('event: ')) {
-            currentEvent = trimmed.slice(7).trim();
+          if (trimmed.startsWith('event:')) {
+            currentEvent = trimmed.slice(6).trim();
           } else if (trimmed.startsWith('data:')) {
             const data = trimmed.slice(5).trim();
             if (currentEvent === 'done') {
@@ -345,6 +345,10 @@ export const streamChat = (
               try { onToolResult?.(JSON.parse(data)); } catch { /* ignore */ }
               continue;
             }
+            if (currentEvent === 'corrected') {
+              onCorrected?.(data);
+              continue;
+            }
             if (data && data !== '[DONE]') {
               onToken(data);
             }
@@ -361,5 +365,29 @@ export const streamChat = (
 
   return controller;
 };
+
+// ============================================================
+// Profile Memory API
+// ============================================================
+
+// 获取 profile 文件列表
+export const listProfileFiles = () =>
+  api.get<{ success: boolean; data: string[] }>('/profile/files');
+
+// 读取 profile 文件内容
+export const getProfileFile = (filename: string) =>
+  api.get<{ success: boolean; data: { filename: string; content: string } }>(`/profile/${encodeURIComponent(filename)}`);
+
+// 保存 profile 文件
+export const saveProfileFile = (filename: string, content: string) =>
+  api.put(`/profile/${encodeURIComponent(filename)}`, { content });
+
+// 新建 profile 文件
+export const createProfileFile = (filename: string) =>
+  api.post(`/profile/${encodeURIComponent(filename)}`);
+
+// 删除 profile 文件
+export const deleteProfileFile = (filename: string) =>
+  api.delete(`/profile/${encodeURIComponent(filename)}`);
 
 export default api;

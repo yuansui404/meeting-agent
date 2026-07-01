@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { List, Tag, Typography, Modal, Button, message as antMsg, Space } from 'antd';
-import { FileTextOutlined, BookOutlined } from '@ant-design/icons';
-import { getMeeting, Meeting, toggleKnowledgeBase } from '../services/api';
+import { FileTextOutlined } from '@ant-design/icons';
+import { getMeeting, Meeting } from '../services/api';
 
 const { Text } = Typography;
 
@@ -88,27 +88,7 @@ const MeetingList: React.FC<Props> = ({ meetings, compact }) => {
             <Space style={{ marginBottom: 12 }} wrap>
               <Text strong>状态：</Text>
               <Tag color={statusConfig[detail.status]?.color}>{statusConfig[detail.status]?.text}</Tag>
-              {detail.knowledgeBase && <Tag color="purple" icon={<BookOutlined />}>知识库</Tag>}
             </Space>
-            <p><Text strong>文件大小：</Text>{formatSize(detail.fileSize)}</p>
-            <p><Text strong>创建时间：</Text>{formatDate(detail.createdAt)}</p>
-            <div style={{ marginBottom: 12 }}>
-              <Button
-                type={detail.knowledgeBase ? 'primary' : 'default'}
-                icon={<BookOutlined />}
-                onClick={async () => {
-                  try {
-                    const res = await toggleKnowledgeBase(detail.id);
-                    setDetail({ ...detail, knowledgeBase: res.data.knowledgeBase });
-                    antMsg.success(res.data.knowledgeBase ? '已加入知识库' : '已移出知识库');
-                  } catch {
-                    antMsg.error('操作失败');
-                  }
-                }}
-              >
-                {detail.knowledgeBase ? '已在知识库中' : '加入知识库'}
-              </Button>
-            </div>
             <div style={{ marginTop: 16 }}>
               <Text strong>转写内容：</Text>
               <div style={{

@@ -21,7 +21,6 @@ import {
   DownloadOutlined,
   EditOutlined,
   EyeOutlined,
-  ToolOutlined,
 } from '@ant-design/icons';
 import ReactMarkdown from 'react-markdown';
 import {
@@ -251,6 +250,9 @@ const DialoguePanel: React.FC<Props> = ({ activeDialogue, onDialogueUpdated, onS
           if (data.action === 'delta' && data.delta) {
             setToolCalls(prev => prev.map(tc => tc.id === data.id ? { ...tc, result: tc.result + data.delta } : tc));
           }
+        },
+        (text) => {
+          setStreaming({ content: text, active: false });
         }
       );
     } catch (err: any) {
@@ -378,7 +380,7 @@ const DialoguePanel: React.FC<Props> = ({ activeDialogue, onDialogueUpdated, onS
         // Try transcription first (audio/video STT results)
         const res = await getMeeting(file.id);
         const meeting = res.data as Meeting;
-        if (meeting.transcription) {
+        if (meeting.transcription && meeting.transcription !== '{}' && meeting.transcription.length > 10) {
           setPreviewContent(meeting.transcription);
         } else {
           // Try the dedicated text-content endpoint
@@ -398,12 +400,12 @@ const DialoguePanel: React.FC<Props> = ({ activeDialogue, onDialogueUpdated, onS
   }, []);
 
   return (
-    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', height: '100%', background: '#f5f5f5' }}>
+    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', height: '100%', background: 'var(--content-bg)' }}>
       {/* Model selector */}
       <div style={{
         padding: '6px 20px',
-        borderBottom: '1px solid #e8e8e8',
-        background: '#fff',
+        borderBottom: '1px solid var(--border-color)',
+        background: 'var(--app-bg)',
         display: 'flex',
         alignItems: 'center',
         gap: 8,
@@ -421,20 +423,13 @@ const DialoguePanel: React.FC<Props> = ({ activeDialogue, onDialogueUpdated, onS
             {messages.map((msg) => (
               <MessageBubble key={msg.id} message={msg} onFilePreview={handleFilePreview} />
             ))}
-            {streaming.active && !streaming.content && !thinkingText && toolCalls.length === 0 && (
-              <div style={{ display: 'flex', padding: '12px 24px', alignItems: 'center' }}>
-                <div style={{ maxWidth: 800, margin: '0 auto', width: '100%', paddingLeft: 52 }}>
-                  <Spin size="small" />
-                  <Text type="secondary" style={{ marginLeft: 8, fontSize: 13 }}>AI 思考中...</Text>
-                </div>
-              </div>
+            {(thinkingText || toolCalls.length > 0) && (
+              <ThoughtProcess
+                thinkingText={thinkingText}
+                toolCalls={toolCalls}
+                isStreaming={streaming.active}
+              />
             )}
-            {/* Thinking chain */}
-            {thinkingText && <ThinkingBlock content={thinkingText} />}
-            {/* Tool calls */}
-            {toolCalls.map(tc => (
-              <ToolCallBlock key={tc.id} toolCall={tc} />
-            ))}
             {streaming.active && streaming.content && (
               <StreamingBubble content={streaming.content} />
             )}
@@ -444,7 +439,7 @@ const DialoguePanel: React.FC<Props> = ({ activeDialogue, onDialogueUpdated, onS
           <div style={{
             display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
             height: '100%', padding: 40, position: 'relative', overflow: 'hidden',
-            background: 'linear-gradient(135deg, #f0f5ff 0%, #e6f7ff 50%, #f0f0ff 100%)',
+            background: 'var(--welcome-bg)',
           }}>
             {/* Decorative circles */}
             <div style={{
@@ -484,14 +479,14 @@ const DialoguePanel: React.FC<Props> = ({ activeDialogue, onDialogueUpdated, onS
                 <div key={i} style={{
                   display: 'flex', alignItems: 'center', gap: 10,
                   padding: '12px 16px', borderRadius: 10,
-                  background: 'rgba(255,255,255,0.7)', backdropFilter: 'blur(8px)',
-                  border: '1px solid rgba(255,255,255,0.8)',
+                  background: 'var(--welcome-card-bg)', backdropFilter: 'blur(8px)',
+                  border: '1px solid var(--welcome-card-border)',
                   minWidth: 140,
                 }}>
                   <div style={{
                     width: 36, height: 36, borderRadius: 10,
-                    background: '#f0f5ff', display: 'flex', alignItems: 'center', justifyContent: 'center',
-                    color: '#1677ff', fontSize: 18, flexShrink: 0,
+                    background: 'var(--feature-icon-bg)', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    color: 'var(--primary-color)', fontSize: 18, flexShrink: 0,
                   }}>{f.icon}</div>
                   <div>
                     <Text style={{ fontSize: 13, fontWeight: 600, display: 'block' }}>{f.title}</Text>
@@ -510,8 +505,8 @@ const DialoguePanel: React.FC<Props> = ({ activeDialogue, onDialogueUpdated, onS
                   size="large"
                   style={{
                     borderRadius: 10, padding: '18px 20px', height: 'auto',
-                    borderColor: 'rgba(0,0,0,0.06)',
-                    background: 'rgba(255,255,255,0.8)', backdropFilter: 'blur(8px)',
+                    borderColor: 'var(--border-color)',
+                    background: 'var(--welcome-card-bg)', backdropFilter: 'blur(8px)',
                     boxShadow: '0 1px 4px rgba(0,0,0,0.04)',
                     fontSize: 14, fontWeight: 500,
                   }}
@@ -533,14 +528,14 @@ const DialoguePanel: React.FC<Props> = ({ activeDialogue, onDialogueUpdated, onS
 
       {/* Input area */}
       <div style={{
-        borderTop: '1px solid #e8e8e8',
-        background: '#fff',
+        borderTop: '1px solid var(--border-color)',
+        background: 'var(--app-bg)',
         padding: '8px 24px 16px',
       }}>
         <div style={{ maxWidth: 800, margin: '0 auto' }}>
           {/* Integrated input container */}
           <div style={{
-            background: '#f5f5f5',
+            background: 'var(--content-bg)',
             borderRadius: 12,
             padding: pendingFileCards.length > 0 ? '8px 8px 4px 12px' : '4px 4px 4px 16px',
           }}>
@@ -553,14 +548,14 @@ const DialoguePanel: React.FC<Props> = ({ activeDialogue, onDialogueUpdated, onS
                     style={{
                       display: 'inline-flex', alignItems: 'center', gap: 6,
                       padding: '5px 6px 5px 10px', marginRight: 6, marginBottom: 4,
-                      borderRadius: 8, background: '#e8e8e8',
+                      borderRadius: 8, background: 'var(--card-bg)',
                       height: 36, maxWidth: 280,
                     }}
                   >
                     {card.uploading ? (
                       <Spin size="small" style={{ flexShrink: 0 }} />
                     ) : (
-                      <FileTextOutlined style={{ fontSize: 14, color: '#1677ff', flexShrink: 0 }} />
+                      <FileTextOutlined style={{ fontSize: 14, color: 'var(--primary-color)', flexShrink: 0 }} />
                     )}
                     <Text style={{ fontSize: 12, lineHeight: '20px' }} ellipsis={{ tooltip: card.name }}>
                       {card.name}
@@ -578,7 +573,7 @@ const DialoguePanel: React.FC<Props> = ({ activeDialogue, onDialogueUpdated, onS
                       style={{
                         width: 18, height: 18, minWidth: 18,
                         display: 'flex', alignItems: 'center', justifyContent: 'center',
-                        color: '#999', flexShrink: 0,
+                        color: 'var(--text-secondary)', flexShrink: 0,
                       }}
                     />
                   </div>
@@ -600,8 +595,9 @@ const DialoguePanel: React.FC<Props> = ({ activeDialogue, onDialogueUpdated, onS
                         border: '1px solid rgba(22,119,255,0.12)',
                       }}
                       onClick={() => {
-                        setInput(text + ' ->');
-                        setTimeout(() => textareaRef.current?.focus(), 0);
+                        if (activeDialogue) {
+                          sendMessage(text + ' ->', activeDialogue.id);
+                        }
                       }}
                     >
                       {text} -&gt;
@@ -689,7 +685,7 @@ const DialoguePanel: React.FC<Props> = ({ activeDialogue, onDialogueUpdated, onS
                 type="text"
                 icon={<UploadOutlined />}
                 size="small"
-                style={{ color: '#666', fontSize: 13 }}
+                style={{ color: 'var(--text-tertiary)', fontSize: 13 }}
                 loading={uploadingFiles.length > 0}
               >
                 上传文件
@@ -699,7 +695,7 @@ const DialoguePanel: React.FC<Props> = ({ activeDialogue, onDialogueUpdated, onS
               type="text"
               icon={<BulbOutlined />}
               size="small"
-              style={{ color: '#666', fontSize: 13 }}
+              style={{ color: 'var(--text-tertiary)', fontSize: 13 }}
             >
               思考
             </Button>
@@ -728,10 +724,10 @@ const DialoguePanel: React.FC<Props> = ({ activeDialogue, onDialogueUpdated, onS
             {/* Metadata */}
             <div style={{
               display: 'flex', alignItems: 'center', gap: 10,
-              padding: '12px 0', borderBottom: '1px solid #f0f0f0',
+              padding: '12px 0', borderBottom: '1px solid var(--sider-border)',
               marginBottom: 16,
             }}>
-              <FileTextOutlined style={{ fontSize: 24, color: '#1677ff' }} />
+              <FileTextOutlined style={{ fontSize: 24, color: 'var(--primary-color)' }} />
               <div>
                 <Text strong style={{ fontSize: 14 }}>{previewFile.title}</Text>
                 <Text type="secondary" style={{ fontSize: 12, display: 'block', marginTop: 2 }}>
@@ -751,7 +747,7 @@ const DialoguePanel: React.FC<Props> = ({ activeDialogue, onDialogueUpdated, onS
             ) : previewContent ? (
               /* Text content */
               <div style={{
-                background: '#fafafa',
+                background: 'var(--preview-bg)',
                 borderRadius: 8,
                 padding: 16,
                 maxHeight: 'calc(100vh - 220px)',
@@ -766,7 +762,7 @@ const DialoguePanel: React.FC<Props> = ({ activeDialogue, onDialogueUpdated, onS
             ) : (
               /* Empty state */
               <div style={{ textAlign: 'center', padding: 60 }}>
-                <FileTextOutlined style={{ fontSize: 48, color: '#d9d9d9' }} />
+                <FileTextOutlined style={{ fontSize: 48, color: 'var(--empty-icon)' }} />
                 <Text type="secondary" style={{ display: 'block', marginTop: 16 }}>
                   暂无内容预览
                 </Text>
@@ -809,7 +805,7 @@ const DialoguePanel: React.FC<Props> = ({ activeDialogue, onDialogueUpdated, onS
                     {item.type === 'vector' ? '语义匹配' : '关键词匹配'}
                   </Text>
                 </Text>
-                <div style={{ fontSize: 13, color: '#666', marginTop: 4, whiteSpace: 'pre-wrap' }}>
+                <div style={{ fontSize: 13, color: 'var(--text-tertiary)', marginTop: 4, whiteSpace: 'pre-wrap' }}>
                   {item.matchedContent
                     ? highlight(item.matchedContent.substring(0, 200), searchQuery)
                     : (item.transcription?.substring(0, 200) || '')}
@@ -853,16 +849,16 @@ const MessageBubble: React.FC<{ message: DisplayMessage; onFilePreview?: (file: 
         <div style={{
           width: 36, height: 36, borderRadius: 8,
           display: 'flex', alignItems: 'center', justifyContent: 'center',
-          flexShrink: 0, background: isUser ? '#1677ff' : '#f0f0f0',
-          color: isUser ? '#fff' : '#666', fontSize: 16,
+          flexShrink: 0, background: isUser ? 'var(--primary-color)' : 'var(--hover-bg)',
+          color: isUser ? '#fff' : 'var(--text-tertiary)', fontSize: 16,
         }}>
           {isUser ? <UserOutlined /> : <RobotOutlined />}
         </div>
         <div style={{
           padding: '10px 16px', borderRadius: 12,
-          background: isUser ? '#1677ff' : '#fff',
-          color: isUser ? '#fff' : '#333',
-          border: isUser ? 'none' : '1px solid #e8e8e8',
+          background: isUser ? 'var(--primary-color)' : 'var(--msg-agent-bg)',
+          color: isUser ? '#fff' : 'var(--text-color)',
+          border: isUser ? 'none' : '1px solid var(--border-color)',
           fontSize: 14, lineHeight: 1.6, wordBreak: 'break-word',
           maxWidth: 'calc(100% - 48px)',
         }}>
@@ -912,13 +908,13 @@ const StreamingBubble: React.FC<{ content: string }> = ({ content }) => {
         <div style={{
           width: 36, height: 36, borderRadius: 8,
           display: 'flex', alignItems: 'center', justifyContent: 'center',
-          flexShrink: 0, background: '#f0f0f0', color: '#666', fontSize: 16,
+          flexShrink: 0, background: 'var(--hover-bg)', color: 'var(--text-tertiary)', fontSize: 16,
         }}>
           <RobotOutlined />
         </div>
         <div style={{
           padding: '10px 16px', borderRadius: 12,
-          background: '#fff', border: '1px solid #e8e8e8',
+          background: 'var(--msg-agent-bg)', border: '1px solid var(--border-color)',
           fontSize: 14, lineHeight: 1.6, wordBreak: 'break-word',
           maxWidth: 'calc(100% - 48px)',
         }}>
@@ -963,25 +959,25 @@ const RewriteBubble: React.FC<{ message: DisplayMessage; rewriteResultId: number
           <div style={{
             width: 36, height: 36, borderRadius: 8,
             display: 'flex', alignItems: 'center', justifyContent: 'center',
-            flexShrink: 0, background: '#f0f0f0', color: '#666', fontSize: 16,
+            flexShrink: 0, background: 'var(--hover-bg)', color: 'var(--text-tertiary)', fontSize: 16,
           }}>
             <EditOutlined />
           </div>
           <div style={{ flex: 1 }}>
             {/* Header */}
             <div style={{
-              padding: '8px 16px', background: '#fff',
+              padding: '8px 16px', background: 'var(--app-bg)',
               borderRadius: '12px 12px 0 0',
-              border: '1px solid #e8e8e8', borderBottom: 'none',
-              fontSize: 13, fontWeight: 600, color: '#1677ff',
+              border: '1px solid var(--border-color)', borderBottom: 'none',
+              fontSize: 13, fontWeight: 600, color: 'var(--primary-color)',
             }}>
               <FileTextOutlined style={{ marginRight: 6 }} />
               改写结果
             </div>
             {/* Content */}
             <div style={{
-              background: '#fff',
-              border: '1px solid #e8e8e8', borderTop: 'none',
+              background: 'var(--app-bg)',
+              border: '1px solid var(--border-color)', borderTop: 'none',
               padding: '12px 16px',
               fontSize: 14, lineHeight: 1.7, whiteSpace: 'pre-wrap',
               wordBreak: 'break-word',
@@ -990,9 +986,9 @@ const RewriteBubble: React.FC<{ message: DisplayMessage; rewriteResultId: number
             </div>
             {/* Footer with preview, download, feedback */}
             <div style={{
-              padding: '8px 16px', background: '#fafafa',
+              padding: '8px 16px', background: 'var(--sider-bg)',
               borderRadius: '0 0 12px 12px',
-              border: '1px solid #e8e8e8', borderTop: 'none',
+              border: '1px solid var(--border-color)', borderTop: 'none',
               display: 'flex', justifyContent: 'space-between', alignItems: 'center',
             }}>
               <div style={{ display: 'flex', gap: 4 }}>
@@ -1024,7 +1020,7 @@ const RewriteBubble: React.FC<{ message: DisplayMessage; rewriteResultId: number
                   icon={<LikeOutlined />}
                   onClick={() => handleFeedback('like')}
                   style={{
-                    fontSize: 12, color: docFeedback === 'like' ? '#1677ff' : '#999',
+                    fontSize: 12, color: docFeedback === 'like' ? 'var(--primary-color)' : 'var(--text-secondary)',
                   }}
                 />
                 <Button
@@ -1033,7 +1029,7 @@ const RewriteBubble: React.FC<{ message: DisplayMessage; rewriteResultId: number
                   icon={<DislikeOutlined />}
                   onClick={() => handleFeedback('dislike')}
                   style={{
-                    fontSize: 12, color: docFeedback === 'dislike' ? '#ff4d4f' : '#999',
+                    fontSize: 12, color: docFeedback === 'dislike' ? '#ff4d4f' : 'var(--text-secondary)',
                   }}
                 />
               </div>
@@ -1071,95 +1067,143 @@ const RewriteBubble: React.FC<{ message: DisplayMessage; rewriteResultId: number
   );
 };
 
-// Thinking block — shows AI reasoning process in italic gray
-const ThinkingBlock: React.FC<{ content: string }> = ({ content }) => {
+// Thought process — Qwen-style unified collapsible block for thinking + tool calls
+const ThoughtProcess: React.FC<{
+  thinkingText: string;
+  toolCalls: ToolCallDisplay[];
+  isStreaming: boolean;
+}> = ({ thinkingText, toolCalls, isStreaming }) => {
+  const [expanded, setExpanded] = useState(true);
+
+  // Auto-collapse when streaming finishes
+  useEffect(() => {
+    if (!isStreaming) {
+      // Delay collapse slightly so user sees the final state
+      const timer = setTimeout(() => setExpanded(false), 500);
+      return () => clearTimeout(timer);
+    }
+  }, [isStreaming]);
+
+  const hasContent = thinkingText.length > 0 || toolCalls.length > 0;
+
+  if (!hasContent) return null;
+
   return (
     <div style={{ display: 'flex', padding: '8px 24px 2px 24px', justifyContent: 'flex-start' }}>
       <div style={{ maxWidth: '75%', marginLeft: 48, width: '100%' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
-          <BulbOutlined style={{ fontSize: 12, color: '#999' }} />
-          <Text type="secondary" style={{ fontSize: 11, fontWeight: 600 }}>思考过程</Text>
+        <div
+          onClick={() => setExpanded(!expanded)}
+          style={{
+            display: 'flex', alignItems: 'center', gap: 8,
+            padding: '6px 12px',
+            background: 'var(--toolcall-bg)',
+            borderRadius: 8,
+            border: '1px solid var(--border-color)',
+            cursor: 'pointer', userSelect: 'none',
+            fontSize: 12,
+            color: 'var(--text-secondary)',
+          }}
+        >
+          <BulbOutlined style={{ fontSize: 13, color: '#faad14' }} />
+          <span style={{ fontWeight: 500, flex: 1 }}>
+            {isStreaming ? 'AI 思考中...' : 'AI 的思考过程'}
+          </span>
+          {isStreaming && <Spin size="small" style={{ fontSize: 10 }} />}
+          {expanded ? '▾' : '▸'}
         </div>
-        <div style={{
-          padding: '8px 12px',
-          background: '#fafafa',
-          borderRadius: 8,
-          borderLeft: '3px solid #d9d9d9',
-          fontSize: 13,
-          lineHeight: 1.5,
-          color: '#888',
-          fontStyle: 'italic',
-          whiteSpace: 'pre-wrap',
-          wordBreak: 'break-word',
-        }}>
-          {content}
-          {content && !content.endsWith('\n') && (
-            <span style={{
-              display: 'inline-block', width: 6, height: 13,
-              background: '#bbb', marginLeft: 2,
-              animation: 'blink 1s step-end infinite',
-              verticalAlign: 'text-bottom',
-            }} />
-          )}
-        </div>
+        {expanded && (
+          <div style={{
+            marginTop: 4,
+            padding: '8px 12px',
+            background: 'var(--thinking-bg)',
+            borderRadius: 8,
+            border: '1px solid var(--border-color)',
+            fontSize: 13, lineHeight: 1.6,
+            color: 'var(--text-tertiary)',
+          }}>
+            {/* Tool calls */}
+            {toolCalls.map(tc => (
+              <ToolCallItem key={tc.id} toolCall={tc} />
+            ))}
+            {/* Thinking text */}
+            {thinkingText && (
+              <div style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                {thinkingText}
+              </div>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );
 };
 
-// Tool call block — shows tool name and collapsible result
-const ToolCallBlock: React.FC<{ toolCall: ToolCallDisplay }> = ({ toolCall }) => {
-  const [expanded, setExpanded] = useState(false);
-  const hasResult = toolCall.result.length > 0;
+// Tool call item inside the thought process block
+const TOOL_INFO: Record<string, { icon: string; label: string }> = {
+  search_knowledge_base: { icon: '📚', label: '搜索知识库' },
+  search_meeting_titles: { icon: '🔍', label: '搜索会议标题' },
+  memory_search: { icon: '🧠', label: '查询记忆' },
+  memory_get: { icon: '🧠', label: '读取记忆' },
+  read_profile: { icon: '👤', label: '读取用户信息' },
+  update_profile: { icon: '✏️', label: '更新用户信息' },
+  upload_to_knowledge_base: { icon: '📤', label: '上传到知识库' },
+  list_meetings: { icon: '📋', label: '获取会议列表' },
+};
+
+function summarizeResult(toolName: string, resultText: string): string {
+  if (!resultText) return '';
+  try {
+    const data = JSON.parse(resultText);
+    if (toolName === 'search_knowledge_base' && Array.isArray(data)) {
+      const names = data
+        .filter((r: any) => r.source)
+        .map((r: any) => r.source.replace(/\.(docx|doc|pdf|txt|md)$/i, ''))
+        .filter(Boolean);
+      if (names.length > 0) return `找到 ${names.length} 条相关记录：${names.join('、')}`;
+      if (data.length > 0) return `找到 ${data.length} 条结果`;
+    }
+    if (toolName === 'memory_search') {
+      return '已查询个人记忆数据';
+    }
+  } catch {}
+  return '';
+}
+
+const ToolCallItem: React.FC<{ toolCall: ToolCallDisplay }> = ({ toolCall }) => {
+  const info = TOOL_INFO[toolCall.name] || { icon: '🔧', label: toolCall.name };
+  const summary = summarizeResult(toolCall.name, toolCall.result);
+  const hasRawResult = toolCall.result.length > 0 && !summary;
+  const [showRaw, setShowRaw] = useState(false);
 
   return (
-    <div style={{ display: 'flex', padding: '2px 24px', justifyContent: 'flex-start' }}>
-      <div style={{ maxWidth: '75%', marginLeft: 48, width: '100%' }}>
+    <div style={{ marginBottom: 6, fontSize: 13, lineHeight: 1.6 }}>
+      <span>
+        {info.icon}
+        {' '}{info.label}
+        {' '}{toolCall.completed ? '✓' : '...'}
+      </span>
+      {summary && (
+        <div style={{ marginLeft: 20, color: 'var(--text-secondary)', fontSize: 12 }}>
+          {summary}
+        </div>
+      )}
+      {hasRawResult && (
         <div
-          onClick={() => hasResult && setExpanded(!expanded)}
-          style={{
-            display: 'inline-flex', alignItems: 'center', gap: 6,
-            padding: '5px 12px',
-            background: expanded ? '#f5f5f5' : '#fafafa',
-            borderRadius: 8,
-            border: '1px solid #e8e8e8',
-            cursor: hasResult ? 'pointer' : 'default',
-            fontSize: 12,
-            color: '#666',
-          }}
+          onClick={() => setShowRaw(!showRaw)}
+          style={{ marginLeft: 20, fontSize: 12, color: 'var(--text-secondary)', cursor: 'pointer' }}
         >
-          <ToolOutlined style={{ fontSize: 13, color: '#722ed1' }} />
-          <span style={{ fontWeight: 500 }}>{toolCall.name}</span>
-          {toolCall.completed ? (
-            <span style={{ color: '#52c41a', fontSize: 11 }}>✓ 完成</span>
-          ) : (
-            <Spin size="small" style={{ fontSize: 10 }} />
-          )}
-          {hasResult && (
-            <Text type="secondary" style={{ fontSize: 11, marginLeft: 4 }}>
-              {expanded ? '收起' : '展开'}
-            </Text>
+          {showRaw ? '▾ 查看返回数据' : '▸ 查看返回数据'}
+          {showRaw && (
+            <pre style={{
+              marginTop: 2, padding: 4, fontSize: 11, lineHeight: 1.4,
+              background: 'var(--toolcall-expanded-bg)', borderRadius: 4,
+              maxHeight: 120, overflow: 'auto', whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+            }}>
+              {toolCall.result}
+            </pre>
           )}
         </div>
-        {expanded && hasResult && (
-          <div style={{
-            marginTop: 4,
-            padding: '8px 12px',
-            background: '#f5f5f5',
-            borderRadius: 8,
-            border: '1px solid #e8e8e8',
-            fontSize: 12,
-            lineHeight: 1.5,
-            color: '#666',
-            whiteSpace: 'pre-wrap',
-            wordBreak: 'break-word',
-            maxHeight: 200,
-            overflow: 'auto',
-          }}>
-            {toolCall.result}
-          </div>
-        )}
-      </div>
+      )}
     </div>
   );
 };
@@ -1231,7 +1275,7 @@ const FileItem: React.FC<{ file: UploadedFile; onDelete: (id: number) => void }>
         <Text style={{ fontSize: 12, display: 'block' }} ellipsis={{ tooltip: file.title }}>
           {file.title}
         </Text>
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 11, color: '#999' }}>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 11, color: 'var(--text-secondary)' }}>
           <span>{formatFileSize(file.fileSize)}</span>
           <span style={{ color: getStatusColor(file.status) }}>{getStatusLabel(file.status)}</span>
         </div>

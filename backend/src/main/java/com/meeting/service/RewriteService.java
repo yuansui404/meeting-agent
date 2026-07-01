@@ -4,6 +4,10 @@ import com.meeting.entity.MeetingMinutes;
 import com.meeting.entity.RewriteResult;
 import com.meeting.repository.MeetingMinutesRepository;
 import com.meeting.repository.RewriteResultRepository;
+import io.agentscope.core.formatter.openai.dto.OpenAIMessage;
+import io.agentscope.core.formatter.openai.dto.OpenAIRequest;
+import io.agentscope.core.formatter.openai.dto.OpenAIResponse;
+import io.agentscope.core.model.OpenAIClient;
 import org.apache.poi.xwpf.usermodel.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -11,11 +15,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.*;
-import java.net.HttpURLConnection;
-import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -39,7 +39,7 @@ public class RewriteService {
 
     private final MeetingMinutesRepository meetingRepository;
     private final RewriteResultRepository rewriteResultRepository;
-    private final DialogueService dialogueService;
+    private final SessionService sessionService;
     private final StyleLearningService styleLearningService;
     private final ExecutorService executor = Executors.newCachedThreadPool();
 
@@ -47,7 +47,7 @@ public class RewriteService {
     private final String deepseekModel;
     private final String deepseekUrl;
     private final String uploadDir;
-    private final ObjectMapper objectMapper;
+    private final OpenAIClient openAIClient = new OpenAIClient();
 
     public RewriteService(@Value("${deepseek.api-key:}") String apiKey,
                           @Value("${deepseek.model:deepseek-chat}") String modelName,
@@ -55,18 +55,78 @@ public class RewriteService {
                           @Value("${file.upload-dir:/app/data/uploads}") String uploadDir,
                           MeetingMinutesRepository meetingRepository,
                           RewriteResultRepository rewriteResultRepository,
-                          DialogueService dialogueService,
-                          StyleLearningService styleLearningService,
-                          ObjectMapper objectMapper) {
+                          SessionService sessionService,
+                          StyleLearningService styleLearningService) {
         this.meetingRepository = meetingRepository;
         this.rewriteResultRepository = rewriteResultRepository;
-        this.dialogueService = dialogueService;
+        this.sessionService = sessionService;
         this.styleLearningService = styleLearningService;
         this.deepseekApiKey = apiKey;
         this.deepseekModel = modelName;
         this.deepseekUrl = apiUrl;
         this.uploadDir = uploadDir;
-        this.objectMapper = objectMapper;
+    }
+
+    /**
+     * Rewrite with pre-loaded source content (used by multi-intent flow).
+     * Skips file loading — uses the provided content directly.
+     */
+    public void streamRewriteWithContent(Long dialogueId, String sourceContent, SseEmitter emitter) {
+        executor.submit(() -> {
+            StringBuilder fullResponse = new StringBuilder();
+
+            try {
+                if (sourceContent == null || sourceContent.isBlank()) {
+                    emitter.send(SseEmitter.event().name("error").data("没有找到需要改写的内容"));
+                    emitter.complete();
+                    return;
+                }
+
+                String content = sourceContent;
+                if (content.length() > MAX_TOKENS) {
+                    content = content.substring(0, MAX_TOKENS) + "\n...（内容过长，已截断至 " + MAX_TOKENS + " 字符）";
+                }
+
+                // Get style examples
+                String styleExamples = styleLearningService.buildFullDocumentReferences(content, List.of(), null);
+                String prompt = buildRewritePrompt(content, styleExamples);
+
+                // Call DeepSeek (streaming)
+                streamDeepSeek(prompt, emitter, fullResponse);
+
+                // Proofreading
+                if (fullResponse.length() > 0) {
+                    try {
+                        String proofreadResult = proofreadContent(fullResponse.toString(), content);
+                        if (proofreadResult != null && !proofreadResult.equals(fullResponse.toString())) {
+                            log.info("Proofreading applied corrections for dialogue {} (with-content)", dialogueId);
+                            fullResponse = new StringBuilder(proofreadResult);
+                            try {
+                                emitter.send(SseEmitter.event().name("corrected").data(proofreadResult));
+                            } catch (IOException ignored) {}
+                        }
+                    } catch (Exception e) {
+                        log.warn("Proofreading failed for dialogue {} (with-content): {}", dialogueId, e.getMessage());
+                    }
+                }
+
+                // Save (no file IDs, no DOCX)
+                if (fullResponse.length() > 0) {
+                    RewriteResult result = saveRewriteResult(dialogueId, List.of(), List.of(), fullResponse.toString());
+                    String meta = "{\"type\":\"rewrite\",\"rewriteResultId\":" + result.getId() + "}";
+                    sessionService.addMessage(dialogueId, "assistant", fullResponse.toString(), "text", meta);
+                }
+
+                emitter.send(SseEmitter.event().name("done").data(""));
+                emitter.complete();
+            } catch (Exception e) {
+                log.error("Rewrite with content failed for dialogue {}: {}", dialogueId, e.getMessage(), e);
+                try {
+                    emitter.send(SseEmitter.event().name("error").data("改写失败: " + e.getMessage()));
+                } catch (IOException ignored) {}
+                emitter.completeWithError(e);
+            }
+        });
     }
 
     public void streamRewrite(Long dialogueId, List<Long> sourceFileIds, List<Long> manualReferenceIds, SseEmitter emitter) {
@@ -156,7 +216,7 @@ public class RewriteService {
 
                     // 6. Save assistant message with metadata
                     String meta = "{\"type\":\"rewrite\",\"rewriteResultId\":" + result.getId() + "}";
-                    dialogueService.addMessage(dialogueId, "assistant", fullResponse.toString(), "text", meta);
+                    sessionService.addMessage(dialogueId, "assistant", fullResponse.toString(), "text", meta);
                 }
 
                 emitter.send(SseEmitter.event().name("done").data(""));
@@ -168,7 +228,7 @@ public class RewriteService {
                     try {
                         RewriteResult result = saveRewriteResult(dialogueId, sourceFileIds, referenceIds, fullResponse.toString());
                         String meta = "{\"type\":\"rewrite\",\"rewriteResultId\":" + result.getId() + "}";
-                        dialogueService.addMessage(dialogueId, "assistant", fullResponse.toString(), "text", meta);
+                        sessionService.addMessage(dialogueId, "assistant", fullResponse.toString(), "text", meta);
                     } catch (Exception ignored) {}
                 }
                 try {
@@ -182,6 +242,10 @@ public class RewriteService {
     private String buildRewritePrompt(String sourceContent, String documentReferences) {
         StringBuilder sb = new StringBuilder();
         sb.append("请根据以下原始内容，润色改写为正式的会议纪要。\n\n");
+
+        sb.append("【重要】以下原始内容来自语音转文字（ASR），");
+        sb.append("可能存在同音字错误或专业术语识别错误（例如“G2网”应为标准ICT术语）。");
+        sb.append("请根据上下文和ICT行业知识进行甄别和更正，不要照搬原文中不规范的术语。\n\n");
 
         if (documentReferences != null && !documentReferences.isEmpty()) {
             sb.append(documentReferences).append("\n\n");
@@ -263,75 +327,47 @@ public class RewriteService {
         return dot >= 0 ? filename.substring(dot).toLowerCase() : "";
     }
 
+    /**
+     * Streaming DeepSeek API call using OpenAIClient. Sends SSE events to emitter.
+     */
     private String streamDeepSeek(String prompt, SseEmitter emitter, StringBuilder fullResponse) throws IOException {
-        Map<String, Object> requestBody = new LinkedHashMap<>();
-        requestBody.put("model", deepseekModel);
-        requestBody.put("stream", true);
+        try {
+            OpenAIRequest request = OpenAIRequest.builder()
+                    .model(deepseekModel)
+                    .messages(List.of(
+                            OpenAIMessage.builder().role("system")
+                                    .content("你是专业的会议纪要撰写助手，擅长润色和改写会议记录。").build(),
+                            OpenAIMessage.builder().role("user").content(prompt).build()
+                    ))
+                    .stream(true)
+                    .build();
 
-        List<Map<String, String>> messages = new ArrayList<>();
-        messages.add(Map.of("role", "system", "content", "你是专业的会议纪要撰写助手，擅长润色和改写会议记录。"));
-        messages.add(Map.of("role", "user", "content", prompt));
-        requestBody.put("messages", messages);
-
-        String jsonBody = objectToJson(requestBody);
-
-        HttpURLConnection conn = (HttpURLConnection) URI.create(deepseekUrl + "/chat/completions").toURL().openConnection();
-        conn.setRequestMethod("POST");
-        conn.setRequestProperty("Content-Type", "application/json");
-        conn.setRequestProperty("Authorization", "Bearer " + deepseekApiKey);
-        conn.setDoOutput(true);
-        conn.setConnectTimeout(30000);
-        conn.setReadTimeout(120000);
-
-        try (OutputStream os = conn.getOutputStream()) {
-            os.write(jsonBody.getBytes(StandardCharsets.UTF_8));
-        }
-
-        int responseCode = conn.getResponseCode();
-        if (responseCode != 200) {
-            String errorBody = new String(conn.getErrorStream().readAllBytes(), StandardCharsets.UTF_8);
-            throw new IOException("DeepSeek API error " + responseCode + ": " + errorBody);
-        }
-
-        boolean clientDisconnected = false;
-        try (BufferedReader reader = new BufferedReader(
-                new InputStreamReader(conn.getInputStream(), StandardCharsets.UTF_8))) {
-            String line;
-            while ((line = reader.readLine()) != null) {
-                if (line.startsWith("data: ")) {
-                    String data = line.substring(6).trim();
-                    if ("[DONE]".equals(data)) break;
-                    String delta = extractDelta(data);
-                    if (delta != null && !delta.isEmpty()) {
-                        fullResponse.append(delta);
-                        if (!clientDisconnected) {
-                            try {
-                                emitter.send(SseEmitter.event().data(delta));
-                            } catch (IOException ex) {
-                                clientDisconnected = true;
-                                log.info("Client disconnected during rewrite stream, continuing to accumulate");
+            final boolean[] clientDisconnected = {false};
+            openAIClient.stream(deepseekApiKey, deepseekUrl, request, null)
+                    .doOnNext(response -> {
+                        if (response.isChunk()) {
+                            OpenAIMessage delta = response.getFirstChoice().getDelta();
+                            if (delta != null) {
+                                String content = delta.getContentAsString();
+                                if (content != null && !content.isEmpty()) {
+                                    fullResponse.append(content);
+                                    if (!clientDisconnected[0]) {
+                                        try {
+                                            emitter.send(SseEmitter.event().data(content));
+                                        } catch (IOException ex) {
+                                            clientDisconnected[0] = true;
+                                            log.info("Client disconnected during rewrite stream, continuing to accumulate");
+                                        }
+                                    }
+                                }
                             }
                         }
-                    }
-                }
-            }
+                    })
+                    .blockLast();
+        } catch (Exception e) {
+            throw new IOException("DeepSeek streaming failed: " + e.getMessage());
         }
         return fullResponse.toString();
-    }
-
-    private String extractDelta(String jsonData) {
-        try {
-            int contentStart = jsonData.indexOf("\"content\":\"");
-            if (contentStart < 0) return "";
-            contentStart += 11;
-            int contentEnd = jsonData.indexOf("\"", contentStart);
-            if (contentEnd < 0) return "";
-            return jsonData.substring(contentStart, contentEnd)
-                    .replace("\\n", "\n").replace("\\t", "\t")
-                    .replace("\\\"", "\"").replace("\\\\", "\\");
-        } catch (Exception e) {
-            return "";
-        }
     }
 
     private RewriteResult saveRewriteResult(Long dialogueId, List<Long> sourceFileIds,
@@ -484,46 +520,6 @@ public class RewriteService {
         doc.createParagraph();
     }
 
-    private String objectToJson(Object obj) {
-        if (obj instanceof Map map) {
-            StringBuilder sb = new StringBuilder("{");
-            boolean first = true;
-            for (var entry : (Set<Map.Entry>) map.entrySet()) {
-                if (!first) sb.append(",");
-                first = false;
-                sb.append("\"").append(escapeJson(entry.getKey().toString())).append("\":");
-                sb.append(objectToJson(entry.getValue()));
-            }
-            sb.append("}");
-            return sb.toString();
-        } else if (obj instanceof List list) {
-            StringBuilder sb = new StringBuilder("[");
-            boolean first = true;
-            for (var item : list) {
-                if (!first) sb.append(",");
-                first = false;
-                sb.append(objectToJson(item));
-            }
-            sb.append("]");
-            return sb.toString();
-        } else if (obj instanceof String s) {
-            return "\"" + escapeJson(s) + "\"";
-        } else if (obj instanceof Boolean b) {
-            return b.toString();
-        } else if (obj instanceof Number n) {
-            return n.toString();
-        }
-        return "null";
-    }
-
-    private String escapeJson(String s) {
-        return s.replace("\\", "\\\\")
-                .replace("\"", "\\\"")
-                .replace("\n", "\\n")
-                .replace("\r", "\\r")
-                .replace("\t", "\\t");
-    }
-
     private String toJsonIdList(List<Long> ids) {
         return ids.stream().map(String::valueOf)
                 .collect(Collectors.joining(",", "[", "]"));
@@ -559,7 +555,7 @@ public class RewriteService {
     private String proofreadContent(String draftContent, String sourceContent) {
         // Read global 与会人.md
         String participantsContext = "";
-        Path participantsFile = Path.of(uploadDir, "knowledge-base", "与会人.md");
+        Path participantsFile = Path.of(uploadDir, "profile", "与会人.md");
         if (Files.exists(participantsFile)) {
             try {
                 participantsContext = Files.readString(participantsFile, StandardCharsets.UTF_8);
@@ -580,8 +576,11 @@ public class RewriteService {
         sb.append("逐一核对改写结果中出现的所有部门名、机构名是否与原始会议内容完全一致。\n");
         sb.append("特别注意：不要随意增减或改变部门名称（如\"运营管理部\"不要写成\"一营管理部\"或\"运营部\"）。\n");
         sb.append("如果改写结果改变了原始内容中的部门名称，必须更正回原始名称。\n\n");
-        sb.append("### 3. ICT 行业术语\n");
-        sb.append("确保使用的术语符合 ICT/通信行业规范（如\"TP价\"、\"代表处\"、\"BG\"、\"OP\"、\"毛利率\"、\"虚拟毛利\"等）。\n\n");
+        sb.append("### 3. ICT 行业术语（关键）\n");
+        sb.append("确保使用的术语符合 ICT/通信行业规范（如\"TP价\"、\"代表处\"、\"BG\"、\"OP\"、\"毛利率\"、\"虚拟毛利\"等）。\n");
+        sb.append("特别注意：原始内容来自语音转文字，可能存在专业术语识别错误。\n");
+        sb.append("如果你发现某个技术名词不是标准 ICT 术语（例如\"G2网\"应纠正为标准术语），\n");
+        sb.append("请根据上下文推断正确的术语并更正。不要照搬原文中不规范的术语。\n\n");
         sb.append("### 4. 逻辑一致性\n");
         sb.append("内容连贯、逻辑通顺、事实准确。\n\n");
         sb.append("### 5. 错别字与语法\n");
@@ -623,42 +622,20 @@ public class RewriteService {
      * Non-streaming DeepSeek API call with configurable max_tokens.
      */
     private String callDeepSeekNonStreaming(String systemMessage, String userMessage, int maxTokens) throws IOException {
-        Map<String, Object> requestBody = new LinkedHashMap<>();
-        requestBody.put("model", deepseekModel);
-        requestBody.put("stream", false);
-        requestBody.put("max_tokens", maxTokens);
-
-        List<Map<String, String>> messages = new ArrayList<>();
-        messages.add(Map.of("role", "system", "content", systemMessage));
-        messages.add(Map.of("role", "user", "content", userMessage));
-        requestBody.put("messages", messages);
-
-        String jsonBody = objectToJson(requestBody);
-
-        HttpURLConnection conn = (HttpURLConnection) URI.create(deepseekUrl + "/chat/completions").toURL().openConnection();
-        conn.setRequestMethod("POST");
-        conn.setRequestProperty("Content-Type", "application/json");
-        conn.setRequestProperty("Authorization", "Bearer " + deepseekApiKey);
-        conn.setDoOutput(true);
-        conn.setConnectTimeout(30000);
-        conn.setReadTimeout(120000);
-
-        try (OutputStream os = conn.getOutputStream()) {
-            os.write(jsonBody.getBytes(StandardCharsets.UTF_8));
-        }
-
-        int responseCode = conn.getResponseCode();
-        if (responseCode != 200) {
-            String errorBody = new String(conn.getErrorStream().readAllBytes(), StandardCharsets.UTF_8);
-            throw new IOException("DeepSeek API error " + responseCode + ": " + errorBody);
-        }
-
-        String responseBody = new String(conn.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
         try {
-            JsonNode root = objectMapper.readTree(responseBody);
-            return root.get("choices").get(0).get("message").get("content").asText();
+            OpenAIRequest request = OpenAIRequest.builder()
+                    .model(deepseekModel)
+                    .messages(List.of(
+                            OpenAIMessage.builder().role("system").content(systemMessage).build(),
+                            OpenAIMessage.builder().role("user").content(userMessage).build()
+                    ))
+                    .maxTokens(maxTokens)
+                    .build();
+
+            OpenAIResponse response = openAIClient.call(deepseekApiKey, deepseekUrl, request);
+            return response.getFirstChoice().getMessage().getContentAsString();
         } catch (Exception e) {
-            throw new IOException("Failed to parse DeepSeek response: " + e.getMessage());
+            throw new IOException("DeepSeek non-streaming call failed: " + e.getMessage());
         }
     }
 }

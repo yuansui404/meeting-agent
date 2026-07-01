@@ -3,6 +3,10 @@ package com.meeting.service;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.meeting.entity.MeetingMinutes;
 import com.meeting.repository.MeetingMinutesRepository;
+import io.agentscope.core.formatter.openai.dto.OpenAIMessage;
+import io.agentscope.core.formatter.openai.dto.OpenAIRequest;
+import io.agentscope.core.formatter.openai.dto.OpenAIResponse;
+import io.agentscope.core.model.OpenAIClient;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -38,6 +42,8 @@ public class TranscriptionService {
 
     @Value("${deepseek.url:https://api.deepseek.com}")
     private String deepseekApiUrl;
+
+    private final OpenAIClient openAIClient = new OpenAIClient();
 
     public TranscriptionService(MeetingMinutesRepository meetingRepository,
                                 FileProcessingService fileProcessingService,
@@ -212,50 +218,21 @@ public class TranscriptionService {
                 """.formatted(text);
 
         try {
-            Map<String, Object> requestBody = new LinkedHashMap<>();
-            requestBody.put("model", "deepseek-chat");
-            requestBody.put("messages", List.of(
-                    Map.of("role", "system", "content", "你是一个严谨的语音转写文本校对专家。"),
-                    Map.of("role", "user", "content", checkPrompt)
-            ));
-            requestBody.put("temperature", 0.1);
-            requestBody.put("max_tokens", 8192);
+            OpenAIRequest request = OpenAIRequest.builder()
+                    .model("deepseek-chat")
+                    .messages(List.of(
+                            OpenAIMessage.builder().role("system")
+                                    .content("你是一个严谨的语音转写文本校对专家。").build(),
+                            OpenAIMessage.builder().role("user").content(checkPrompt).build()
+                    ))
+                    .temperature(0.1)
+                    .maxTokens(8192)
+                    .build();
 
-            ObjectMapper mapper = new ObjectMapper();
-            String jsonBody = mapper.writeValueAsString(requestBody);
+            OpenAIResponse response = openAIClient.call(deepseekApiKey, deepseekApiUrl, request);
+            String corrected = response.getFirstChoice().getMessage().getContentAsString();
 
-            HttpURLConnection conn = (HttpURLConnection) URI.create(deepseekApiUrl + "/chat/completions").toURL().openConnection();
-            conn.setRequestMethod("POST");
-            conn.setRequestProperty("Content-Type", "application/json");
-            conn.setRequestProperty("Authorization", "Bearer " + deepseekApiKey);
-            conn.setDoOutput(true);
-            conn.setConnectTimeout(10000);
-            conn.setReadTimeout(60000);
-
-            try (OutputStream os = conn.getOutputStream()) {
-                os.write(jsonBody.getBytes(StandardCharsets.UTF_8));
-            }
-
-            int responseCode = conn.getResponseCode();
-            if (responseCode != 200) return text;
-
-            String responseBody = new String(conn.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
-
-            // Parse JSON response
-            int contentStart = responseBody.indexOf("\"content\":\"");
-            if (contentStart < 0) return text;
-            contentStart += 11;
-            int contentEnd = responseBody.indexOf("\"", contentStart);
-            if (contentEnd < 0) return text;
-
-            String corrected = responseBody.substring(contentStart, contentEnd)
-                    .replace("\\n", "\n")
-                    .replace("\\\"", "\"")
-                    .replace("\\\\", "\\")
-                    .replace("\\t", "\t")
-                    .replace("\\r", "\r");
-
-            if (corrected.contains("无需修改") || corrected.contains("无需修正")) {
+            if (corrected == null || corrected.contains("无需修改") || corrected.contains("无需修正")) {
                 return text;
             }
 
@@ -263,7 +240,7 @@ public class TranscriptionService {
                     text.length(), corrected.length());
             return corrected;
         } catch (Exception e) {
-            log.warn("Transcription self-check HTTP call failed: {}", e.getMessage());
+            log.warn("Transcription self-check OpenAIClient call failed: {}", e.getMessage());
             return text;
         }
     }

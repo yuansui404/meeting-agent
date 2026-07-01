@@ -1,6 +1,5 @@
 package com.meeting.agent;
 
-import com.meeting.service.DialogueService;
 import com.meeting.service.SearchService;
 import org.springframework.stereotype.Component;
 
@@ -15,17 +14,12 @@ import java.util.Map;
 public class SearchAgent {
 
     private final SearchService searchService;
-    private final DialogueService dialogueService;
 
-    public SearchAgent(SearchService searchService, DialogueService dialogueService) {
+    public SearchAgent(SearchService searchService) {
         this.searchService = searchService;
-        this.dialogueService = dialogueService;
     }
 
-    public List<Map<String, Object>> search(String query, Long dialogueId) {
-        if (dialogueId != null) {
-            dialogueService.addMessage(dialogueId, "user", query, "search");
-        }
+    public List<Map<String, Object>> search(String query) {
         return searchService.search(query, 20);
     }
 }

@@ -1,9 +1,17 @@
 server:
   port: 8080
 
+# API 配置由 Nacos 管理（http://localhost:8848/nacos）
+# 修改后在 Nacos 发布配置后，执行 POST /actuator/refresh 热加载
+management:
+  endpoints:
+    web:
+      exposure:
+        include: refresh,health
+
 spring:
-  config:
-    import: optional:nacos:meeting-agent.yaml
+  application:
+    name: meeting-agent
   cloud:
     nacos:
       config:
@@ -11,6 +19,8 @@ spring:
         group: DEFAULT_GROUP
         file-extension: yaml
         refresh-enabled: true
+  config:
+    import: optional:nacos:meeting-agent.yaml
   datasource:
     url: jdbc:postgresql://localhost:5432/meeting_agent
     username: user
@@ -24,26 +34,7 @@ spring:
       hibernate:
         dialect: org.hibernate.dialect.PostgreSQLDialect
 
-embedding:
-  provider: ${EMBEDDING_PROVIDER:simple}
-  api-key: ${EMBEDDING_API_KEY:}
-  model: ${EMBEDDING_MODEL:text-embedding-ada-002}
-  url: ${EMBEDDING_URL:https://api.openai.com/v1/embeddings}
-
-deepseek:
-  api-key: ${DEEPSEEK_API_KEY:}
-  model: deepseek-chat
-  url: https://api.deepseek.com
-
-tavily:
-  api-key: ${TAVILY_API_KEY:}
-
-# 智谱多模态模型（用于图片分析）
-zhipu:
-  api-key: ${ZHIPU_API_KEY:bd986bb8c1da40ce9d58c3e0c069020c.Be4WaBn3AoAwoVg0}
-  model: glm-4v
-  url: https://open.bigmodel.cn/api/paas/v4
-
+# API 配置由 Nacos 管理（http://localhost:8848/nacos）
 rag:
   chunk:
     strategy: structural
@@ -71,10 +62,6 @@ rag:
     summary-trigger: 3000
     max-visible-messages: 10
     max-context-tokens: 32000
-
-mimo:
-  api-key: ${MIMO_API_KEY:}
-  url: https://token-plan-cn.xiaomimimo.com
 
 file:
   upload-dir: ${user.home}/meeting-agent/uploads

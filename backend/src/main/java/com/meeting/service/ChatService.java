@@ -1,17 +1,26 @@
 package com.meeting.service;
 
 import com.meeting.agent.ListMeetingsTool;
+import com.meeting.agent.ReadProfileTool;
+import com.meeting.agent.SearchDocumentsTool;
 import com.meeting.agent.SearchKnowledgeBaseTool;
 import com.meeting.agent.SearchMeetingTitlesTool;
+import com.meeting.agent.UpdateProfileTool;
 import com.meeting.common.DocumentTextExtractor;
 import com.meeting.entity.MeetingMinutes;
-import com.meeting.repository.DialogueRepository;
 import com.meeting.repository.MeetingMinutesRepository;
+import com.meeting.state.PgAgentStateStore;
 import io.agentscope.core.agent.RuntimeContext;
+import io.agentscope.core.state.AgentState;
 import io.agentscope.core.event.*;
 import io.agentscope.core.formatter.openai.DeepSeekFormatter;
+import io.agentscope.core.formatter.openai.dto.OpenAIMessage;
+import io.agentscope.core.formatter.openai.dto.OpenAIRequest;
+import io.agentscope.core.formatter.openai.dto.OpenAIResponse;
 import io.agentscope.core.message.*;
+import io.agentscope.core.model.GenerateOptions;
 import io.agentscope.core.model.OpenAIChatModel;
+import io.agentscope.core.model.OpenAIClient;
 import io.agentscope.core.tool.Toolkit;
 import io.agentscope.core.tool.mcp.McpClientBuilder;
 import io.agentscope.core.tool.mcp.McpClientWrapper;
@@ -31,9 +40,9 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.*;
 import java.time.Duration;
+import java.util.stream.Collectors;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-import java.util.stream.Collectors;
 
 @Service
 @RefreshScope
@@ -44,16 +53,50 @@ public class ChatService {
             你是会议纪要智能助手，具备以下能力：
 
             ## 工具
-            - search_knowledge_base — 搜索知识库中的会议内容，获取具体讨论、决定、与会人等信息
+            - search_knowledge_base — 搜索知识库中的会议记录内容（转录文本），获取具体讨论、决定、与会人等信息
+            - search_documents — 搜索知识库中的文档/文件内容（语义+全文融合搜索），返回证据等级(evidenceLevel)和引文信息。当需要查阅文档内容时使用。支持可选参数 timeRange 限定时间范围
             - list_meetings — 浏览会议记录列表，查看有哪些会议
             - search_meeting_titles — 通过标题关键词搜索特定会议
             - tavily_search — 联网搜索实时信息（如最新政策、技术文档、外部资料等）
-            - upload_to_knowledge_base — 将对话中的文件上传到知识库
+            - upload_to_knowledge_base — [仅用户明确要求时使用] 将对话中的文件保存到知识库
+            - read_profile — 读取用户画像（偏好、习惯、个人信息）
+            - update_profile — 更新用户画像，让 agent 记住用户信息
+
+            ## 关于 upload_to_knowledge_base 的严格规则
+            只有在用户明确说出以下词语时才调用 upload_to_knowledge_base：
+            - "保存到知识库"
+            - "上传到知识库"
+            - "加入知识库"
+
+            以下情况严禁调用 upload_to_knowledge_base（即使你觉得需要保存）：
+            - 用户要求"总结"、"详细总结"、"简单摘要"、"提取要点"
+            - 用户要求"改写"、"润色"
+            - 用户要求"分析"、"查看"、"查阅"文件内容
+            - 用户只问"这是什么"、"是什么内容"
+            如果不确定，就不要调用。
+
+            ## 子 agent
+            你可以使用 agentSpawn(agent_id, task, timeout) 创建子 agent 来委派独立任务：
+
+            - rewrite_agent — 改写成正式会议纪要（仅改写任务使用）
+            - general-purpose — 通用子 agent，用于任何可完全委派的独立任务
+              适用场景：需要大量计算、需要独立上下文、可以并行处理的任务
+              使用方法：agentSpawn("general-purpose", "具体的任务描述...", 120)
 
             ## 要求
             - 回答简洁准确
             - 引用知识库内容时注明来源会议名称
             - 联网搜索结果需说明信息来源
+            - search_documents 返回的 evidenceLevel 标识检索结果质量：
+              SUFFICIENT=充分, PARTIAL=部分, WEAK=弱, NONE=无结果
+              如果 evidenceLevel 为 WEAK 或 NONE，应尝试改写搜索关键词后再次检索
+            - 对于复杂问题，可以组合使用 search_documents 和 search_knowledge_base
+              分别搜索文档内容和会议转录，获得更全面的信息
+            - 对于需要多步推理的复杂查询，可以逐步执行：
+              先搜索会议信息 → 分析结果 → 再搜索具体内容 → 综合回答
+            - 不确定时可以使用 search_meeting_titles 先确定有哪些相关会议，
+              再用 search_documents/search_knowledge_base 获取具体内容
+            - 多步检索时，每步使用 refine 后的查询词，避免简单重复
             """;
     private static final long MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB limit for file reading
 
@@ -62,15 +105,19 @@ public class ChatService {
     private static final Set<String> DOC_FORMATS = Set.of(".pdf", ".doc", ".docx");
 
     private final HarnessAgent agent;
-    private final DialogueService dialogueService;
-    private final DialogueRepository dialogueRepository;
+    private final PgAgentStateStore pgAgentStateStore;
     private final UploadToKnowledgeBaseTool uploadToKnowledgeBaseTool;
     private final SearchKnowledgeBaseTool searchKnowledgeBaseTool;
+    private final SearchDocumentsTool searchDocumentsTool;
     private final ListMeetingsTool listMeetingsTool;
     private final SearchMeetingTitlesTool searchMeetingTitlesTool;
+    private final ReadProfileTool readProfileTool;
+    private final UpdateProfileTool updateProfileTool;
+    private final ProfileService profileService;
     private final MeetingMinutesRepository meetingRepository;
     private final VectorizationService vectorizationService;
     private final ExecutorService executor = Executors.newCachedThreadPool();
+    private final OpenAIClient openAIClient = new OpenAIClient();
 
     private final String deepseekApiKey;
     private final String deepseekApiUrl;
@@ -85,22 +132,28 @@ public class ChatService {
                        @Value("${zhipu.model:glm-4v}") String zhipuModel,
                        @Value("${zhipu.url:https://open.bigmodel.cn/api/paas/v4}") String zhipuUrl,
                        @Value("${tavily.api-key:}") String tavilyApiKey,
-                       DialogueService dialogueService,
-                       DialogueRepository dialogueRepository,
+                       PgAgentStateStore pgAgentStateStore,
                        MeetingMinutesRepository meetingRepository,
                        VectorizationService vectorizationService,
+                       ProfileService profileService,
                        UploadToKnowledgeBaseTool uploadToKnowledgeBaseTool,
                        SearchKnowledgeBaseTool searchKnowledgeBaseTool,
+                       SearchDocumentsTool searchDocumentsTool,
                        ListMeetingsTool listMeetingsTool,
-                       SearchMeetingTitlesTool searchMeetingTitlesTool) {
-        this.dialogueService = dialogueService;
-        this.dialogueRepository = dialogueRepository;
+                       SearchMeetingTitlesTool searchMeetingTitlesTool,
+                       ReadProfileTool readProfileTool,
+                       UpdateProfileTool updateProfileTool) {
+        this.pgAgentStateStore = pgAgentStateStore;
         this.meetingRepository = meetingRepository;
         this.vectorizationService = vectorizationService;
+        this.profileService = profileService;
         this.uploadToKnowledgeBaseTool = uploadToKnowledgeBaseTool;
         this.searchKnowledgeBaseTool = searchKnowledgeBaseTool;
+        this.searchDocumentsTool = searchDocumentsTool;
         this.listMeetingsTool = listMeetingsTool;
         this.searchMeetingTitlesTool = searchMeetingTitlesTool;
+        this.readProfileTool = readProfileTool;
+        this.updateProfileTool = updateProfileTool;
         this.deepseekApiKey = apiKey;
         this.deepseekApiUrl = apiUrl;
         this.zhipuApiKey = zhipuApiKey;
@@ -118,8 +171,11 @@ public class ChatService {
         Toolkit toolkit = new Toolkit();
         toolkit.registerAgentTool(uploadToKnowledgeBaseTool);
         toolkit.registerAgentTool(searchKnowledgeBaseTool);
+        toolkit.registerAgentTool(searchDocumentsTool);
         toolkit.registerAgentTool(listMeetingsTool);
         toolkit.registerAgentTool(searchMeetingTitlesTool);
+        toolkit.registerAgentTool(readProfileTool);
+        toolkit.registerAgentTool(updateProfileTool);
 
         // Tavily MCP client (with graceful degradation)
         if (tavilyApiKey != null && !tavilyApiKey.isBlank()) {
@@ -139,10 +195,12 @@ public class ChatService {
 
         this.agent = HarnessAgent.builder()
                 .name("MeetingAssistant")
+                .description("会议纪要智能助手，支持子 agent 委派")
                 .sysPrompt(SYSTEM_PROMPT)
                 .model(model)
                 .toolkit(toolkit)
-                .disableMemoryHooks()
+                .maxIters(8)
+                .stateStore(pgAgentStateStore)
                 .disableFilesystemTools()
                 .build();
     }
@@ -150,18 +208,18 @@ public class ChatService {
     public void streamChat(Long dialogueId, String userMessage, String metadata, SseEmitter emitter) {
         executor.submit(() -> {
             try {
-                // 1. Save user message to DB with file metadata
-                dialogueService.addMessage(dialogueId, "user", userMessage, "text", metadata);
+                // Parse fileIds from metadata to know which files are "new" with this message
+                List<Long> messageFileIds = parseFileIdsFromMetadata(metadata);
 
-                // 2. Build file blocks (text + images)
-                List<ContentBlock> fileBlocks = buildFileBlocks(dialogueId);
+                // 2. Build file blocks (all dialogue files for context, marked new vs old)
+                List<ContentBlock> fileBlocks = buildFileBlocks(dialogueId, messageFileIds);
                 boolean hasImages = fileBlocks.stream().anyMatch(b -> b instanceof ImageBlock);
 
                 // 3. ZhiPu only for multimodal (images), DeepSeek for all text
                 if (hasImages) {
-                    streamChatWithZhipu(dialogueId, userMessage, fileBlocks, emitter);
+                    streamChatWithZhipu(dialogueId, userMessage, fileBlocks, messageFileIds, emitter);
                 } else {
-                    streamChatWithDeepSeek(dialogueId, userMessage, fileBlocks, emitter);
+                    streamChatWithDeepSeek(dialogueId, userMessage, fileBlocks, messageFileIds, emitter);
                 }
             } catch (Exception e) {
                 handleStreamError(emitter, e);
@@ -171,19 +229,24 @@ public class ChatService {
 
     private void streamChatWithDeepSeek(Long dialogueId, String userMessage,
                                         List<ContentBlock> fileBlocks,
+                                        List<Long> messageFileIds,
                                         SseEmitter emitter) {
         StringBuilder fullResponse = new StringBuilder();
         try {
+            String profileContext = profileService.buildProfileContext();
+            String messageWithProfile = profileContext.isEmpty() ? userMessage
+                    : profileContext + "\n\n" + userMessage;
+
             UserMessage msg;
-            String fileContext = buildFileTextContext(dialogueId);
+            String fileContext = buildFileTextContext(dialogueId, messageFileIds);
             if (!fileBlocks.isEmpty()) {
-                String enriched = buildEnrichedMessage(null, userMessage);
+                String enriched = buildEnrichedMessage(fileContext, messageWithProfile);
                 List<ContentBlock> blocks = new ArrayList<>();
                 blocks.add(TextBlock.builder().text(enriched).build());
                 blocks.addAll(fileBlocks);
                 msg = new UserMessage(blocks);
             } else {
-                String enriched = buildEnrichedMessage(fileContext, userMessage);
+                String enriched = buildEnrichedMessage(fileContext, messageWithProfile);
                 msg = new UserMessage(enriched);
             }
 
@@ -205,8 +268,13 @@ public class ChatService {
                                     fullResponse.append(delta);
                                     emitter.send(SseEmitter.event().data(delta));
                                 } else if (event instanceof ThinkingBlockDeltaEvent e) {
-                                    emitter.send(SseEmitter.event().name("thinking")
-                                            .data(e.getDelta()));
+                                    String delta = e.getDelta();
+                                    if (delta != null) {
+                                        delta = delta.replaceAll("(?i)exit\\s*code:?\\s*\\d+", "").trim();
+                                        if (!delta.isEmpty()) {
+                                            emitter.send(SseEmitter.event().name("thinking").data(delta));
+                                        }
+                                    }
                                 } else if (event instanceof ToolCallStartEvent e) {
                                     emitter.send(SseEmitter.event().name("tool_call")
                                             .data(objectToJson(Map.of(
@@ -251,25 +319,26 @@ public class ChatService {
                     })
                     .blockLast();
 
-            // Save assistant message BEFORE sending done event,
-            // so the frontend's loadMessages() call on done can see it
-            String responseText = fullResponse.toString();
-            if (!responseText.isEmpty()) {
-                try {
-                    dialogueService.addMessage(dialogueId, "assistant", responseText, "text");
-                } catch (Exception e) {
-                    log.warn("Failed to save assistant message for dialogue {}: {}", dialogueId, e.getMessage());
-                }
-            }
-
             // Self-check: validate response when tools were invoked
+            String responseText = fullResponse.toString();
             if (invokedTools[0] && !clientDisconnected[0] && !responseText.isEmpty()) {
                 try {
                     String corrected = performSelfCheck(userMessage, responseText);
                     if (corrected != null && !corrected.equals(responseText)) {
                         emitter.send(SseEmitter.event().name("corrected").data(corrected));
-                        // Update the saved message
-                        dialogueService.addMessage(dialogueId, "assistant", corrected, "text");
+                        // Update the agent state with corrected content
+                        AgentState state = pgAgentStateStore.get("default", "dialogue-" + dialogueId,
+                                "agent_state", AgentState.class).orElse(null);
+                        if (state != null) {
+                            var context = state.contextMutable();
+                            for (int i = context.size() - 1; i >= 0; i--) {
+                                if ("assistant".equals(context.get(i).getRole())) {
+                                    context.set(i, new AssistantMessage(corrected));
+                                    break;
+                                }
+                            }
+                            pgAgentStateStore.save("default", "dialogue-" + dialogueId, "agent_state", state);
+                        }
                         log.info("Self-check corrected response for dialogue {}", dialogueId);
                     }
                 } catch (Exception e) {
@@ -282,34 +351,28 @@ public class ChatService {
                 emitter.complete();
             }
         } catch (Exception e) {
-            // On error, try to save partial response
-            if (fullResponse.length() > 0) {
-                try {
-                    dialogueService.addMessage(dialogueId, "assistant", fullResponse.toString(), "text");
-                } catch (Exception ignored) {}
-            }
             handleStreamError(emitter, e);
         }
     }
 
     private void streamChatWithZhipu(Long dialogueId, String userMessage,
                                      List<ContentBlock> fileBlocks,
+                                     List<Long> messageFileIds,
                                      SseEmitter emitter) {
         StringBuilder fullResponse = new StringBuilder();
         try {
-            List<Map<String, Object>> messages = new ArrayList<>();
+            String profileContext = profileService.buildProfileContext();
+            String messageWithProfile = profileContext.isEmpty() ? userMessage
+                    : profileContext + "\n\n" + userMessage;
 
-            String fileContext = buildFileTextContext(dialogueId);
-            String enriched = buildEnrichedMessage(fileContext, userMessage);
+            String fileContext = buildFileTextContext(dialogueId, messageFileIds);
+            String enriched = buildEnrichedMessage(fileContext, messageWithProfile);
 
-            List<Map<String, Object>> contentParts = new ArrayList<>();
+            // Build multimodal content parts
+            List<Object> contentParts = new ArrayList<>();
             contentParts.add(Map.of("type", "text", "text", enriched));
-
-            // Add images only (text file content is already in enriched)
-            boolean hasImages = false;
             for (ContentBlock block : fileBlocks) {
                 if (block instanceof ImageBlock ib) {
-                    hasImages = true;
                     Source source = ib.getSource();
                     if (source instanceof Base64Source b64) {
                         contentParts.add(Map.of(
@@ -321,109 +384,57 @@ public class ChatService {
                 }
             }
 
-            messages.add(Map.of("role", "system", "content", SYSTEM_PROMPT));
-            messages.add(Map.of("role", "user", "content", contentParts));
+            // Build messages using AgentScope DTOs
+            OpenAIMessage sysMsg = new OpenAIMessage();
+            sysMsg.setRole("system");
+            sysMsg.setContent(SYSTEM_PROMPT);
 
-            // Build the request body
-            Map<String, Object> requestBody = new LinkedHashMap<>();
-            requestBody.put("model", zhipuModel);
-            requestBody.put("messages", messages);
-            requestBody.put("stream", true);
+            OpenAIMessage userMsg = new OpenAIMessage();
+            userMsg.setRole("user");
+            userMsg.setContent(contentParts);
 
-            String jsonBody = objectToJson(requestBody);
+            OpenAIRequest request = OpenAIRequest.builder()
+                    .model(zhipuModel)
+                    .messages(List.of(sysMsg, userMsg))
+                    .stream(true)
+                    .build();
 
-            // Make HTTP request to ZhiPu API
-            HttpURLConnection conn = (HttpURLConnection) URI.create(zhipuUrl + "/chat/completions").toURL().openConnection();
-            conn.setRequestMethod("POST");
-            conn.setRequestProperty("Content-Type", "application/json");
-            conn.setRequestProperty("Authorization", "Bearer " + zhipuApiKey);
-            conn.setDoOutput(true);
-            conn.setConnectTimeout(30000);
-            conn.setReadTimeout(120000);
-
-            try (OutputStream os = conn.getOutputStream()) {
-                os.write(jsonBody.getBytes(StandardCharsets.UTF_8));
-            }
-
-            int responseCode = conn.getResponseCode();
-            if (responseCode != 200) {
-                String errorBody = new String(conn.getErrorStream().readAllBytes(), StandardCharsets.UTF_8);
-                try {
-                    emitter.send(SseEmitter.event().name("error")
-                            .data("智谱API请求失败: HTTP " + responseCode + " - " + errorBody));
-                } catch (IOException ignored) {}
-                emitter.complete();
-                return;
-            }
-
-            // Stream the SSE response, continue accumulating even if client disconnects
-            boolean clientDisconnected = false;
-            try (BufferedReader reader = new BufferedReader(
-                    new InputStreamReader(conn.getInputStream(), StandardCharsets.UTF_8))) {
-                String line;
-                while ((line = reader.readLine()) != null) {
-                    if (line.startsWith("data: ")) {
-                        String data = line.substring(6).trim();
-                        if ("[DONE]".equals(data)) break;
-                        // Parse delta content from the JSON
-                        String delta = extractZhipuDelta(data);
-                        if (delta != null && !delta.isEmpty()) {
-                            fullResponse.append(delta);
-                            if (!clientDisconnected) {
-                                try {
-                                    emitter.send(SseEmitter.event().data(delta));
-                                } catch (IOException ex) {
-                                    clientDisconnected = true;
-                                    log.info("Client disconnected during ZhiPu stream, continuing to accumulate response");
+            // Stream via OpenAIClient — ZhiPu uses /chat/completions (no /v1 prefix),
+            // so override the default endpoint to empty and pass the full URL as baseUrl
+            GenerateOptions opts = GenerateOptions.builder().endpointPath("").build();
+            boolean[] clientDisconnected = {false};
+            openAIClient.stream(zhipuApiKey, zhipuUrl + "/chat/completions", request, opts)
+                    .doOnNext(response -> {
+                        if (response.isChunk()) {
+                            OpenAIMessage delta = response.getFirstChoice().getDelta();
+                            if (delta != null) {
+                                String content = delta.getContentAsString();
+                                if (content != null && !content.isEmpty()) {
+                                    fullResponse.append(content);
+                                    if (!clientDisconnected[0]) {
+                                        try {
+                                            emitter.send(SseEmitter.event().data(content));
+                                        } catch (IOException ex) {
+                                            clientDisconnected[0] = true;
+                                            log.info("Client disconnected during ZhiPu stream, continuing to accumulate response");
+                                        }
+                                    }
                                 }
                             }
                         }
-                    }
-                }
-            }
+                    })
+                    .blockLast();
 
-            // Save assistant message BEFORE sending done event
-            if (fullResponse.length() > 0) {
-                try {
-                    dialogueService.addMessage(dialogueId, "assistant", fullResponse.toString(), "text");
-                } catch (Exception e) {
-                    log.warn("Failed to save assistant message for dialogue {}: {}", dialogueId, e.getMessage());
-                }
-            }
-
-            if (!clientDisconnected) {
+            if (!clientDisconnected[0]) {
                 emitter.send(SseEmitter.event().name("done").data(""));
                 emitter.complete();
             }
 
         } catch (Exception e) {
-            // On error, try to save partial response
-            if (fullResponse.length() > 0) {
-                try {
-                    dialogueService.addMessage(dialogueId, "assistant", fullResponse.toString(), "text");
-                } catch (Exception ignored) {}
-            }
             try {
                 emitter.send(SseEmitter.event().name("error").data("智谱调用失败: " + e.getMessage()));
             } catch (IOException ignored) {}
             emitter.completeWithError(e);
-        }
-    }
-
-    private String extractZhipuDelta(String jsonData) {
-        // Parse ZhiPu/OpenAI SSE delta: {"choices":[{"delta":{"content":"..."}}]}
-        try {
-            int contentStart = jsonData.indexOf("\"content\":\"");
-            if (contentStart < 0) return "";
-            contentStart += 11; // length of "content":"
-            int contentEnd = jsonData.indexOf("\"", contentStart);
-            if (contentEnd < 0) return "";
-            String content = jsonData.substring(contentStart, contentEnd);
-            // Unescape JSON string
-            return content.replace("\\n", "\n").replace("\\t", "\t")
-                    .replace("\\\"", "\"").replace("\\\\", "\\");
-        } catch (Exception e) {
-            return "";
         }
     }
 
@@ -487,9 +498,12 @@ public class ChatService {
             return userMessage;
         }
         StringBuilder sb = new StringBuilder();
-        sb.append("请分析以下资料来回答问题。\n");
-        sb.append("要求：答案必须直接引用资料中的原文，不得添加资料中没有的信息。\n");
-        sb.append("\n文件内容：\n").append(fileContext);
+        sb.append("请参考以下资料来回答问题。\n");
+        sb.append("要求：\n");
+        sb.append("1. 答案必须直接引用资料中的原文，不得添加资料中没有的信息\n");
+        sb.append("2. 「本次提交的文件」是用户当前关注的重点，优先参考\n");
+        sb.append("3. 「对话历史中的文件」仅在用户提及相关内容时参考\n");
+        sb.append("\n资料内容：\n").append(fileContext);
         sb.append("\n\n问题：").append(userMessage);
         return sb.toString();
     }
@@ -517,134 +531,153 @@ public class ChatService {
                 """.formatted(userMessage, responseText);
 
         try {
-            Map<String, Object> requestBody = new LinkedHashMap<>();
-            requestBody.put("model", "deepseek-chat");
-            requestBody.put("messages", List.of(
-                    Map.of("role", "system", "content", "你是一个严谨的回答质量检查员，检查回答是否存在事实错误、幻觉和表达问题。"),
-                    Map.of("role", "user", "content", checkPrompt)
-            ));
-            requestBody.put("temperature", 0.1);
-            requestBody.put("max_tokens", 4096);
+            OpenAIRequest request = OpenAIRequest.builder()
+                    .model("deepseek-chat")
+                    .messages(List.of(
+                            OpenAIMessage.builder().role("system")
+                                    .content("你是一个严谨的回答质量检查员，检查回答是否存在事实错误、幻觉和表达问题。").build(),
+                            OpenAIMessage.builder().role("user").content(checkPrompt).build()
+                    ))
+                    .temperature(0.1)
+                    .maxTokens(4096)
+                    .build();
 
-            String jsonBody = objectToJson(requestBody);
+            OpenAIResponse response = openAIClient.call(deepseekApiKey, deepseekApiUrl, request);
+            String result = response.getFirstChoice().getMessage().getContentAsString();
 
-            HttpURLConnection conn = (HttpURLConnection) URI.create(deepseekApiUrl + "/chat/completions").toURL().openConnection();
-            conn.setRequestMethod("POST");
-            conn.setRequestProperty("Content-Type", "application/json");
-            conn.setRequestProperty("Authorization", "Bearer " + deepseekApiKey);
-            conn.setDoOutput(true);
-            conn.setConnectTimeout(10000);
-            conn.setReadTimeout(30000);
-
-            try (OutputStream os = conn.getOutputStream()) {
-                os.write(jsonBody.getBytes(StandardCharsets.UTF_8));
-            }
-
-            int responseCode = conn.getResponseCode();
-            if (responseCode != 200) {
-                return responseText;
-            }
-
-            String responseBody = new String(conn.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
-
-            // Extract content from: {"choices":[{"message":{"content":"..."}}]}
-            int contentStart = responseBody.indexOf("\"content\":\"");
-            if (contentStart < 0) return responseText;
-            contentStart += 11;
-            int contentEnd = responseBody.indexOf("\"", contentStart);
-            if (contentEnd < 0) return responseText;
-
-            String result = responseBody.substring(contentStart, contentEnd)
-                    .replace("\\n", "\n")
-                    .replace("\\\"", "\"")
-                    .replace("\\\\", "\\")
-                    .replace("\\t", "\t")
-                    .replace("\\r", "\r");
-
-            if (result.contains("无需修改") || result.contains("没有问题")) {
+            if (result == null || result.contains("无需修改") || result.contains("没有问题")) {
                 return responseText;
             }
 
             log.info("Self-check found issues, providing corrected response");
             return result;
         } catch (Exception e) {
-            log.warn("Self-check HTTP call failed: {}", e.getMessage());
+            log.warn("Self-check OpenAIClient call failed: {}", e.getMessage());
             return responseText;
         }
     }
 
-    private String buildFileTextContext(Long dialogueId) {
+    /**
+     * Parse fileIds array from metadata JSON string.
+     * Metadata format: {"fileIds":[1,2,3]}
+     * Returns empty list if no fileIds found or parse error (backward compatible).
+     */
+    private List<Long> parseFileIdsFromMetadata(String metadata) {
+        if (metadata == null || metadata.isBlank()) return List.of();
+        try {
+            int fileIdsIdx = metadata.indexOf("\"fileIds\"");
+            if (fileIdsIdx < 0) return List.of();
+            int start = metadata.indexOf("[", fileIdsIdx);
+            int end = metadata.indexOf("]", start);
+            if (start < 0 || end < 0) return List.of();
+            String arr = metadata.substring(start + 1, end);
+            if (arr.isBlank()) return List.of();
+            return Arrays.stream(arr.split(","))
+                    .map(String::trim)
+                    .filter(s -> !s.isEmpty())
+                    .map(Long::parseLong)
+                    .toList();
+        } catch (Exception e) {
+            log.warn("Failed to parse fileIds from metadata: {}", e.getMessage());
+            return List.of();
+        }
+    }
+
+    /**
+     * Filter meetings to only include those matching the message's fileIds.
+     * If messageFileIds is empty (e.g., existing messages without fileIds),
+     * include all files for backward compatibility.
+     */
+    private List<MeetingMinutes> filterFilesByMessageIds(List<MeetingMinutes> allFiles, List<Long> messageFileIds) {
+        if (messageFileIds == null || messageFileIds.isEmpty()) {
+            return allFiles; // backward compatible: include all dialogue files
+        }
+        return allFiles.stream()
+                .filter(f -> messageFileIds.contains(f.getId()))
+                .toList();
+    }
+
+    private String buildFileTextContext(Long dialogueId, List<Long> messageFileIds) {
         try {
             List<MeetingMinutes> files = meetingRepository.findByDialogueId(dialogueId);
             if (files.isEmpty()) return "";
 
+            Set<Long> newFileIds = (messageFileIds == null || messageFileIds.isEmpty())
+                    ? Set.of() : new HashSet<>(messageFileIds);
+            boolean hasNewFiles = !newFileIds.isEmpty();
+
             StringBuilder sb = new StringBuilder();
+            List<MeetingMinutes> newFiles = new ArrayList<>();
+            List<MeetingMinutes> oldFiles = new ArrayList<>();
             for (MeetingMinutes f : files) {
                 if (!"completed".equals(f.getStatus())) continue;
-                String ext = FileProcessingService.getExtension(f.getTitle()).toLowerCase();
-                if (IMAGE_FORMATS.contains(ext)) continue;
-
-                if (f.getFileSize() != null && f.getFileSize() > MAX_FILE_SIZE) {
-                    sb.append("【来源：").append(f.getTitle()).append("】（文件过大，跳过内容提取）\n");
-                    continue;
-                }
-
-                String content = extractFileContent(Path.of(f.getFilePath()), ext);
-                if (content != null && !content.isBlank()) {
-                    String preview = content.length() > 2000 ? content.substring(0, 2000) + "..." : content;
-                    sb.append("【来源：").append(f.getTitle()).append("】\n").append(preview).append("\n\n");
+                if (newFileIds.contains(f.getId())) {
+                    newFiles.add(f);
                 } else {
-                    sb.append("【来源：").append(f.getTitle()).append("】（无法提取文字内容）\n");
+                    oldFiles.add(f);
                 }
             }
+
+            if (hasNewFiles) {
+                sb.append("【本次提交的文件 — 请重点参考这些文件回答】\n");
+                for (MeetingMinutes f : newFiles) {
+                    appendFileContent(sb, f);
+                }
+                sb.append("\n");
+            }
+
+            if (!oldFiles.isEmpty()) {
+                sb.append("【对话历史中的文件 — 仅在用户提及相关内容时参考】\n");
+                for (MeetingMinutes f : oldFiles) {
+                    appendFileContent(sb, f);
+                }
+            }
+
             return sb.toString();
         } catch (Exception e) {
             return "";
         }
     }
 
-    private List<ContentBlock> buildFileBlocks(Long dialogueId) {
+    private void appendFileContent(StringBuilder sb, MeetingMinutes f) {
+        String ext = FileProcessingService.getExtension(f.getTitle()).toLowerCase();
+        if (IMAGE_FORMATS.contains(ext)) return;
+
+        if (f.getFileSize() != null && f.getFileSize() > MAX_FILE_SIZE) {
+            sb.append("【来源：").append(f.getTitle()).append("】（文件过大，跳过内容提取）\n");
+            return;
+        }
+
+        String content = extractFileContent(Path.of(f.getFilePath()), ext);
+        if (content != null && !content.isBlank()) {
+            String preview = content.length() > 2000 ? content.substring(0, 2000) + "..." : content;
+            sb.append("【来源：").append(f.getTitle()).append("】\n").append(preview).append("\n\n");
+        } else {
+            sb.append("【来源：").append(f.getTitle()).append("】（无法提取文字内容）\n");
+        }
+    }
+
+    private List<ContentBlock> buildFileBlocks(Long dialogueId, List<Long> messageFileIds) {
         try {
             List<MeetingMinutes> files = meetingRepository.findByDialogueId(dialogueId);
             if (files.isEmpty()) return List.of();
 
             List<ContentBlock> blocks = new ArrayList<>();
-            StringBuilder textIntro = new StringBuilder("以下是用户上传的文件：\n");
+            Set<Long> newFileIds = (messageFileIds == null || messageFileIds.isEmpty())
+                    ? Set.of() : new HashSet<>(messageFileIds);
 
+            // Only return ImageBlock for images; text content is handled by buildFileTextContext
             for (MeetingMinutes f : files) {
                 if (!"completed".equals(f.getStatus())) continue;
                 String ext = FileProcessingService.getExtension(f.getTitle()).toLowerCase();
+                if (!IMAGE_FORMATS.contains(ext)) continue;
                 Path filePath = Path.of(f.getFilePath());
                 if (!Files.exists(filePath)) continue;
 
-                if (IMAGE_FORMATS.contains(ext)) {
-                    if (!textIntro.isEmpty()) {
-                        blocks.add(TextBlock.builder().text(textIntro.toString()).build());
-                        textIntro.setLength(0);
-                    }
-                    String mediaType = getImageMimeType(ext);
-                    String base64 = Base64.getEncoder().encodeToString(Files.readAllBytes(filePath));
-                    blocks.add(new ImageBlock(new Base64Source(mediaType, base64)));
-                    textIntro.append("- ").append(f.getTitle()).append("（图片）\n");
-                } else {
-                    if (f.getFileSize() != null && f.getFileSize() > MAX_FILE_SIZE) {
-                        textIntro.append("- ").append(f.getTitle()).append("（文件过大，跳过内容提取）\n");
-                        continue;
-                    }
-                    String content = extractFileContent(filePath, ext);
-                    if (content != null && !content.isBlank()) {
-                        String preview = content.length() > 2000 ? content.substring(0, 2000) + "..." : content;
-                        textIntro.append("- ").append(f.getTitle()).append("：\n").append(preview).append("\n");
-                    } else {
-                        textIntro.append("- ").append(f.getTitle()).append("（无法提取文字内容）\n");
-                    }
-                }
+                String mediaType = getImageMimeType(ext);
+                String base64 = Base64.getEncoder().encodeToString(Files.readAllBytes(filePath));
+                blocks.add(new ImageBlock(new Base64Source(mediaType, base64)));
             }
-
-            if (!textIntro.isEmpty()) {
-                blocks.add(TextBlock.builder().text(textIntro.toString()).build());
-            }
-
             return blocks;
         } catch (Exception e) {
             return List.of();

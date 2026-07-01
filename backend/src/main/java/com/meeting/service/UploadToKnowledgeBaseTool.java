@@ -35,9 +35,10 @@ public class UploadToKnowledgeBaseTool implements AgentTool {
 
     @Override
     public String getDescription() {
-        return "将对话中的文件上传到知识库，使其可通过搜索检索到。"
-                + "当用户要求保存文档、加入知识库、存入资料库、放入知识库时调用此工具。"
-                + "无需文件路径参数，工具会自动查找当前对话中未上传的文件。";
+        return "【仅限用户明确要求保存或上传到知识库时使用】"
+                + "将对话中的文件上传到知识库，使其可通过搜索检索到。"
+                + "不要主动调用此工具。只有当用户明确要求“保存到知识库”、“上传到知识库”、“加入知识库”时才调用。"
+                + "用户要求总结、改写、查阅文件内容时不需要调用此工具。";
     }
 
     @Override
@@ -75,28 +76,19 @@ public class UploadToKnowledgeBaseTool implements AgentTool {
         }
 
         List<String> uploaded = new ArrayList<>();
-        List<String> alreadyInKb = new ArrayList<>();
         for (MeetingMinutes file : files) {
-            if (Boolean.TRUE.equals(file.getKnowledgeBase())) {
-                alreadyInKb.add(file.getTitle());
-            } else {
-                try {
-                    vectorizationService.vectorizeMeeting(file.getId());
-                    uploaded.add(file.getTitle());
-                    log.info("Tool: uploaded file {} to knowledge base", file.getId());
-                } catch (Exception e) {
-                    log.warn("Tool: KB upload failed for {}: {}", file.getId(), e.getMessage());
-                }
+            try {
+                vectorizationService.vectorizeMeeting(file.getId());
+                uploaded.add(file.getTitle());
+                log.info("Tool: uploaded file {} to knowledge base", file.getId());
+            } catch (Exception e) {
+                log.warn("Tool: KB upload failed for {}: {}", file.getId(), e.getMessage());
             }
         }
 
         StringBuilder result = new StringBuilder();
         if (!uploaded.isEmpty()) {
             result.append("已成功将以下文件上传到知识库：").append(String.join("、", uploaded)).append("。");
-        }
-        if (!alreadyInKb.isEmpty()) {
-            if (result.length() > 0) result.append(" ");
-            result.append("以下文件已在知识库中：").append(String.join("、", alreadyInKb)).append("。");
         }
         if (result.isEmpty()) {
             result.append("文件上传到知识库失败，请稍后重试。");

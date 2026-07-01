@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Layout, Typography, Button, List, message as antMsg, Space, Modal, Input, Tag } from 'antd';
+import { Layout, Typography, Button, List, message as antMsg, Space, Modal, Input, ConfigProvider, theme } from 'antd';
 import {
   PlusOutlined,
   MessageOutlined,
@@ -10,9 +10,13 @@ import {
   DeleteOutlined,
   EditOutlined,
   RobotOutlined,
+  SettingOutlined,
+  SunOutlined,
+  MoonOutlined,
 } from '@ant-design/icons';
 import DialoguePanel from './components/DialoguePanel';
 import KnowledgeBase from './components/KnowledgeBase';
+import ProfileSettings from './components/ProfileSettings';
 import { listDialogues, createDialogue, deleteDialogue, renameDialogue, Dialogue } from './services/api';
 
 const { Sider, Content } = Layout;
@@ -20,12 +24,29 @@ const { Text } = Typography;
 
 const App: React.FC = () => {
   const [kbVisible, setKbVisible] = useState(false);
+  const [profileVisible, setProfileVisible] = useState(false);
   const [dialogues, setDialogues] = useState<Dialogue[]>([]);
   const [activeDialogue, setActiveDialogue] = useState<Dialogue | null>(null);
   const [creating, setCreating] = useState(false);
   const [renameModal, setRenameModal] = useState<{ visible: boolean; dialogue: Dialogue | null; value: string }>({
     visible: false, dialogue: null, value: '',
   });
+
+  const [isDark, setIsDark] = useState(() => {
+    return localStorage.getItem('theme-dark') === 'true';
+  });
+
+  const toggleTheme = useCallback(() => {
+    setIsDark(prev => {
+      const next = !prev;
+      localStorage.setItem('theme-dark', String(next));
+      return next;
+    });
+  }, []);
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = isDark ? 'dark' : 'light';
+  }, [isDark]);
 
   const refreshDialogues = useCallback(async () => {
     try {
@@ -160,14 +181,15 @@ const App: React.FC = () => {
   };
 
   return (
-    <Layout style={{ minHeight: '100vh', height: '100vh', background: '#fff' }}>
+    <ConfigProvider theme={{ algorithm: isDark ? theme.darkAlgorithm : theme.defaultAlgorithm }}>
+    <Layout style={{ minHeight: '100vh', height: '100vh', background: 'var(--app-bg)' }}>
       {/* Left Sidebar */}
       <Sider
         width={280}
         theme="light"
         style={{
-          borderRight: '1px solid #f0f0f0',
-          background: '#fafafa',
+          borderRight: '1px solid var(--sider-border)',
+          background: 'var(--sider-bg)',
           display: 'flex',
           flexDirection: 'column',
           overflow: 'hidden',
@@ -176,7 +198,7 @@ const App: React.FC = () => {
         {/* Brand */}
         <div style={{
           padding: '20px 20px 16px',
-          borderBottom: '1px solid #f0f0f0',
+          borderBottom: '1px solid var(--sider-border)',
         }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             <div style={{
@@ -187,7 +209,7 @@ const App: React.FC = () => {
             }}>
               <RobotOutlined style={{ fontSize: 18, color: '#fff' }} />
             </div>
-            <Text strong style={{ fontSize: 18, color: '#1a1a1a', letterSpacing: 1 }}>
+            <Text strong style={{ fontSize: 18, color: 'var(--text-color)', letterSpacing: 1 }}>
               你问呗
             </Text>
           </div>
@@ -222,20 +244,44 @@ const App: React.FC = () => {
               style={{
                 display: 'flex', alignItems: 'center', gap: 10,
                 padding: '10px 12px', borderRadius: 8, cursor: 'pointer',
-                background: kbVisible ? '#e6f4ff' : 'transparent',
-                color: kbVisible ? '#1677ff' : '#333',
+                background: kbVisible ? 'var(--active-bg)' : 'transparent',
+                color: kbVisible ? '#1677ff' : 'var(--text-color)',
                 transition: 'all 0.2s',
               }}
               onMouseEnter={(e) => {
-                if (!kbVisible) (e.currentTarget as HTMLElement).style.background = '#f0f0f0';
+                if (!kbVisible) (e.currentTarget as HTMLElement).style.background = 'var(--hover-bg)';
               }}
               onMouseLeave={(e) => {
                 if (!kbVisible) (e.currentTarget as HTMLElement).style.background = 'transparent';
               }}
             >
-              <DatabaseOutlined style={{ fontSize: 16, color: kbVisible ? '#1677ff' : '#666' }} />
-              <Text style={{ fontSize: 14, fontWeight: 500, color: kbVisible ? '#1677ff' : '#333' }}>
+              <DatabaseOutlined style={{ fontSize: 16, color: kbVisible ? '#1677ff' : 'var(--text-tertiary)' }} />
+              <Text style={{ fontSize: 14, fontWeight: 500, color: kbVisible ? '#1677ff' : 'var(--text-color)' }}>
                 我的知识库
+              </Text>
+            </div>
+          </div>
+
+          {/* Profile Settings */}
+          <div style={{ marginBottom: 8 }}>
+            <div
+              onClick={() => setProfileVisible(true)}
+              style={{
+                display: 'flex', alignItems: 'center', gap: 10,
+                padding: '10px 12px', borderRadius: 8, cursor: 'pointer',
+                color: 'var(--text-color)',
+                transition: 'all 0.2s',
+              }}
+              onMouseEnter={(e) => {
+                (e.currentTarget as HTMLElement).style.background = 'var(--hover-bg)';
+              }}
+              onMouseLeave={(e) => {
+                (e.currentTarget as HTMLElement).style.background = 'transparent';
+              }}
+            >
+              <SettingOutlined style={{ fontSize: 16, color: 'var(--text-tertiary)' }} />
+              <Text style={{ fontSize: 14, fontWeight: 500, color: 'var(--text-color)' }}>
+                个人设置
               </Text>
             </div>
           </div>
@@ -244,7 +290,7 @@ const App: React.FC = () => {
           <div style={{ marginTop: 12 }}>
             <div style={{
               padding: '8px 12px 6px',
-              fontSize: 12, fontWeight: 600, color: '#999',
+              fontSize: 12, fontWeight: 600, color: 'var(--text-secondary)',
               letterSpacing: 0.5,
             }}>
               最近对话
@@ -261,7 +307,7 @@ const App: React.FC = () => {
                     padding: '8px 12px',
                     borderRadius: 8,
                     marginBottom: 1,
-                    background: activeDialogue?.id === item.id ? '#e6f4ff' : 'transparent',
+                    background: activeDialogue?.id === item.id ? 'var(--active-bg)' : 'transparent',
                     border: 'none',
                     display: 'flex',
                     alignItems: 'center',
@@ -270,7 +316,7 @@ const App: React.FC = () => {
                   }}
                   onMouseEnter={(e) => {
                     if (activeDialogue?.id !== item.id) {
-                      (e.currentTarget as HTMLElement).style.background = '#f0f0f0';
+                      (e.currentTarget as HTMLElement).style.background = 'var(--hover-bg)';
                     }
                   }}
                   onMouseLeave={(e) => {
@@ -283,7 +329,7 @@ const App: React.FC = () => {
                   {(idx < 3 || activeDialogue?.id === item.id) ? (
                     <div style={{
                       width: 8, height: 8, borderRadius: '50%',
-                      background: activeDialogue?.id === item.id ? '#1677ff' : '#1677ff',
+                      background: '#1677ff',
                       opacity: activeDialogue?.id === item.id ? 1 : 0.5,
                       flexShrink: 0,
                     }} />
@@ -294,7 +340,7 @@ const App: React.FC = () => {
                   {/* Icon */}
                   <MessageOutlined style={{
                     fontSize: 14,
-                    color: activeDialogue?.id === item.id ? '#1677ff' : '#999',
+                    color: activeDialogue?.id === item.id ? '#1677ff' : 'var(--text-secondary)',
                     flexShrink: 0,
                   }} />
 
@@ -303,7 +349,7 @@ const App: React.FC = () => {
                     <Text
                       style={{
                         fontSize: 13,
-                        color: activeDialogue?.id === item.id ? '#1677ff' : '#333',
+                        color: activeDialogue?.id === item.id ? '#1677ff' : 'var(--text-color)',
                         fontWeight: activeDialogue?.id === item.id ? 500 : 400,
                       }}
                       ellipsis
@@ -357,12 +403,27 @@ const App: React.FC = () => {
                         closable: true,
                       });
                     }}
-                    style={{ color: '#bbb', flexShrink: 0 }}
+                    style={{ color: 'var(--text-secondary)', flexShrink: 0 }}
                   />
                 </List.Item>
               )}
             />
           </div>
+        </div>
+
+        {/* Theme Toggle */}
+        <div style={{
+          padding: '12px 16px',
+          borderTop: '1px solid var(--sider-border)',
+        }}>
+          <Button
+            type="text"
+            icon={isDark ? <SunOutlined /> : <MoonOutlined />}
+            onClick={toggleTheme}
+            style={{ width: '100%', borderRadius: 8, color: 'var(--text-tertiary)', fontSize: 13 }}
+          >
+            {isDark ? '浅色模式' : '深色模式'}
+          </Button>
         </div>
       </Sider>
 
@@ -376,15 +437,18 @@ const App: React.FC = () => {
         />
       </Content>
 
+      {/* Profile Settings Drawer */}
+      <ProfileSettings visible={profileVisible} onClose={() => setProfileVisible(false)} />
+
       {/* Knowledge Base Right Panel */}
       {kbVisible && (
         <Sider
           width={320}
           theme="light"
           style={{
-            borderLeft: '1px solid #f0f0f0',
+            borderLeft: '1px solid var(--sider-border)',
             overflow: 'auto',
-            background: '#fafafa',
+            background: 'var(--sider-bg)',
           }}
         >
           <KnowledgeBase visible={kbVisible} onClose={() => setKbVisible(false)} />
@@ -409,6 +473,7 @@ const App: React.FC = () => {
         />
       </Modal>
     </Layout>
+    </ConfigProvider>
   );
 };
 

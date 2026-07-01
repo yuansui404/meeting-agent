@@ -61,7 +61,6 @@ public class SearchService {
         List<Map<String, Object>> results = new ArrayList<>();
 
         for (MeetingMinutes mm : textResults) {
-            if (kbOnly && !Boolean.TRUE.equals(mm.getKnowledgeBase())) continue;
             if (seen.add(mm.getId())) {
                 Map<String, Object> item = new HashMap<>();
                 item.put("id", mm.getId());
@@ -70,7 +69,6 @@ public class SearchService {
                 item.put("duration", mm.getDuration());
                 item.put("createdAt", mm.getCreatedAt());
                 item.put("type", "fulltext");
-                item.put("knowledgeBase", mm.getKnowledgeBase());
                 results.add(item);
             }
         }
@@ -78,7 +76,6 @@ public class SearchService {
         for (MeetingVector mv : vectorResults) {
             if (seen.add(mv.getMeetingId())) {
                 meetingRepository.findById(mv.getMeetingId()).ifPresent(mm -> {
-                    if (kbOnly && !Boolean.TRUE.equals(mm.getKnowledgeBase())) return;
                     Map<String, Object> item = new HashMap<>();
                     item.put("id", mm.getId());
                     item.put("title", mm.getTitle());
@@ -87,7 +84,6 @@ public class SearchService {
                     item.put("createdAt", mm.getCreatedAt());
                     item.put("type", "vector");
                     item.put("matchedContent", mv.getContent());
-                    item.put("knowledgeBase", mm.getKnowledgeBase());
                     results.add(item);
                 });
             }

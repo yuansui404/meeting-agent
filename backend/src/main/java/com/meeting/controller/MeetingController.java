@@ -123,7 +123,6 @@ public class MeetingController {
                     result.put("fileSize", meeting.getFileSize());
                     result.put("status", meeting.getStatus());
                     result.put("createdAt", meeting.getCreatedAt());
-                    result.put("knowledgeBase", meeting.getKnowledgeBase());
                     result.put("dialogueId", meeting.getDialogueId());
                     result.put("mdFilePath", meeting.getMdFilePath());
                     result.put("meetingDate", meeting.getMeetingDate());
@@ -156,7 +155,6 @@ public class MeetingController {
                     item.put("fileSize", m.getFileSize());
                     item.put("status", m.getStatus());
                     item.put("createdAt", m.getCreatedAt());
-                    item.put("knowledgeBase", m.getKnowledgeBase());
                     item.put("dialogueId", m.getDialogueId());
                     item.put("ext", FileProcessingService.getExtension(m.getTitle()));
                     item.put("hasMd", m.getMdFilePath() != null);
@@ -222,7 +220,6 @@ public class MeetingController {
             meeting.setFilePath(filePath.toString());
             meeting.setFileSize(file.getSize());
             meeting.setStatus("completed");
-            meeting.setKnowledgeBase(true);
             meeting.setTranscription(content);
             meeting.setMeetingDate(LocalDateTime.now());
             meeting = meetingRepository.save(meeting);
@@ -318,40 +315,7 @@ public class MeetingController {
         }
     }
 
-    @PostMapping("/meeting/{id}/knowledge-base")
-    public ResponseEntity<?> toggleKnowledgeBase(@PathVariable Long id) {
-        return meetingRepository.findById(id).map(meeting -> {
-            boolean newStatus = !Boolean.TRUE.equals(meeting.getKnowledgeBase());
-            meeting.setKnowledgeBase(newStatus);
-            meetingRepository.save(meeting);
-
-            // Auto-vectorize when enabling knowledge base
-            if (newStatus) {
-                try {
-                    vectorizationService.vectorizeMeeting(id);
-                } catch (Exception e) {
-                    return ResponseEntity.ok(Map.of(
-                            "success", true,
-                            "knowledgeBase", true,
-                            "warning", "标记成功但向量化失败: " + e.getMessage()
-                    ));
-                }
-            }
-
-            return ResponseEntity.ok(Map.of(
-                    "success", true,
-                    "knowledgeBase", newStatus
-            ));
-        }).orElse(ResponseEntity.notFound().build());
-    }
-
-    @GetMapping("/meetings/knowledge-base")
-    public ResponseEntity<?> listKnowledgeBase() {
-        var meetings = meetingRepository.findByKnowledgeBaseTrue();
-        return ResponseEntity.ok(meetings);
-    }
-
-    // ---- Style exemplar endpoints ----
+    // ---- Deprecated: toggle endpoint removed ----
 
     @PostMapping("/meeting/{id}/style-exemplar")
     public ResponseEntity<?> setStyleExemplar(@PathVariable Long id, @RequestBody Map<String, Object> body) {
@@ -368,7 +332,7 @@ public class MeetingController {
 
     @GetMapping("/meetings/style-exemplars")
     public ResponseEntity<?> listStyleExemplars() {
-        var meetings = meetingRepository.findByKnowledgeBaseTrue().stream()
+        var meetings = meetingRepository.findAll().stream()
                 .filter(m -> Boolean.TRUE.equals(m.getStyleExemplar()))
                 .map(m -> Map.of(
                         "id", m.getId(),
@@ -376,6 +340,24 @@ public class MeetingController {
                         "styleTags", m.getStyleTags() != null ? m.getStyleTags() : ""
                 )).collect(Collectors.toList());
         return ResponseEntity.ok(meetings);
+    }
+
+    // ---- Backfill participants for existing meetings ----
+
+    @PostMapping("/meetings/backfill-participants")
+    public ResponseEntity<?> backfillParticipants() {
+        List<MeetingMinutes> kbMeetings = meetingRepository.findByStatus("completed");
+        List<Map<String, Object>> results = new java.util.ArrayList<>();
+        for (MeetingMinutes m : kbMeetings) {
+            try {
+                vectorizationService.backfillParticipants(m.getId());
+                results.add(Map.of("id", m.getId(), "title", m.getTitle(), "status", "ok"));
+            } catch (Exception e) {
+                log.warn("Backfill failed for meeting {}: {}", m.getId(), e.getMessage());
+                results.add(Map.of("id", m.getId(), "title", m.getTitle(), "status", "error", "message", e.getMessage()));
+            }
+        }
+        return ResponseEntity.ok(Map.of("success", true, "processed", results.size(), "results", results));
     }
 
     // ---- Rewrite feedback endpoint ----
