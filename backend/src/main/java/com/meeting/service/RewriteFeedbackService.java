@@ -1,9 +1,9 @@
 package com.meeting.service;
 
-import com.meeting.entity.RewriteFeedback;
-import com.meeting.entity.RewriteResult;
-import com.meeting.repository.RewriteFeedbackRepository;
-import com.meeting.repository.RewriteResultRepository;
+import com.meeting.conversation.model.entity.RewriteFeedback;
+import com.meeting.conversation.model.entity.RewriteResult;
+import com.meeting.conversation.repository.RewriteFeedbackRepository;
+import com.meeting.conversation.repository.RewriteResultRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.jdbc.core.JdbcTemplate;

@@ -1,7 +1,7 @@
 package com.meeting.service;
 
-import com.meeting.entity.RewriteResult;
-import com.meeting.repository.RewriteResultRepository;
+import com.meeting.conversation.model.entity.RewriteResult;
+import com.meeting.conversation.repository.RewriteResultRepository;
 import io.agentscope.core.formatter.openai.dto.OpenAIMessage;
 import io.agentscope.core.formatter.openai.dto.OpenAIRequest;
 import io.agentscope.core.formatter.openai.dto.OpenAIResponse;

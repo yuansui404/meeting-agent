@@ -1,7 +1,7 @@
 package com.meeting.agent;
 
-import com.meeting.entity.MeetingMinutes;
-import com.meeting.repository.MeetingMinutesRepository;
+import com.meeting.meeting.model.entity.MeetingMinutes;
+import com.meeting.meeting.repository.MeetingMinutesRepository;
 import com.meeting.service.QueryRewriter;
 import com.meeting.service.VectorizationService;
 import com.meeting.service.VectorizationService.ScoredVector;

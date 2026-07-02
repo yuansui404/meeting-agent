@@ -1,8 +1,8 @@
 package com.meeting.service;
 
-import com.meeting.entity.SessionEntity;
-import com.meeting.repository.DialogueMessageRepository;
-import com.meeting.repository.SessionRepository;
+import com.meeting.conversation.model.entity.SessionEntity;
+import com.meeting.conversation.repository.DialogueMessageRepository;
+import com.meeting.conversation.repository.SessionRepository;
 import io.agentscope.core.message.UserMessage;
 import io.agentscope.core.state.AgentState;
 import org.junit.jupiter.api.BeforeEach;

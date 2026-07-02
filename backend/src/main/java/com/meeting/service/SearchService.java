@@ -1,9 +1,9 @@
 package com.meeting.service;
 
-import com.meeting.entity.MeetingMinutes;
-import com.meeting.entity.MeetingVector;
-import com.meeting.repository.MeetingMinutesRepository;
-import com.meeting.repository.MeetingVectorRepository;
+import com.meeting.meeting.model.entity.MeetingMinutes;
+import com.meeting.meeting.model.entity.MeetingVector;
+import com.meeting.meeting.repository.MeetingMinutesRepository;
+import com.meeting.meeting.repository.MeetingVectorRepository;
 import org.springframework.stereotype.Service;
 
 import org.slf4j.Logger;

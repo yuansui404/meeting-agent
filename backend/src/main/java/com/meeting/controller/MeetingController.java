@@ -1,9 +1,9 @@
 package com.meeting.controller;
 
-import com.meeting.common.DocumentTextExtractor;
-import com.meeting.entity.MeetingMinutes;
-import com.meeting.repository.MeetingMinutesRepository;
-import com.meeting.repository.MeetingVectorRepository;
+import com.meeting.document.service.DocumentTextExtractor;
+import com.meeting.meeting.model.entity.MeetingMinutes;
+import com.meeting.meeting.repository.MeetingMinutesRepository;
+import com.meeting.meeting.repository.MeetingVectorRepository;
 import com.meeting.service.FileProcessingService;
 import com.meeting.service.TranscriptionService;
 import com.meeting.service.VectorizationService;

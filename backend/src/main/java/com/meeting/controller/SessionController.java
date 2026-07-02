@@ -1,6 +1,6 @@
 package com.meeting.controller;
 
-import com.meeting.entity.RewriteResult;
+import com.meeting.conversation.model.entity.RewriteResult;
 import com.meeting.service.RewriteService;
 import com.meeting.service.SessionService;
 import org.springframework.core.io.FileSystemResource;

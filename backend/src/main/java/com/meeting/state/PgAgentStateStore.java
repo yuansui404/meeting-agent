@@ -1,7 +1,7 @@
 package com.meeting.state;
 
-import com.meeting.entity.SessionEntity;
-import com.meeting.repository.SessionRepository;
+import com.meeting.conversation.model.entity.SessionEntity;
+import com.meeting.conversation.repository.SessionRepository;
 import io.agentscope.core.state.AgentState;
 import io.agentscope.core.state.AgentStateStore;
 import io.agentscope.core.state.State;

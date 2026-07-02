@@ -1,7 +1,7 @@
 package com.meeting.agent;
 
-import com.meeting.entity.MeetingMinutes;
-import com.meeting.repository.MeetingMinutesRepository;
+import com.meeting.meeting.model.entity.MeetingMinutes;
+import com.meeting.meeting.repository.MeetingMinutesRepository;
 import io.agentscope.core.message.ToolResultBlock;
 import io.agentscope.core.tool.AgentTool;
 import io.agentscope.core.tool.ToolCallParam;

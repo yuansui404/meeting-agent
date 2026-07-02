@@ -2,10 +2,10 @@ package com.meeting.service;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.meeting.entity.DialogueMessageEntity;
-import com.meeting.entity.SessionEntity;
-import com.meeting.repository.DialogueMessageRepository;
-import com.meeting.repository.SessionRepository;
+import com.meeting.conversation.model.entity.DialogueMessageEntity;
+import com.meeting.conversation.model.entity.SessionEntity;
+import com.meeting.conversation.repository.DialogueMessageRepository;
+import com.meeting.conversation.repository.SessionRepository;
 import io.agentscope.core.message.Msg;
 import io.agentscope.core.message.MsgRole;
 import io.agentscope.core.state.AgentState;

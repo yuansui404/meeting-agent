@@ -1,7 +1,7 @@
 package com.meeting.service;
 
-import com.meeting.entity.MeetingMinutes;
-import com.meeting.repository.MeetingMinutesRepository;
+import com.meeting.meeting.model.entity.MeetingMinutes;
+import com.meeting.meeting.repository.MeetingMinutesRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -194,7 +194,7 @@ public class StyleLearningService {
                                     return java.nio.file.Files.readString(filePath, java.nio.charset.StandardCharsets.UTF_8);
                                 }
                                 if (DOC_EXTENSIONS.contains(ext)) {
-                                    return com.meeting.common.DocumentTextExtractor.extractText(filePath, ext);
+                                    return com.meeting.document.service.DocumentTextExtractor.extractText(filePath, ext);
                                 }
                             } catch (Exception e) {
                                 log.warn("Failed to read file for meeting {}: {}", meetingId, e.getMessage());

@@ -1,11 +1,11 @@
 package com.meeting.service;
 
-import com.meeting.entity.MeetingMinutes;
-import com.meeting.entity.DialogueMessageEntity;
-import com.meeting.entity.SessionEntity;
-import com.meeting.repository.MeetingMinutesRepository;
-import com.meeting.repository.SessionRepository;
-import com.meeting.repository.DialogueMessageRepository;
+import com.meeting.meeting.model.entity.MeetingMinutes;
+import com.meeting.conversation.model.entity.DialogueMessageEntity;
+import com.meeting.conversation.model.entity.SessionEntity;
+import com.meeting.meeting.repository.MeetingMinutesRepository;
+import com.meeting.conversation.repository.SessionRepository;
+import com.meeting.conversation.repository.DialogueMessageRepository;
 import io.agentscope.core.message.Msg;
 import io.agentscope.core.message.MsgRole;
 import io.agentscope.core.state.AgentState;
@@ -183,7 +183,7 @@ public class UploadToKnowledgeBaseTool implements AgentTool {
             if (textFormats.contains(ext)) {
                 return Files.readString(filePath, java.nio.charset.StandardCharsets.UTF_8);
             } else if (docFormats.contains(ext)) {
-                return com.meeting.common.DocumentTextExtractor.extractText(filePath, ext);
+                return com.meeting.document.service.DocumentTextExtractor.extractText(filePath, ext);
             }
         } catch (Exception e) {
             log.warn("Failed to extract file content: {}", e.getMessage());
