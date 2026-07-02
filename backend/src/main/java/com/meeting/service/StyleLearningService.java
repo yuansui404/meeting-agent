@@ -201,6 +201,18 @@ public class StyleLearningService {
                             }
                         }
                     }
+                    // Check sidecar transcription file for audio/video
+                    if (FileProcessingService.isTranscribable(ext)) {
+                        java.nio.file.Path transcriptionPath = java.nio.file.Path.of(meeting.getFilePath() + ".transcription.md");
+                        if (java.nio.file.Files.exists(transcriptionPath)) {
+                            try {
+                                return java.nio.file.Files.readString(transcriptionPath, java.nio.charset.StandardCharsets.UTF_8);
+                            } catch (Exception e) {
+                                log.warn("Failed to read sidecar transcription for meeting {}: {}", meetingId, e.getMessage());
+                            }
+                        }
+                    }
+
                     // Fallback to transcription
                     String transcription = meeting.getTranscription();
                     if (transcription != null && !transcription.isBlank() && !"{}".equals(transcription.trim())) {

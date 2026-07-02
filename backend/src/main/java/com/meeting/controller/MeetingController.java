@@ -21,6 +21,7 @@ import org.springframework.web.multipart.MultipartFile;
 
 import com.meeting.service.MeetingDateExtractor;
 import com.meeting.service.RewriteFeedbackService;
+import com.meeting.service.SessionService;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -53,6 +54,7 @@ public class MeetingController {
     private final RewriteFeedbackService rewriteFeedbackService;
     private final MeetingDateExtractor meetingDateExtractor;
     private final JdbcTemplate jdbcTemplate;
+    private final SessionService sessionService;
 
     public MeetingController(FileProcessingService fileProcessingService,
                              TranscriptionService transcriptionService,
@@ -61,7 +63,8 @@ public class MeetingController {
                              VectorizationService vectorizationService,
                              RewriteFeedbackService rewriteFeedbackService,
                              MeetingDateExtractor meetingDateExtractor,
-                             JdbcTemplate jdbcTemplate) {
+                             JdbcTemplate jdbcTemplate,
+                             SessionService sessionService) {
         this.fileProcessingService = fileProcessingService;
         this.transcriptionService = transcriptionService;
         this.meetingRepository = meetingRepository;
@@ -70,6 +73,7 @@ public class MeetingController {
         this.rewriteFeedbackService = rewriteFeedbackService;
         this.meetingDateExtractor = meetingDateExtractor;
         this.jdbcTemplate = jdbcTemplate;
+        this.sessionService = sessionService;
     }
 
     @PostMapping("/upload")
@@ -77,33 +81,21 @@ public class MeetingController {
             @RequestParam MultipartFile file,
             @RequestParam Long dialogueId) {
         try {
-            MeetingMinutes meeting = fileProcessingService.uploadFile(file, dialogueId);
-
             String ext = FileProcessingService.getExtension(file.getOriginalFilename());
+
+            // Dialogue files: save to disk, return metadata, NO MeetingMinutes
+            Map<String, Object> fileMeta = fileProcessingService.saveDialogueFile(file, dialogueId);
+
+            // For transcribable files (audio/video), start async ASR → writes sidecar transcription file
             if (FileProcessingService.isTranscribable(ext)) {
-                transcriptionService.startTranscription(meeting.getId());
-            } else {
-                // Document files: try to extract meeting date from content
-                try {
-                    Path savedPath = Path.of(meeting.getFilePath());
-                    String content = readFileContent(savedPath, ext);
-                    if (content != null && !content.isBlank()) {
-                        var md = meetingDateExtractor.extract(content);
-                        if (md != null) {
-                            meeting.setMeetingDate(md);
-                            meetingRepository.save(meeting);
-                        }
-                    }
-                } catch (Exception e) {
-                    log.warn("Meeting date extraction failed for {}: {}", meeting.getId(), e.getMessage());
-                }
+                transcriptionService.startTranscription(
+                        (String) fileMeta.get("filePath"),
+                        (String) fileMeta.get("fileName"),
+                        dialogueId);
             }
 
-            java.util.Map<String, Object> uploadResult = new java.util.HashMap<>();
-            uploadResult.put("meetingId", meeting.getId());
-            uploadResult.put("status", meeting.getStatus());
-            uploadResult.put("dialogueId", meeting.getDialogueId());
-            return ResponseEntity.ok(uploadResult);
+            fileMeta.put("dialogueId", dialogueId);
+            return ResponseEntity.ok(fileMeta);
         } catch (IllegalArgumentException e) {
             return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
         } catch (Exception e) {
@@ -147,21 +139,7 @@ public class MeetingController {
 
     @GetMapping("/dialogue/{dialogueId}/meetings")
     public ResponseEntity<?> listDialogueMeetings(@PathVariable Long dialogueId) {
-        List<Map<String, Object>> files = meetingRepository.findByDialogueId(dialogueId)
-                .stream().map(m -> {
-                    Map<String, Object> item = new java.util.HashMap<>();
-                    item.put("id", m.getId());
-                    item.put("title", m.getTitle());
-                    item.put("fileSize", m.getFileSize());
-                    item.put("status", m.getStatus());
-                    item.put("createdAt", m.getCreatedAt());
-                    item.put("dialogueId", m.getDialogueId());
-                    item.put("ext", FileProcessingService.getExtension(m.getTitle()));
-                    item.put("hasMd", m.getMdFilePath() != null);
-                    item.put("mdFilePath", m.getMdFilePath());
-                    return item;
-                }).collect(Collectors.toList());
-        return ResponseEntity.ok(files);
+        return ResponseEntity.ok(sessionService.extractFilesFromState(dialogueId));
     }
 
     @DeleteMapping("/meeting/{id}")
@@ -169,8 +147,6 @@ public class MeetingController {
         return meetingRepository.findById(id).map(meeting -> {
             // Delete vectors via JdbcTemplate (Hibernate cannot handle VECTOR columns)
             jdbcTemplate.update("DELETE FROM meeting_vectors WHERE meeting_id = ?", id);
-            // Clean up files
-            fileProcessingService.cleanupFile(id);
             // Delete record
             meetingRepository.delete(meeting);
             return ResponseEntity.ok(Map.of("success", true));
@@ -299,6 +275,60 @@ public class MeetingController {
                 return ResponseEntity.internalServerError().body(Map.of("error", "读取文件失败: " + e.getMessage()));
             }
         }).orElse(ResponseEntity.notFound().build());
+    }
+
+    // ---- Dialogue file endpoints (state_json-backed) ----
+
+    @GetMapping("/dialogue/{dialogueId}/file/{fileId}")
+    public ResponseEntity<?> getDialogueFile(@PathVariable Long dialogueId, @PathVariable String fileId) {
+        String filePath = sessionService.findFilePathInState(dialogueId, fileId);
+        if (filePath == null) {
+            return ResponseEntity.notFound().build();
+        }
+        Path path = Path.of(filePath);
+        if (!path.toFile().exists()) {
+            return ResponseEntity.notFound().build();
+        }
+        Resource resource = new FileSystemResource(path);
+        String encodedFilename = path.getFileName().toString()
+                .replaceFirst("^[0-9a-f-]+_", "");
+        return ResponseEntity.ok()
+                .contentType(MediaType.APPLICATION_OCTET_STREAM)
+                .header(HttpHeaders.CONTENT_DISPOSITION,
+                        "inline; filename*=UTF-8''" + encodedFilename)
+                .body(resource);
+    }
+
+    @GetMapping("/dialogue/{dialogueId}/file/{fileId}/text-content")
+    public ResponseEntity<?> getDialogueFileTextContent(@PathVariable Long dialogueId, @PathVariable String fileId) {
+        String filePath = sessionService.findFilePathInState(dialogueId, fileId);
+        if (filePath == null) {
+            return ResponseEntity.notFound().build();
+        }
+        Path path = Path.of(filePath);
+        if (!path.toFile().exists()) {
+            return ResponseEntity.notFound().build();
+        }
+        try {
+            String name = path.getFileName().toString();
+            String ext = FileProcessingService.getExtension(name).toLowerCase();
+            String content = readFileContent(path, ext);
+
+            // For audio/video files, check for sidecar transcription file
+            if (content == null && FileProcessingService.isTranscribable(ext)) {
+                Path transcriptionPath = Path.of(filePath + ".transcription.md");
+                if (Files.exists(transcriptionPath)) {
+                    content = Files.readString(transcriptionPath, StandardCharsets.UTF_8);
+                }
+            }
+
+            if (content == null || content.isBlank()) {
+                return ResponseEntity.ok(Map.of("content", "", "warning", "无法提取文本内容"));
+            }
+            return ResponseEntity.ok(Map.of("content", content));
+        } catch (IOException e) {
+            return ResponseEntity.internalServerError().body(Map.of("error", "读取文件失败: " + e.getMessage()));
+        }
     }
 
     @PostMapping("/meeting/{id}/vectorize")

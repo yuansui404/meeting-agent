@@ -6,9 +6,11 @@ import com.meeting.agent.SearchDocumentsTool;
 import com.meeting.agent.SearchKnowledgeBaseTool;
 import com.meeting.agent.SearchMeetingTitlesTool;
 import com.meeting.agent.UpdateProfileTool;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.meeting.common.DocumentTextExtractor;
-import com.meeting.entity.MeetingMinutes;
-import com.meeting.repository.MeetingMinutesRepository;
+import com.meeting.entity.DialogueMessageEntity;
+import com.meeting.repository.DialogueMessageRepository;
 import com.meeting.state.PgAgentStateStore;
 import io.agentscope.core.agent.RuntimeContext;
 import io.agentscope.core.state.AgentState;
@@ -25,6 +27,7 @@ import io.agentscope.core.tool.Toolkit;
 import io.agentscope.core.tool.mcp.McpClientBuilder;
 import io.agentscope.core.tool.mcp.McpClientWrapper;
 import io.agentscope.harness.agent.HarnessAgent;
+import io.agentscope.harness.agent.memory.compaction.CompactionConfig;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -49,6 +52,7 @@ import java.util.concurrent.Executors;
 public class ChatService {
 
     private static final Logger log = LoggerFactory.getLogger(ChatService.class);
+    private static final ObjectMapper objectMapper = new ObjectMapper();
     private static final String SYSTEM_PROMPT = """
             你是会议纪要智能助手，具备以下能力：
 
@@ -68,11 +72,14 @@ public class ChatService {
             - "上传到知识库"
             - "加入知识库"
 
-            以下情况严禁调用 upload_to_knowledge_base（即使你觉得需要保存）：
+            以下情况**严禁**调用 upload_to_knowledge_base（即使你觉得需要保存）：
             - 用户要求"总结"、"详细总结"、"简单摘要"、"提取要点"
             - 用户要求"改写"、"润色"
-            - 用户要求"分析"、"查看"、"查阅"文件内容
-            - 用户只问"这是什么"、"是什么内容"
+            - 用户要求"分析"、"查看"、"查阅"、"阅读"文件内容
+            - 用户只问"这是什么"、"是什么内容"、"里面说了什么"
+            - 用户只说"帮我处理这个文件"、"读一下这个文件"
+            - 用户只是上传文件没有附带任何文字指令
+            - 用户只是上传文件并说"你好"之类的问候语
             如果不确定，就不要调用。
 
             ## 子 agent
@@ -106,6 +113,7 @@ public class ChatService {
 
     private final HarnessAgent agent;
     private final PgAgentStateStore pgAgentStateStore;
+    private final DialogueMessageRepository dialogueMessageRepository;
     private final UploadToKnowledgeBaseTool uploadToKnowledgeBaseTool;
     private final SearchKnowledgeBaseTool searchKnowledgeBaseTool;
     private final SearchDocumentsTool searchDocumentsTool;
@@ -113,8 +121,6 @@ public class ChatService {
     private final SearchMeetingTitlesTool searchMeetingTitlesTool;
     private final ReadProfileTool readProfileTool;
     private final UpdateProfileTool updateProfileTool;
-    private final ProfileService profileService;
-    private final MeetingMinutesRepository meetingRepository;
     private final VectorizationService vectorizationService;
     private final ExecutorService executor = Executors.newCachedThreadPool();
     private final OpenAIClient openAIClient = new OpenAIClient();
@@ -133,9 +139,8 @@ public class ChatService {
                        @Value("${zhipu.url:https://open.bigmodel.cn/api/paas/v4}") String zhipuUrl,
                        @Value("${tavily.api-key:}") String tavilyApiKey,
                        PgAgentStateStore pgAgentStateStore,
-                       MeetingMinutesRepository meetingRepository,
+                       DialogueMessageRepository dialogueMessageRepository,
                        VectorizationService vectorizationService,
-                       ProfileService profileService,
                        UploadToKnowledgeBaseTool uploadToKnowledgeBaseTool,
                        SearchKnowledgeBaseTool searchKnowledgeBaseTool,
                        SearchDocumentsTool searchDocumentsTool,
@@ -144,9 +149,8 @@ public class ChatService {
                        ReadProfileTool readProfileTool,
                        UpdateProfileTool updateProfileTool) {
         this.pgAgentStateStore = pgAgentStateStore;
-        this.meetingRepository = meetingRepository;
+        this.dialogueMessageRepository = dialogueMessageRepository;
         this.vectorizationService = vectorizationService;
-        this.profileService = profileService;
         this.uploadToKnowledgeBaseTool = uploadToKnowledgeBaseTool;
         this.searchKnowledgeBaseTool = searchKnowledgeBaseTool;
         this.searchDocumentsTool = searchDocumentsTool;
@@ -199,6 +203,12 @@ public class ChatService {
                 .sysPrompt(SYSTEM_PROMPT)
                 .model(model)
                 .toolkit(toolkit)
+                .compaction(CompactionConfig.builder()
+                        .triggerMessages(30)
+                        .keepMessages(10)
+                        .build())
+                .disableSessionPersistence()
+                .enableTaskList(false)
                 .maxIters(8)
                 .stateStore(pgAgentStateStore)
                 .disableFilesystemTools()
@@ -208,18 +218,19 @@ public class ChatService {
     public void streamChat(Long dialogueId, String userMessage, String metadata, SseEmitter emitter) {
         executor.submit(() -> {
             try {
-                // Parse fileIds from metadata to know which files are "new" with this message
+                // Parse file info from metadata
                 List<Long> messageFileIds = parseFileIdsFromMetadata(metadata);
+                List<Map<String, Object>> messageFiles = parseFilesFromMetadata(metadata);
 
-                // 2. Build file blocks (all dialogue files for context, marked new vs old)
-                List<ContentBlock> fileBlocks = buildFileBlocks(dialogueId, messageFileIds);
+                // Build file blocks (images for multimodal, others for text context)
+                List<ContentBlock> fileBlocks = buildFileBlocks(dialogueId, messageFileIds, messageFiles);
                 boolean hasImages = fileBlocks.stream().anyMatch(b -> b instanceof ImageBlock);
 
-                // 3. ZhiPu only for multimodal (images), DeepSeek for all text
+                // ZhiPu only for multimodal (images), DeepSeek for all text
                 if (hasImages) {
-                    streamChatWithZhipu(dialogueId, userMessage, fileBlocks, messageFileIds, emitter);
+                    streamChatWithZhipu(dialogueId, userMessage, fileBlocks, messageFileIds, messageFiles, emitter);
                 } else {
-                    streamChatWithDeepSeek(dialogueId, userMessage, fileBlocks, messageFileIds, emitter);
+                    streamChatWithDeepSeek(dialogueId, userMessage, fileBlocks, messageFileIds, messageFiles, emitter);
                 }
             } catch (Exception e) {
                 handleStreamError(emitter, e);
@@ -230,23 +241,22 @@ public class ChatService {
     private void streamChatWithDeepSeek(Long dialogueId, String userMessage,
                                         List<ContentBlock> fileBlocks,
                                         List<Long> messageFileIds,
+                                        List<Map<String, Object>> messageFiles,
                                         SseEmitter emitter) {
         StringBuilder fullResponse = new StringBuilder();
         try {
-            String profileContext = profileService.buildProfileContext();
-            String messageWithProfile = profileContext.isEmpty() ? userMessage
-                    : profileContext + "\n\n" + userMessage;
-
+            // Profile context removed from user message to avoid polluting saved state.
+            // Agent can read profile via read_profile tool when needed.
+            String fileContext = buildFileTextContext(dialogueId, messageFileIds, messageFiles);
             UserMessage msg;
-            String fileContext = buildFileTextContext(dialogueId, messageFileIds);
             if (!fileBlocks.isEmpty()) {
-                String enriched = buildEnrichedMessage(fileContext, messageWithProfile);
+                String enriched = buildEnrichedMessage(fileContext, userMessage);
                 List<ContentBlock> blocks = new ArrayList<>();
                 blocks.add(TextBlock.builder().text(enriched).build());
                 blocks.addAll(fileBlocks);
                 msg = new UserMessage(blocks);
             } else {
-                String enriched = buildEnrichedMessage(fileContext, messageWithProfile);
+                String enriched = buildEnrichedMessage(fileContext, userMessage);
                 msg = new UserMessage(enriched);
             }
 
@@ -311,9 +321,9 @@ public class ChatService {
                                                     "name", e.getToolCallName()
                                             ))));
                                 }
-                            } catch (IOException ex) {
+                            } catch (IOException | IllegalStateException ex) {
                                 clientDisconnected[0] = true;
-                                log.info("Client disconnected during DeepSeek stream, continuing to accumulate response");
+                                log.info("Client disconnected during DeepSeek stream: {}", ex.getMessage());
                             }
                         }
                     })
@@ -321,11 +331,13 @@ public class ChatService {
 
             // Self-check: validate response when tools were invoked
             String responseText = fullResponse.toString();
+            String finalResponse = responseText;
             if (invokedTools[0] && !clientDisconnected[0] && !responseText.isEmpty()) {
                 try {
                     String corrected = performSelfCheck(userMessage, responseText);
                     if (corrected != null && !corrected.equals(responseText)) {
                         emitter.send(SseEmitter.event().name("corrected").data(corrected));
+                        finalResponse = corrected;
                         // Update the agent state with corrected content
                         AgentState state = pgAgentStateStore.get("default", "dialogue-" + dialogueId,
                                 "agent_state", AgentState.class).orElse(null);
@@ -346,9 +358,88 @@ public class ChatService {
                 }
             }
 
-            if (!clientDisconnected[0]) {
+            // Clean up: replace enriched user message with clean original in persisted state.
+            try {
+                AgentState st = pgAgentStateStore.get("default", "dialogue-" + dialogueId,
+                        "agent_state", AgentState.class).orElse(null);
+                if (st != null) {
+                    var context = st.contextMutable();
+                    for (int i = context.size() - 1; i >= 0; i--) {
+                        if (context.get(i).getRole() == MsgRole.USER) {
+                            // Build a clean UserMessage preserving original text and file metadata
+                            UserMessage.Builder builder = UserMessage.builder().textContent(userMessage);
+                            Map<String, Object> meta = new HashMap<>();
+                            if (messageFileIds != null && !messageFileIds.isEmpty()) {
+                                meta.put("fileIds", messageFileIds);
+                            }
+                            if (messageFiles != null && !messageFiles.isEmpty()) {
+                                meta.put("files", messageFiles);
+                            }
+                            if (!meta.isEmpty()) {
+                                builder.metadata(meta);
+                            }
+                            context.set(i, builder.build());
+                            break;
+                        }
+                    }
+                    pgAgentStateStore.save("default", "dialogue-" + dialogueId, "agent_state", st);
+                } else {
+                    // New session: build initial state with user message + file metadata
+                    UserMessage.Builder builder = UserMessage.builder().textContent(userMessage);
+                    Map<String, Object> meta = new HashMap<>();
+                    if (messageFileIds != null && !messageFileIds.isEmpty()) {
+                        meta.put("fileIds", messageFileIds);
+                    }
+                    if (messageFiles != null && !messageFiles.isEmpty()) {
+                        meta.put("files", messageFiles);
+                    }
+                    if (!meta.isEmpty()) {
+                        builder.metadata(meta);
+                    }
+                    AgentState ns = AgentState.builder().sessionId("dialogue-" + dialogueId).build();
+                    ns.contextMutable().add(builder.build());
+                    String respText = fullResponse.toString();
+                    if (!respText.isEmpty()) {
+                        ns.contextMutable().add(new AssistantMessage(respText));
+                    }
+                    pgAgentStateStore.save("default", "dialogue-" + dialogueId, "agent_state", ns);
+                    log.info("Persisted user message to agent state for dialogue {} (state was empty, with file meta)", dialogueId);
+                }
+            } catch (Exception e) {
+                log.warn("Failed to clean up user message for dialogue {}: {}", dialogueId, e.getMessage());
+            }
+
+            // Persist user + assistant messages to dialogue_messages
+            try {
+                String filesJson = messageFiles != null && !messageFiles.isEmpty()
+                        ? objectMapper.writeValueAsString(messageFiles) : null;
+                DialogueMessageEntity dmUser = new DialogueMessageEntity();
+                dmUser.setDialogueId(dialogueId);
+                dmUser.setRole("user");
+                dmUser.setContent(userMessage);
+                dmUser.setMessageType("text");
+                dmUser.setFiles(filesJson);
+                dialogueMessageRepository.save(dmUser);
+
+                if (!finalResponse.isEmpty()) {
+                    DialogueMessageEntity asstMsg = new DialogueMessageEntity();
+                    asstMsg.setDialogueId(dialogueId);
+                    asstMsg.setRole("assistant");
+                    asstMsg.setContent(finalResponse);
+                    asstMsg.setMessageType("text");
+                    dialogueMessageRepository.save(asstMsg);
+                }
+            } catch (Exception e) {
+                log.warn("Failed to persist dialogue_messages for dialogue {}: {}", dialogueId, e.getMessage());
+            }
+
+            try {
                 emitter.send(SseEmitter.event().name("done").data(""));
+            } catch (IOException | IllegalStateException ignored) {
+            }
+            try {
                 emitter.complete();
+            } catch (Exception ignored) {
             }
         } catch (Exception e) {
             handleStreamError(emitter, e);
@@ -358,15 +449,12 @@ public class ChatService {
     private void streamChatWithZhipu(Long dialogueId, String userMessage,
                                      List<ContentBlock> fileBlocks,
                                      List<Long> messageFileIds,
+                                     List<Map<String, Object>> messageFiles,
                                      SseEmitter emitter) {
         StringBuilder fullResponse = new StringBuilder();
         try {
-            String profileContext = profileService.buildProfileContext();
-            String messageWithProfile = profileContext.isEmpty() ? userMessage
-                    : profileContext + "\n\n" + userMessage;
-
-            String fileContext = buildFileTextContext(dialogueId, messageFileIds);
-            String enriched = buildEnrichedMessage(fileContext, messageWithProfile);
+            String fileContext = buildFileTextContext(dialogueId, messageFileIds, messageFiles);
+            String enriched = buildEnrichedMessage(fileContext, userMessage);
 
             // Build multimodal content parts
             List<Object> contentParts = new ArrayList<>();
@@ -414,9 +502,9 @@ public class ChatService {
                                     if (!clientDisconnected[0]) {
                                         try {
                                             emitter.send(SseEmitter.event().data(content));
-                                        } catch (IOException ex) {
+                                        } catch (IOException | IllegalStateException ex) {
                                             clientDisconnected[0] = true;
-                                            log.info("Client disconnected during ZhiPu stream, continuing to accumulate response");
+                                            log.info("Client disconnected during ZhiPu stream: {}", ex.getMessage());
                                         }
                                     }
                                 }
@@ -425,9 +513,87 @@ public class ChatService {
                     })
                     .blockLast();
 
-            if (!clientDisconnected[0]) {
+            // Clean up: replace enriched user message with clean original in persisted state.
+            try {
+                AgentState st = pgAgentStateStore.get("default", "dialogue-" + dialogueId,
+                        "agent_state", AgentState.class).orElse(null);
+                if (st != null) {
+                    var ctx = st.contextMutable();
+                    for (int i = ctx.size() - 1; i >= 0; i--) {
+                        if (ctx.get(i).getRole() == MsgRole.USER) {
+                            UserMessage.Builder builder = UserMessage.builder().textContent(userMessage);
+                            Map<String, Object> meta = new HashMap<>();
+                            if (messageFileIds != null && !messageFileIds.isEmpty()) {
+                                meta.put("fileIds", messageFileIds);
+                            }
+                            if (messageFiles != null && !messageFiles.isEmpty()) {
+                                meta.put("files", messageFiles);
+                            }
+                            if (!meta.isEmpty()) {
+                                builder.metadata(meta);
+                            }
+                            ctx.set(i, builder.build());
+                            break;
+                        }
+                    }
+                    pgAgentStateStore.save("default", "dialogue-" + dialogueId, "agent_state", st);
+                } else {
+                    UserMessage.Builder builder = UserMessage.builder().textContent(userMessage);
+                    Map<String, Object> meta = new HashMap<>();
+                    if (messageFileIds != null && !messageFileIds.isEmpty()) {
+                        meta.put("fileIds", messageFileIds);
+                    }
+                    if (messageFiles != null && !messageFiles.isEmpty()) {
+                        meta.put("files", messageFiles);
+                    }
+                    if (!meta.isEmpty()) {
+                        builder.metadata(meta);
+                    }
+                    AgentState ns = AgentState.builder().sessionId("dialogue-" + dialogueId).build();
+                    ns.contextMutable().add(builder.build());
+                    String respText = fullResponse.toString();
+                    if (!respText.isEmpty()) {
+                        ns.contextMutable().add(new AssistantMessage(respText));
+                    }
+                    pgAgentStateStore.save("default", "dialogue-" + dialogueId, "agent_state", ns);
+                    log.info("Persisted user message to agent state for dialogue {} (state was empty, with file meta)", dialogueId);
+                }
+            } catch (Exception e) {
+                log.warn("Failed to clean up user message for dialogue {}: {}", dialogueId, e.getMessage());
+            }
+
+            // Persist user + assistant messages to dialogue_messages
+            try {
+                String respText = fullResponse.toString();
+                String filesJson = messageFiles != null && !messageFiles.isEmpty()
+                        ? objectMapper.writeValueAsString(messageFiles) : null;
+                DialogueMessageEntity dmUser = new DialogueMessageEntity();
+                dmUser.setDialogueId(dialogueId);
+                dmUser.setRole("user");
+                dmUser.setContent(userMessage);
+                dmUser.setMessageType("text");
+                dmUser.setFiles(filesJson);
+                dialogueMessageRepository.save(dmUser);
+
+                if (!respText.isEmpty()) {
+                    DialogueMessageEntity asstMsg = new DialogueMessageEntity();
+                    asstMsg.setDialogueId(dialogueId);
+                    asstMsg.setRole("assistant");
+                    asstMsg.setContent(respText);
+                    asstMsg.setMessageType("text");
+                    dialogueMessageRepository.save(asstMsg);
+                }
+            } catch (Exception e) {
+                log.warn("Failed to persist dialogue_messages for dialogue {}: {}", dialogueId, e.getMessage());
+            }
+
+            try {
                 emitter.send(SseEmitter.event().name("done").data(""));
+            } catch (IOException | IllegalStateException ignored) {
+            }
+            try {
                 emitter.complete();
+            } catch (Exception ignored) {
             }
 
         } catch (Exception e) {
@@ -584,104 +750,116 @@ public class ChatService {
     }
 
     /**
-     * Filter meetings to only include those matching the message's fileIds.
-     * If messageFileIds is empty (e.g., existing messages without fileIds),
-     * include all files for backward compatibility.
+     * Parse file metadata array from metadata JSON string.
+     * New format: {"files":[{"fileId":"uuid","filePath":"/path","ext":".docx",...}]}
      */
-    private List<MeetingMinutes> filterFilesByMessageIds(List<MeetingMinutes> allFiles, List<Long> messageFileIds) {
-        if (messageFileIds == null || messageFileIds.isEmpty()) {
-            return allFiles; // backward compatible: include all dialogue files
-        }
-        return allFiles.stream()
-                .filter(f -> messageFileIds.contains(f.getId()))
-                .toList();
-    }
-
-    private String buildFileTextContext(Long dialogueId, List<Long> messageFileIds) {
+    @SuppressWarnings("unchecked")
+    private List<Map<String, Object>> parseFilesFromMetadata(String metadata) {
+        if (metadata == null || metadata.isBlank()) return List.of();
         try {
-            List<MeetingMinutes> files = meetingRepository.findByDialogueId(dialogueId);
-            if (files.isEmpty()) return "";
-
-            Set<Long> newFileIds = (messageFileIds == null || messageFileIds.isEmpty())
-                    ? Set.of() : new HashSet<>(messageFileIds);
-            boolean hasNewFiles = !newFileIds.isEmpty();
-
-            StringBuilder sb = new StringBuilder();
-            List<MeetingMinutes> newFiles = new ArrayList<>();
-            List<MeetingMinutes> oldFiles = new ArrayList<>();
-            for (MeetingMinutes f : files) {
-                if (!"completed".equals(f.getStatus())) continue;
-                if (newFileIds.contains(f.getId())) {
-                    newFiles.add(f);
-                } else {
-                    oldFiles.add(f);
+            int filesIdx = metadata.indexOf("\"files\"");
+            if (filesIdx < 0) return List.of();
+            // Find the start of the JSON array after "files":
+            int arrayStart = metadata.indexOf("[", filesIdx);
+            if (arrayStart < 0) return List.of();
+            // Find the matching closing bracket (simple approach: find last ] after arrayStart)
+            int arrayEnd = metadata.lastIndexOf("]");
+            if (arrayEnd <= arrayStart) return List.of();
+            String arrayJson = metadata.substring(arrayStart, arrayEnd + 1);
+            var mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+            var list = mapper.readValue(arrayJson, List.class);
+            List<Map<String, Object>> result = new ArrayList<>();
+            for (Object item : list) {
+                if (item instanceof Map) {
+                    result.add((Map<String, Object>) item);
                 }
             }
-
-            if (hasNewFiles) {
-                sb.append("【本次提交的文件 — 请重点参考这些文件回答】\n");
-                for (MeetingMinutes f : newFiles) {
-                    appendFileContent(sb, f);
-                }
-                sb.append("\n");
-            }
-
-            if (!oldFiles.isEmpty()) {
-                sb.append("【对话历史中的文件 — 仅在用户提及相关内容时参考】\n");
-                for (MeetingMinutes f : oldFiles) {
-                    appendFileContent(sb, f);
-                }
-            }
-
-            return sb.toString();
+            return result;
         } catch (Exception e) {
-            return "";
+            log.warn("Failed to parse files from metadata: {}", e.getMessage());
+            return List.of();
         }
     }
 
-    private void appendFileContent(StringBuilder sb, MeetingMinutes f) {
-        String ext = FileProcessingService.getExtension(f.getTitle()).toLowerCase();
-        if (IMAGE_FORMATS.contains(ext)) return;
+    /**
+     * Build file context for AI from file metadata in state_json.
+     */
+    private String buildFileTextContext(Long dialogueId, List<Long> messageFileIds, List<Map<String, Object>> messageFiles) {
+        StringBuilder sb = new StringBuilder();
 
-        if (f.getFileSize() != null && f.getFileSize() > MAX_FILE_SIZE) {
-            sb.append("【来源：").append(f.getTitle()).append("】（文件过大，跳过内容提取）\n");
+        // New-style files from metadata (disk paths)
+        if (messageFiles != null && !messageFiles.isEmpty()) {
+            sb.append("【本次提交的文件 — 请重点参考这些文件回答】\n");
+            for (Map<String, Object> fm : messageFiles) {
+                appendFileContentFromMeta(sb, fm);
+            }
+            sb.append("\n");
+        }
+
+        return sb.toString();
+    }
+
+    /**
+     * Read file content from disk path stored in file metadata.
+     * For audio/video files, reads the sidecar transcription file if available.
+     */
+    private void appendFileContentFromMeta(StringBuilder sb, Map<String, Object> fm) {
+        String name = (String) fm.get("fileName");
+        String path = (String) fm.get("filePath");
+        String ext = (String) fm.get("ext");
+        if (name == null || path == null || ext == null) return;
+        if (IMAGE_FORMATS.contains(ext.toLowerCase())) return;
+
+        Number sizeNum = (Number) fm.get("fileSize");
+        long size = sizeNum != null ? sizeNum.longValue() : 0;
+        if (size > MAX_FILE_SIZE) {
+            sb.append("【来源：").append(name).append("】（文件过大，跳过内容提取）\n");
             return;
         }
 
-        String content = extractFileContent(Path.of(f.getFilePath()), ext);
+        String content = extractFileContent(Path.of(path), ext.toLowerCase());
+
+        // For audio/video files, check for sidecar transcription file
+        if (content == null && FileProcessingService.isTranscribable(ext.toLowerCase())) {
+            Path transcriptionPath = Path.of(path + ".transcription.md");
+            if (Files.exists(transcriptionPath)) {
+                try {
+                    content = Files.readString(transcriptionPath, StandardCharsets.UTF_8);
+                } catch (IOException e) {
+                    log.warn("Failed to read transcription sidecar file: {}", transcriptionPath);
+                }
+            }
+        }
+
         if (content != null && !content.isBlank()) {
             String preview = content.length() > 2000 ? content.substring(0, 2000) + "..." : content;
-            sb.append("【来源：").append(f.getTitle()).append("】\n").append(preview).append("\n\n");
+            sb.append("【来源：").append(name).append("】\n").append(preview).append("\n\n");
         } else {
-            sb.append("【来源：").append(f.getTitle()).append("】（无法提取文字内容）\n");
+            sb.append("【来源：").append(name).append("】（无法提取文字内容）\n");
         }
     }
 
-    private List<ContentBlock> buildFileBlocks(Long dialogueId, List<Long> messageFileIds) {
-        try {
-            List<MeetingMinutes> files = meetingRepository.findByDialogueId(dialogueId);
-            if (files.isEmpty()) return List.of();
+    private List<ContentBlock> buildFileBlocks(Long dialogueId, List<Long> messageFileIds, List<Map<String, Object>> messageFiles) {
+        List<ContentBlock> blocks = new ArrayList<>();
 
-            List<ContentBlock> blocks = new ArrayList<>();
-            Set<Long> newFileIds = (messageFileIds == null || messageFileIds.isEmpty())
-                    ? Set.of() : new HashSet<>(messageFileIds);
-
-            // Only return ImageBlock for images; text content is handled by buildFileTextContext
-            for (MeetingMinutes f : files) {
-                if (!"completed".equals(f.getStatus())) continue;
-                String ext = FileProcessingService.getExtension(f.getTitle()).toLowerCase();
-                if (!IMAGE_FORMATS.contains(ext)) continue;
-                Path filePath = Path.of(f.getFilePath());
+        // New-style files from metadata
+        if (messageFiles != null) {
+            for (Map<String, Object> fm : messageFiles) {
+                String ext = (String) fm.get("ext");
+                if (ext == null || !IMAGE_FORMATS.contains(ext.toLowerCase())) continue;
+                String path = (String) fm.get("filePath");
+                if (path == null) continue;
+                Path filePath = Path.of(path);
                 if (!Files.exists(filePath)) continue;
-
-                String mediaType = getImageMimeType(ext);
-                String base64 = Base64.getEncoder().encodeToString(Files.readAllBytes(filePath));
-                blocks.add(new ImageBlock(new Base64Source(mediaType, base64)));
+                try {
+                    String mediaType = getImageMimeType(ext.toLowerCase());
+                    String base64 = Base64.getEncoder().encodeToString(Files.readAllBytes(filePath));
+                    blocks.add(new ImageBlock(new Base64Source(mediaType, base64)));
+                } catch (IOException ignored) {}
             }
-            return blocks;
-        } catch (Exception e) {
-            return List.of();
         }
+
+        return blocks;
     }
 
     private String extractFileContent(Path filePath, String ext) {

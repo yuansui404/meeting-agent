@@ -1,9 +1,10 @@
 package com.meeting.agent;
 
-import com.meeting.entity.MeetingMinutes;
 import com.meeting.service.FileProcessingService;
 import org.springframework.stereotype.Component;
 import org.springframework.web.multipart.MultipartFile;
+
+import java.util.Map;
 
 /**
  * 文件处理 Agent
@@ -18,15 +19,11 @@ public class FileProcessingAgent {
         this.fileProcessingService = fileProcessingService;
     }
 
-    public MeetingMinutes processFile(MultipartFile file, Long dialogueId) {
+    public Map<String, Object> processFile(MultipartFile file, Long dialogueId) {
         try {
-            return fileProcessingService.uploadFile(file, dialogueId);
+            return fileProcessingService.saveDialogueFile(file, dialogueId);
         } catch (java.io.IOException e) {
             throw new RuntimeException("File processing failed: " + e.getMessage(), e);
         }
-    }
-
-    public void cleanup(Long meetingId) {
-        fileProcessingService.cleanupFile(meetingId);
     }
 }

@@ -176,10 +176,20 @@ CREATE TABLE IF NOT EXISTS rewrite_feedback (
 CREATE INDEX IF NOT EXISTS idx_rewrite_feedback_result ON rewrite_feedback(rewrite_result_id);
 
 -- ============================================================
--- 数据迁移（从旧 dialogues/dialogue_messages 表迁移到 agent_sessions）
--- 幂等执行：仅当旧 dialogues 表存在且 agent_sessions 暂无数据时执行
+-- 对话消息存储表（独立行存储，替代 state_json 中的内联消息）
+-- 2026-07-03 新增
 -- ============================================================
-DROP TABLE IF EXISTS dialogue_messages, dialogues CASCADE;
--- 注：旧表的 CASCADE DROP 会同时清理旧 FK 约束。如果旧表不存在则跳过。
+CREATE TABLE IF NOT EXISTS dialogue_messages (
+    id BIGSERIAL PRIMARY KEY,
+    dialogue_id BIGINT NOT NULL REFERENCES agent_sessions(id) ON DELETE CASCADE,
+    role VARCHAR(16) NOT NULL DEFAULT 'user',
+    content TEXT NOT NULL DEFAULT '',
+    files TEXT,
+    message_type VARCHAR(32) DEFAULT 'text',
+    metadata TEXT,
+    created_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_dialogue_messages_dialogue_id ON dialogue_messages(dialogue_id, id);
 
--- 后续所有的 FK 已在上文直接引用 agent_sessions。
+-- 清理旧表（开发阶段使用）
+DROP TABLE IF EXISTS dialogues CASCADE;

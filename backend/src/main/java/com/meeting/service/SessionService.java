@@ -1,14 +1,21 @@
 package com.meeting.service;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.meeting.entity.DialogueMessageEntity;
 import com.meeting.entity.SessionEntity;
+import com.meeting.repository.DialogueMessageRepository;
 import com.meeting.repository.SessionRepository;
 import io.agentscope.core.message.Msg;
+import io.agentscope.core.message.MsgRole;
 import io.agentscope.core.state.AgentState;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.time.LocalDateTime;
 import java.util.*;
 
@@ -16,11 +23,15 @@ import java.util.*;
 public class SessionService {
 
     private static final Logger log = LoggerFactory.getLogger(SessionService.class);
+    private static final ObjectMapper objectMapper = new ObjectMapper();
 
     private final SessionRepository sessionRepository;
+    private final DialogueMessageRepository dialogueMessageRepository;
 
-    public SessionService(SessionRepository sessionRepository) {
+    public SessionService(SessionRepository sessionRepository,
+                          DialogueMessageRepository dialogueMessageRepository) {
         this.sessionRepository = sessionRepository;
+        this.dialogueMessageRepository = dialogueMessageRepository;
     }
 
     @Transactional
@@ -42,7 +53,7 @@ public class SessionService {
         SessionEntity entity = sessionRepository.findById(id)
                 .orElseThrow(() -> new IllegalArgumentException("Session not found: " + id));
 
-        List<Map<String, Object>> messages = extractMessages(entity);
+        List<Map<String, Object>> messages = queryMessages(id);
 
         Map<String, Object> dialogue = new HashMap<>();
         dialogue.put("id", entity.getId());
@@ -56,6 +67,34 @@ public class SessionService {
         result.put("dialogue", dialogue);
         result.put("messages", messages);
         return result;
+    }
+
+    /**
+     * Build messages list from dialogue_messages table.
+     */
+    private List<Map<String, Object>> queryMessages(Long dialogueId) {
+        List<DialogueMessageEntity> entities = dialogueMessageRepository.findByDialogueIdOrderById(dialogueId);
+        List<Map<String, Object>> messages = new ArrayList<>();
+        for (DialogueMessageEntity msg : entities) {
+            Map<String, Object> m = new HashMap<>();
+            m.put("id", msg.getId());
+            m.put("dialogueId", dialogueId);
+            m.put("role", msg.getRole().toLowerCase());
+            m.put("content", msg.getContent() != null ? msg.getContent() : "");
+            m.put("messageType", msg.getMessageType() != null ? msg.getMessageType() : "text");
+            m.put("timestamp", msg.getCreatedAt() != null ? msg.getCreatedAt().toString() : null);
+            m.put("metadata", msg.getMetadata());
+            // Parse files JSON into list
+            if (msg.getFiles() != null && !msg.getFiles().isBlank()) {
+                try {
+                    m.put("files", objectMapper.readValue(msg.getFiles(), List.class));
+                } catch (JsonProcessingException e) {
+                    log.warn("Failed to parse files JSON for message {}: {}", msg.getId(), e.getMessage());
+                }
+            }
+            messages.add(m);
+        }
+        return messages;
     }
 
     public List<Map<String, Object>> listSessions() {
@@ -91,6 +130,7 @@ public class SessionService {
 
     @Transactional
     public void deleteSession(Long id) {
+        dialogueMessageRepository.deleteByDialogueId(id);
         sessionRepository.deleteById(id);
     }
 
@@ -103,8 +143,7 @@ public class SessionService {
     }
 
     /**
-     * Directly save a message into the session's AgentState.
-     * Used by RewriteService and other components that run outside the agent loop.
+     * Add a message to both state_json (agent context) and dialogue_messages (rendering).
      */
     @Transactional
     public void addMessage(Long sessionId, String role, String content, String messageType, String metadata) {
@@ -112,6 +151,15 @@ public class SessionService {
                 .orElseThrow(() -> new IllegalArgumentException("Session not found: " + sessionId));
         addMessageToSession(entity, role, content, messageType, metadata);
         sessionRepository.save(entity);
+
+        // Also write to dialogue_messages
+        DialogueMessageEntity dmsg = new DialogueMessageEntity();
+        dmsg.setDialogueId(sessionId);
+        dmsg.setRole(role);
+        dmsg.setContent(content);
+        dmsg.setMessageType(messageType);
+        dmsg.setMetadata(metadata);
+        dialogueMessageRepository.save(dmsg);
     }
 
     private void addMessageToSession(SessionEntity entity, String role, String content,
@@ -121,7 +169,6 @@ public class SessionService {
             AgentState state = (json != null && !json.isBlank())
                     ? AgentState.fromJsonString(json)
                     : AgentState.builder().sessionId(entity.getSessionId()).build();
-            // Append message to context
             state.contextMutable().add(buildMsg(role, content, messageType, metadata));
             entity.setStateJson(state.toJson());
             entity.setMessageCount(state.getContext().size());
@@ -137,29 +184,65 @@ public class SessionService {
         return new io.agentscope.core.message.AssistantMessage(content);
     }
 
-    private List<Map<String, Object>> extractMessages(SessionEntity entity) {
-        List<Map<String, Object>> messages = new ArrayList<>();
-        String json = entity.getStateJson();
-        if (json == null || json.isBlank()) return messages;
+    /**
+     * Extract all files from dialogue_messages table.
+     */
+    public List<Map<String, Object>> extractFilesFromState(Long sessionId) {
+        List<DialogueMessageEntity> msgs = dialogueMessageRepository
+                .findByDialogueIdAndRoleAndFilesIsNotNull(sessionId, "user");
+        List<Map<String, Object>> files = new ArrayList<>();
+        Set<String> seenIds = new HashSet<>();
 
-        try {
-            AgentState state = AgentState.fromJsonString(json);
-            List<Msg> context = state.getContext();
-            int idx = 0;
-            for (Msg msg : context) {
-                Map<String, Object> m = new HashMap<>();
-                m.put("id", ++idx);
-                m.put("dialogueId", entity.getId());
-                m.put("role", msg.getRole());
-                m.put("content", msg.getTextContent());
-                m.put("messageType", "text");
-                m.put("timestamp", msg.getTimestamp());
-                m.put("metadata", null);
-                messages.add(m);
+        for (DialogueMessageEntity msg : msgs) {
+            List<Map<String, Object>> fileList = parseFilesJson(msg.getFiles());
+            if (fileList == null) continue;
+            for (Map<String, Object> fm : fileList) {
+                String fileId = (String) fm.get("fileId");
+                if (fileId == null || seenIds.contains(fileId)) continue;
+                seenIds.add(fileId);
+
+                // Check for sidecar transcription file
+                String filePath = (String) fm.get("filePath");
+                if (filePath != null) {
+                    Path transcriptionPath = Path.of(filePath + ".transcription.md");
+                    if (Files.exists(transcriptionPath)) {
+                        fm.put("transcriptionFilePath", transcriptionPath.toString());
+                    }
+                }
+
+                files.add(fm);
             }
-        } catch (Exception e) {
-            log.warn("Failed to extract messages from AgentState for session {}: {}", entity.getId(), e.getMessage());
         }
-        return messages;
+        return files;
+    }
+
+    /**
+     * Find a file path in dialogue_messages by fileId.
+     */
+    public String findFilePathInState(Long sessionId, String fileId) {
+        List<DialogueMessageEntity> msgs = dialogueMessageRepository
+                .findByDialogueIdAndRoleAndFilesIsNotNull(sessionId, "user");
+        for (DialogueMessageEntity msg : msgs) {
+            List<Map<String, Object>> fileList = parseFilesJson(msg.getFiles());
+            if (fileList == null) continue;
+            for (Map<String, Object> fm : fileList) {
+                if (fileId.equals(fm.get("fileId"))) {
+                    Object path = fm.get("filePath");
+                    return path instanceof String ? (String) path : null;
+                }
+            }
+        }
+        return null;
+    }
+
+    @SuppressWarnings("unchecked")
+    private List<Map<String, Object>> parseFilesJson(String filesJson) {
+        if (filesJson == null || filesJson.isBlank()) return null;
+        try {
+            return objectMapper.readValue(filesJson, List.class);
+        } catch (JsonProcessingException e) {
+            log.warn("Failed to parse files JSON: {}", e.getMessage());
+            return null;
+        }
     }
 }

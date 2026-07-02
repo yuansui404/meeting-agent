@@ -5,7 +5,7 @@ import org.springframework.stereotype.Component;
 
 /**
  * 语音转写 Agent
- * 负责调用 FunASR 服务进行语音识别和说话人识别
+ * 负责调用 MiMo-V2.5-ASR 服务进行语音识别
  */
 @Component
 public class TranscriptionAgent {
@@ -16,11 +16,7 @@ public class TranscriptionAgent {
         this.transcriptionService = transcriptionService;
     }
 
-    public void startTranscription(Long meetingId) {
-        transcriptionService.startTranscription(meetingId);
-    }
-
-    public String getTranscription(Long meetingId) {
-        return transcriptionService.getTranscription(meetingId);
+    public void startTranscription(String filePath, String fileName, Long dialogueId) {
+        transcriptionService.startTranscription(filePath, fileName, dialogueId);
     }
 }

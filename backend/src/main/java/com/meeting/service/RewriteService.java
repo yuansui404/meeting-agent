@@ -1,26 +1,22 @@
 package com.meeting.service;
 
-import com.meeting.entity.MeetingMinutes;
 import com.meeting.entity.RewriteResult;
-import com.meeting.repository.MeetingMinutesRepository;
 import com.meeting.repository.RewriteResultRepository;
 import io.agentscope.core.formatter.openai.dto.OpenAIMessage;
 import io.agentscope.core.formatter.openai.dto.OpenAIRequest;
 import io.agentscope.core.formatter.openai.dto.OpenAIResponse;
 import io.agentscope.core.model.OpenAIClient;
-import org.apache.poi.xwpf.usermodel.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
-import java.io.*;
+import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.LocalDateTime;
-import java.time.format.DateTimeFormatter;
 import java.util.*;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -30,14 +26,8 @@ import java.util.stream.Collectors;
 public class RewriteService {
 
     private static final Logger log = LoggerFactory.getLogger(RewriteService.class);
-    private static final long MAX_DRAFT_SIZE = 10 * 1024 * 1024;
     private static final int MAX_TOKENS = 8000;
-    private static final int MAX_FILE_PREVIEW = 4000;
 
-    private static final Set<String> TEXT_FORMATS = Set.of(".txt", ".md", ".csv", ".json", ".xml", ".html", ".yaml", ".yml", ".properties");
-    private static final Set<String> DOC_FORMATS = Set.of(".pdf", ".doc", ".docx");
-
-    private final MeetingMinutesRepository meetingRepository;
     private final RewriteResultRepository rewriteResultRepository;
     private final SessionService sessionService;
     private final StyleLearningService styleLearningService;
@@ -53,11 +43,9 @@ public class RewriteService {
                           @Value("${deepseek.model:deepseek-chat}") String modelName,
                           @Value("${deepseek.url:https://api.deepseek.com}") String apiUrl,
                           @Value("${file.upload-dir:/app/data/uploads}") String uploadDir,
-                          MeetingMinutesRepository meetingRepository,
                           RewriteResultRepository rewriteResultRepository,
                           SessionService sessionService,
                           StyleLearningService styleLearningService) {
-        this.meetingRepository = meetingRepository;
         this.rewriteResultRepository = rewriteResultRepository;
         this.sessionService = sessionService;
         this.styleLearningService = styleLearningService;
@@ -129,116 +117,6 @@ public class RewriteService {
         });
     }
 
-    public void streamRewrite(Long dialogueId, List<Long> sourceFileIds, List<Long> manualReferenceIds, SseEmitter emitter) {
-        executor.submit(() -> {
-            StringBuilder fullResponse = new StringBuilder();
-            List<Long> referenceIds = new ArrayList<>();
-
-            try {
-                // 1. Load source file contents
-                List<MeetingMinutes> sourceFiles = loadSourceFiles(sourceFileIds);
-                if (sourceFiles.isEmpty()) {
-                    emitter.send(SseEmitter.event().name("error").data("请先上传需要改写的文件"));
-                    emitter.complete();
-                    return;
-                }
-
-                String sourceContent = buildSourceContent(sourceFiles);
-                if (sourceContent.length() > MAX_TOKENS) {
-                    sourceContent = sourceContent.substring(0, MAX_TOKENS) + "\n...（内容过长，已截断至 " + MAX_TOKENS + " 字符）";
-                }
-
-                // 2. Get style examples
-                List<Long> excludeIds = new ArrayList<>();
-                if (manualReferenceIds == null || manualReferenceIds.isEmpty()) {
-                    // Automatic retrieval: check if this dialogue has previous rewrites
-                    List<RewriteResult> previous = rewriteResultRepository.findByDialogueIdOrderByVersionDesc(dialogueId);
-                    if (!previous.isEmpty()) {
-                        // "换一种风格" mode — exclude previous references
-                        String prevRefs = previous.get(0).getReferenceIds();
-                        if (prevRefs != null && !prevRefs.isEmpty()) {
-                            try {
-                                if (prevRefs.startsWith("[")) {
-                                    excludeIds.addAll(parseJsonIdList(prevRefs));
-                                }
-                            } catch (Exception ignored) {}
-                        }
-                    }
-                } else {
-                    // Manual reference specified
-                    referenceIds.addAll(manualReferenceIds);
-                    excludeIds.addAll(manualReferenceIds);
-                }
-
-                String styleExamples = styleLearningService.buildFullDocumentReferences(sourceContent, excludeIds, manualReferenceIds);
-                log.info("Full document references for dialogue {}: {} chars, excludeIds={}, manualRefs={}",
-                        dialogueId, styleExamples != null ? styleExamples.length() : 0, excludeIds, manualReferenceIds);
-
-                // 3. Build prompt
-                String prompt = buildRewritePrompt(sourceContent, styleExamples);
-
-                // 4. Call DeepSeek API (SSE streaming)
-                String apiResponse = streamDeepSeek(prompt, emitter, fullResponse);
-
-                // 4.5 Proofreading pass (non-streaming)
-                if (fullResponse.length() > 0) {
-                    try {
-                        String proofreadResult = proofreadContent(
-                                fullResponse.toString(), sourceContent);
-                        if (proofreadResult != null && !proofreadResult.equals(fullResponse.toString())) {
-                            log.info("Proofreading applied corrections for dialogue {}, original={} chars, corrected={} chars",
-                                    dialogueId, fullResponse.length(), proofreadResult.length());
-                            fullResponse = new StringBuilder(proofreadResult);
-                            // Notify client with corrected content
-                            try {
-                                emitter.send(SseEmitter.event().name("corrected").data(proofreadResult));
-                            } catch (IOException ignored) {
-                                // Client may have disconnected
-                            }
-                        } else {
-                            log.info("Proofreading: no corrections needed for dialogue {}", dialogueId);
-                        }
-                    } catch (Exception e) {
-                        log.warn("Proofreading failed for dialogue {}, continuing with original: {}",
-                                dialogueId, e.getMessage());
-                    }
-                }
-
-                // 5. Save rewrite result
-                if (fullResponse.length() > 0) {
-                    RewriteResult result = saveRewriteResult(dialogueId, sourceFileIds, referenceIds, fullResponse.toString());
-                    String docxPath = generateComparisonDocx(sourceFiles, fullResponse.toString(), dialogueId, result.getVersion());
-
-                    if (docxPath != null) {
-                        result.setDocxPath(docxPath);
-                        rewriteResultRepository.save(result);
-                    }
-
-                    // 6. Save assistant message with metadata
-                    String meta = "{\"type\":\"rewrite\",\"rewriteResultId\":" + result.getId() + "}";
-                    sessionService.addMessage(dialogueId, "assistant", fullResponse.toString(), "text", meta);
-                }
-
-                emitter.send(SseEmitter.event().name("done").data(""));
-                emitter.complete();
-            } catch (Exception e) {
-                log.error("Rewrite failed for dialogue {}: {}", dialogueId, e.getMessage(), e);
-                if (fullResponse.length() > 0) {
-                    // Save partial response on error
-                    try {
-                        RewriteResult result = saveRewriteResult(dialogueId, sourceFileIds, referenceIds, fullResponse.toString());
-                        String meta = "{\"type\":\"rewrite\",\"rewriteResultId\":" + result.getId() + "}";
-                        sessionService.addMessage(dialogueId, "assistant", fullResponse.toString(), "text", meta);
-                    } catch (Exception ignored) {}
-                }
-                try {
-                    emitter.send(SseEmitter.event().name("error").data("改写失败: " + e.getMessage()));
-                } catch (IOException ignored) {}
-                emitter.completeWithError(e);
-            }
-        });
-    }
-
     private String buildRewritePrompt(String sourceContent, String documentReferences) {
         StringBuilder sb = new StringBuilder();
         sb.append("请根据以下原始内容，润色改写为正式的会议纪要。\n\n");
@@ -263,68 +141,6 @@ public class RewriteService {
         sb.append("\n====================\n");
 
         return sb.toString();
-    }
-
-    private List<MeetingMinutes> loadSourceFiles(List<Long> sourceFileIds) {
-        if (sourceFileIds == null || sourceFileIds.isEmpty()) return List.of();
-        return sourceFileIds.stream()
-                .map(id -> meetingRepository.findById(id).orElse(null))
-                .filter(Objects::nonNull)
-                .filter(f -> "completed".equals(f.getStatus()))
-                .collect(Collectors.toList());
-    }
-
-    private String buildSourceContent(List<MeetingMinutes> sourceFiles) {
-        StringBuilder sb = new StringBuilder();
-        for (MeetingMinutes f : sourceFiles) {
-            if (sb.length() > 0) sb.append("\n\n===== 文件分割 =====\n\n");
-            sb.append("文件：").append(f.getTitle()).append("\n\n");
-
-            String content = null;
-            // Prefer reading the actual file for text/document formats
-            String ext = getExtension(f.getTitle());
-            if (f.getFilePath() != null && (TEXT_FORMATS.contains(ext) || DOC_FORMATS.contains(ext))) {
-                Path filePath = Path.of(f.getFilePath());
-                if (Files.exists(filePath) && f.getFileSize() != null && f.getFileSize() <= MAX_DRAFT_SIZE) {
-                    content = extractFileContent(filePath, ext);
-                }
-            }
-            // Fallback to transcription (for audio/video files processed by FunASR)
-            if (content == null && f.getTranscription() != null && !f.getTranscription().isBlank()
-                    && !"{}".equals(f.getTranscription().trim())) {
-                content = f.getTranscription();
-            }
-
-            if (content != null && !content.isBlank()) {
-                if (content.length() > MAX_FILE_PREVIEW) {
-                    sb.append(content, 0, MAX_FILE_PREVIEW).append("\n...（内容较长，仅展示前部分）");
-                } else {
-                    sb.append(content);
-                }
-            } else {
-                sb.append("（无法读取文件内容）");
-            }
-        }
-        return sb.toString();
-    }
-
-    private String extractFileContent(Path filePath, String ext) {
-        try {
-            if (TEXT_FORMATS.contains(ext)) {
-                return Files.readString(filePath, StandardCharsets.UTF_8);
-            }
-            if (DOC_FORMATS.contains(ext)) {
-                return com.meeting.common.DocumentTextExtractor.extractText(filePath, ext);
-            }
-            return null;
-        } catch (Exception e) {
-            return null;
-        }
-    }
-
-    private String getExtension(String filename) {
-        int dot = filename.lastIndexOf('.');
-        return dot >= 0 ? filename.substring(dot).toLowerCase() : "";
     }
 
     /**
@@ -372,7 +188,6 @@ public class RewriteService {
 
     private RewriteResult saveRewriteResult(Long dialogueId, List<Long> sourceFileIds,
                                              List<Long> referenceIds, String content) {
-        // Determine next version
         List<RewriteResult> previous = rewriteResultRepository.findByDialogueIdOrderByVersionDesc(dialogueId);
         int nextVersion = previous.isEmpty() ? 1 : previous.get(0).getVersion() + 1;
 
@@ -386,156 +201,9 @@ public class RewriteService {
         return rewriteResultRepository.save(result);
     }
 
-    private String generateComparisonDocx(List<MeetingMinutes> sourceFiles, String rewrittenContent,
-                                           Long dialogueId, int version) {
-        Path outputDir = Path.of(uploadDir, "rewrite");
-        try {
-            Files.createDirectories(outputDir);
-            String filename = "rewrite_" + dialogueId + "_v" + version + "_"
-                    + LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMddHHmmss")) + ".docx";
-            Path outputPath = outputDir.resolve(filename);
-
-            XWPFDocument doc = new XWPFDocument();
-
-            // Title
-            XWPFParagraph titlePara = doc.createParagraph();
-            titlePara.setAlignment(ParagraphAlignment.CENTER);
-            XWPFRun titleRun = titlePara.createRun();
-            titleRun.setBold(true);
-            titleRun.setFontSize(16);
-            titleRun.setText("会议纪要改写对照版");
-
-            // Draft section
-            XWPFParagraph draftTitle = doc.createParagraph();
-            XWPFRun draftRun = draftTitle.createRun();
-            draftRun.setBold(true);
-            draftRun.setFontSize(14);
-            draftRun.setText("原始内容");
-
-            for (MeetingMinutes f : sourceFiles) {
-                String sourceText = f.getTranscription() != null ? f.getTranscription() : "";
-                if (sourceText.length() > 1000) sourceText = sourceText.substring(0, 1000) + "\n...（内容过长已截断）";
-                XWPFParagraph srcPara = doc.createParagraph();
-                XWPFRun srcRun = srcPara.createRun();
-                srcRun.setFontSize(10);
-                srcRun.setText("【" + f.getTitle() + "】\n" + sourceText);
-            }
-
-            // Separator
-            doc.createParagraph();
-            XWPFParagraph sep = doc.createParagraph();
-            XWPFRun sepRun = sep.createRun();
-            sepRun.setText("━".repeat(50));
-
-            // Rewritten section
-            XWPFParagraph rewTitle = doc.createParagraph();
-            XWPFRun rewRun = rewTitle.createRun();
-            rewRun.setBold(true);
-            rewRun.setFontSize(14);
-            rewRun.setText("改写后内容");
-
-            // Parse rewritten content: render tab-separated lines as real Word tables
-            renderRichContent(doc, rewrittenContent);
-
-            try (FileOutputStream fos = new FileOutputStream(outputPath.toFile())) {
-                doc.write(fos);
-            }
-            doc.close();
-
-            return outputPath.toAbsolutePath().toString();
-        } catch (Exception e) {
-            log.error("Failed to generate .docx for dialogue {}: {}", dialogueId, e.getMessage(), e);
-            return null;
-        }
-    }
-
-    /**
-     * Render rewritten content with table-aware line parsing.
-     * Tab-separated consecutive lines become real Word tables;
-     * plain text lines become paragraphs; "---" separators add spacing.
-     */
-    private void renderRichContent(XWPFDocument doc, String content) {
-        String[] lines = content.split("\\n", -1);
-        List<String> currentTable = null;
-
-        for (String line : lines) {
-            String trimmed = line.trim();
-
-            if (trimmed.equals("---")) {
-                flushTable(doc, currentTable);
-                currentTable = null;
-                // Add spacing paragraph
-                doc.createParagraph();
-                continue;
-            }
-
-            if (trimmed.contains("\t")) {
-                if (currentTable == null) {
-                    currentTable = new ArrayList<>();
-                }
-                currentTable.add(trimmed);
-            } else {
-                flushTable(doc, currentTable);
-                currentTable = null;
-                if (!trimmed.isEmpty()) {
-                    XWPFParagraph p = doc.createParagraph();
-                    XWPFRun r = p.createRun();
-                    r.setFontSize(11);
-                    r.setText(trimmed);
-                }
-            }
-        }
-        flushTable(doc, currentTable);
-    }
-
-    private void flushTable(XWPFDocument doc, List<String> rows) {
-        if (rows == null || rows.isEmpty()) return;
-
-        // Determine column count from the row with the most tabs
-        int cols = rows.stream()
-                .mapToInt(row -> row.split("\t", -1).length)
-                .max().orElse(1);
-
-        XWPFTable table = doc.createTable(rows.size(), cols);
-        table.setWidth("100%");
-
-        for (int i = 0; i < rows.size(); i++) {
-            String[] cells = rows.get(i).split("\t", -1);
-            XWPFTableRow row = table.getRow(i);
-            for (int j = 0; j < cols; j++) {
-                XWPFTableCell cell = j < cells.length ? row.getCell(j) : row.getCell(cols - 1);
-                if (cell == null) continue;
-                String cellText = j < cells.length ? cells[j] : "";
-                // Clear default paragraph and set text
-                cell.removeParagraph(0);
-                XWPFParagraph cp = cell.addParagraph();
-                cp.setAlignment(ParagraphAlignment.LEFT);
-                XWPFRun cr = cp.createRun();
-                cr.setFontSize(10);
-                cr.setText(cellText);
-            }
-        }
-
-        // Add spacing after table
-        doc.createParagraph();
-    }
-
     private String toJsonIdList(List<Long> ids) {
         return ids.stream().map(String::valueOf)
                 .collect(Collectors.joining(",", "[", "]"));
-    }
-
-    private List<Long> parseJsonIdList(String json) {
-        String trimmed = json.trim();
-        if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
-            trimmed = trimmed.substring(1, trimmed.length() - 1);
-        }
-        if (trimmed.isEmpty()) return List.of();
-        return Arrays.stream(trimmed.split(","))
-                .map(String::trim)
-                .filter(s -> !s.isEmpty())
-                .map(Long::parseLong)
-                .collect(Collectors.toList());
     }
 
     public List<RewriteResult> getRewriteHistory(Long dialogueId) {

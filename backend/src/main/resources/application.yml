@@ -1,5 +1,7 @@
 server:
   port: 8080
+  tomcat:
+    async-request-timeout: 300000
 
 # API 配置由 Nacos 管理（http://localhost:8848/nacos）
 # 修改后在 Nacos 发布配置后，执行 POST /actuator/refresh 热加载
@@ -65,6 +67,7 @@ rag:
 
 file:
   upload-dir: ${user.home}/meeting-agent/uploads
+
 
 ---
 spring:

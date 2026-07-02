@@ -14,6 +14,8 @@ import java.util.List;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
+import org.springframework.beans.factory.annotation.Value;
+
 @Service
 public class ProfileService {
 
@@ -21,21 +23,14 @@ public class ProfileService {
 
     private final Path profileDir;
 
-    public ProfileService(@Value("${file.upload-dir:/app/data/uploads}") String uploadDir) {
-        this.profileDir = Path.of(uploadDir, "profile");
+    public ProfileService() {
+        this.profileDir = Path.of("../.agentscope/workspace", "profile");
     }
 
     @PostConstruct
     public void init() {
         try {
             Files.createDirectories(profileDir);
-            // Migration: copy old 与会人.md from knowledge-base/ to profile/
-            Path oldPath = profileDir.resolveSibling("knowledge-base").resolve("与会人.md");
-            Path newPath = profileDir.resolve("与会人.md");
-            if (Files.exists(oldPath) && !Files.exists(newPath)) {
-                Files.copy(oldPath, newPath);
-                log.info("Migrated 与会人.md from knowledge-base/ to profile/");
-            }
             log.info("Profile directory initialized at {}", profileDir);
         } catch (Exception e) {
             log.warn("Failed to initialize profile directory at {}: {}", profileDir, e.getMessage());

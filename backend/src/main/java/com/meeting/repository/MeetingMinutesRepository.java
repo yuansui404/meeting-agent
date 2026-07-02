@@ -15,8 +15,6 @@ public interface MeetingMinutesRepository extends JpaRepository<MeetingMinutes, 
 
     List<MeetingMinutes> findByStatus(String status);
 
-    List<MeetingMinutes> findByDialogueId(Long dialogueId);
-
     // 分页查询（按创建时间倒序）
     Page<MeetingMinutes> findAllByOrderByCreatedAtDesc(Pageable pageable);
 
@@ -32,4 +30,6 @@ public interface MeetingMinutesRepository extends JpaRepository<MeetingMinutes, 
 
     @Query(value = "SELECT * FROM meeting_minutes WHERE coalesce(participants, '') ILIKE '%' || ?1 || '%'", nativeQuery = true)
     List<MeetingMinutes> searchByParticipants(String keyword);
+
+    MeetingMinutes findByFilePath(String filePath);
 }

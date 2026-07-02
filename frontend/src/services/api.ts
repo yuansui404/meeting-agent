@@ -37,6 +37,7 @@ export interface DialogueMessage {
   messageType: string;
   timestamp: string;
   metadata?: string;
+  files?: any[];
 }
 
 export interface SearchResult {
@@ -144,17 +145,28 @@ export const deleteMeeting = (id: number) =>
 export const getFileUrl = (id: number) =>
   `${api.defaults.baseURL || 'http://localhost:8080/api'}/meeting/${id}/file`;
 
+// 获取对话文件URL（state_json 存储的文件）
+export const getDialogueFileUrl = (dialogueId: number, fileId: string) =>
+  `${api.defaults.baseURL || 'http://localhost:8080/api'}/dialogue/${dialogueId}/file/${fileId}`;
+
+// 获取对话文件文本内容（state_json 存储的文件）
+export const getDialogueFileTextContent = (dialogueId: number, fileId: string) =>
+  api.get<{ content: string }>(`/dialogue/${dialogueId}/file/${fileId}/text-content`);
+
 export interface UploadedFile {
   id: number;
+  fileId?: string;
   title: string;
   fileSize: number | null;
   status: string;
   createdAt: string;
   knowledgeBase?: boolean;
+  /** @deprecated 新代码不应使用 — 对话文件已存入 state_json */
   dialogueId?: number;
   ext: string;
   hasMd?: boolean;
   mdFilePath?: string;
+  filePath?: string;
 }
 
 // ============================================================
@@ -280,6 +292,7 @@ export const streamChat = (
   onDone: () => void,
   onError: (err: Error) => void,
   fileIds?: number[],
+  files?: any[],
   onThinking?: (delta: string) => void,
   onToolCall?: (data: any) => void,
   onToolResult?: (data: any) => void,
@@ -293,6 +306,9 @@ export const streamChat = (
       const body: any = { message };
       if (fileIds && fileIds.length > 0) {
         body.fileIds = fileIds;
+      }
+      if (files && files.length > 0) {
+        body.files = files;
       }
       const response = await fetch(`${baseUrl}/dialogue/${dialogueId}/chat`, {
         method: 'POST',
@@ -321,7 +337,9 @@ export const streamChat = (
 
         for (const line of lines) {
           const trimmed = line.trim();
-          if (trimmed.startsWith('event:')) {
+          if (!trimmed) {
+            currentEvent = '';  // SSE event boundary — reset so unnamed data: events are treated as tokens
+          } else if (trimmed.startsWith('event:')) {
             currentEvent = trimmed.slice(6).trim();
           } else if (trimmed.startsWith('data:')) {
             const data = trimmed.slice(5).trim();
@@ -367,27 +385,13 @@ export const streamChat = (
 };
 
 // ============================================================
-// Profile Memory API
+// Agent Memory API
 // ============================================================
 
-// 获取 profile 文件列表
-export const listProfileFiles = () =>
-  api.get<{ success: boolean; data: string[] }>('/profile/files');
+export const getMemory = () =>
+  api.get<{ success: boolean; data: { content: string } }>('/memory');
 
-// 读取 profile 文件内容
-export const getProfileFile = (filename: string) =>
-  api.get<{ success: boolean; data: { filename: string; content: string } }>(`/profile/${encodeURIComponent(filename)}`);
-
-// 保存 profile 文件
-export const saveProfileFile = (filename: string, content: string) =>
-  api.put(`/profile/${encodeURIComponent(filename)}`, { content });
-
-// 新建 profile 文件
-export const createProfileFile = (filename: string) =>
-  api.post(`/profile/${encodeURIComponent(filename)}`);
-
-// 删除 profile 文件
-export const deleteProfileFile = (filename: string) =>
-  api.delete(`/profile/${encodeURIComponent(filename)}`);
+export const saveMemory = (content: string) =>
+  api.put('/memory', { content });
 
 export default api;

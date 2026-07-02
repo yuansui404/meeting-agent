@@ -1,8 +1,6 @@
 package com.meeting.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.meeting.entity.MeetingMinutes;
-import com.meeting.repository.MeetingMinutesRepository;
 import io.agentscope.core.formatter.openai.dto.OpenAIMessage;
 import io.agentscope.core.formatter.openai.dto.OpenAIRequest;
 import io.agentscope.core.formatter.openai.dto.OpenAIResponse;
@@ -19,7 +17,6 @@ import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.Paths;
 import java.util.*;
 
 @Service
@@ -27,7 +24,6 @@ public class TranscriptionService {
 
     private static final Logger log = LoggerFactory.getLogger(TranscriptionService.class);
 
-    private final MeetingMinutesRepository meetingRepository;
     private final FileProcessingService fileProcessingService;
     private final MeetingDateExtractor meetingDateExtractor;
 
@@ -45,81 +41,72 @@ public class TranscriptionService {
 
     private final OpenAIClient openAIClient = new OpenAIClient();
 
-    public TranscriptionService(MeetingMinutesRepository meetingRepository,
-                                FileProcessingService fileProcessingService,
+    public TranscriptionService(FileProcessingService fileProcessingService,
                                 MeetingDateExtractor meetingDateExtractor) {
-        this.meetingRepository = meetingRepository;
         this.fileProcessingService = fileProcessingService;
         this.meetingDateExtractor = meetingDateExtractor;
     }
 
+    /**
+     * Start asynchronous transcription for a dialogue audio/video file.
+     * Writes the result to a sidecar file at {filePath}.transcription.md
+     * and generates a formatted markdown summary.
+     */
     @Async
-    public void startTranscription(Long meetingId) {
-        meetingRepository.findById(meetingId).ifPresent(meeting -> {
-            try {
-                meeting.setStatus("processing");
-                meetingRepository.save(meeting);
+    public void startTranscription(String filePath, String fileName, Long dialogueId) {
+        try {
+            String ext = FileProcessingService.getExtension(fileName);
+            String audioPath = filePath;
 
-                String audioPath = meeting.getFilePath();
-                String ext = FileProcessingService.getExtension(meeting.getTitle());
+            // Extract audio from video files
+            if (FileProcessingService.isVideo(ext)) {
+                Path extractedAudio = fileProcessingService.extractAudio(Path.of(filePath));
+                audioPath = extractedAudio.toString();
+            }
 
-                // Extract audio from video files
-                if (FileProcessingService.isVideo(ext)) {
-                    fileProcessingService.extractAudio(meetingId);
-                    Path audioFilePath = fileProcessingService.getAudioPath(Paths.get(meeting.getFilePath()));
-                    audioPath = audioFilePath.toString();
-                }
+            // Call MiMo-V2.5-ASR HTTP API
+            String result = callMiMoASR(audioPath);
 
-                // Call MiMo-V2.5-ASR HTTP API
-                String result = callMiMoASR(audioPath);
-
-                // Transcription self-check: validate person names, terms, numbers
-                if (result != null && !result.isEmpty() && !result.startsWith("转写失败")
-                        && deepseekApiKey != null && !deepseekApiKey.isBlank()) {
-                    try {
-                        String corrected = performTranscriptionSelfCheck(result);
-                        if (corrected != null && !corrected.equals(result)) {
-                            log.info("Transcription self-check corrected {} errors for meeting {}",
-                                    countDifferences(result, corrected), meetingId);
-                            result = corrected;
-                        }
-                    } catch (Exception e) {
-                        log.warn("Transcription self-check failed for {}: {}", meetingId, e.getMessage());
-                    }
-                }
-
-                meeting.setTranscription(result);
-                meeting.setStatus("completed");
-                meetingRepository.save(meeting);
-
-                // Extract meeting date from transcript
+            // Transcription self-check: validate person names, terms, numbers
+            if (result != null && !result.isEmpty() && !result.startsWith("转写失败")
+                    && deepseekApiKey != null && !deepseekApiKey.isBlank()) {
                 try {
-                    var md = meetingDateExtractor.extract(result);
-                    if (md != null) {
-                        meeting.setMeetingDate(md);
-                        meetingRepository.save(meeting);
+                    String corrected = performTranscriptionSelfCheck(result);
+                    if (corrected != null && !corrected.equals(result)) {
+                        log.info("Transcription self-check corrected {} errors for {}",
+                                countDifferences(result, corrected), fileName);
+                        result = corrected;
                     }
                 } catch (Exception e) {
-                    log.warn("Meeting date extraction failed for transcription {}: {}", meetingId, e.getMessage());
+                    log.warn("Transcription self-check failed for {}: {}", fileName, e.getMessage());
                 }
-
-                // Generate markdown file
-                try {
-                    String mdPath = fileProcessingService.generateMarkdown(meeting);
-                    if (mdPath != null) {
-                        meeting.setMdFilePath(mdPath);
-                        meetingRepository.save(meeting);
-                    }
-                } catch (Exception me) {
-                    log.warn("Markdown generation failed for meeting {}", meetingId, me);
-                }
-
-            } catch (Exception e) {
-                log.error("Transcription failed for meeting {}", meetingId, e);
-                meeting.setStatus("failed");
-                meetingRepository.save(meeting);
             }
-        });
+
+            // Write transcription to sidecar file
+            Path transcriptionPath = Path.of(filePath + ".transcription.md");
+            String mdContent = String.format("""
+                    # 转写结果：%s
+
+                    - **文件名**: %s
+                    - **所属对话**: %s
+
+                    ---
+
+                    ## 转写内容
+
+                    %s
+                    """,
+                    fileName, fileName, "对话 " + dialogueId,
+                    result != null ? result : "（转写失败）");
+            Files.writeString(transcriptionPath, mdContent, StandardCharsets.UTF_8);
+            log.info("Transcription saved to sidecar file: {}", transcriptionPath);
+
+            // Generate formatted markdown in assistant directory
+            fileProcessingService.generateMarkdown(result, fileName, dialogueId);
+
+        } catch (Exception e) {
+            log.error("Transcription failed for dialogue file {}: {}", fileName, e.getMessage());
+        }
     }
 
     public String callMiMoASR(String audioPath) {
@@ -255,11 +242,5 @@ public class TranscriptionService {
             if (original.charAt(i) != corrected.charAt(i)) diffs++;
         }
         return diffs;
-    }
-
-    public String getTranscription(Long meetingId) {
-        return meetingRepository.findById(meetingId)
-                .map(MeetingMinutes::getTranscription)
-                .orElse(null);
     }
 }

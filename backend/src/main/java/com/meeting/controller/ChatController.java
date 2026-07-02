@@ -46,15 +46,36 @@ public class ChatController {
         return emitter;
     }
 
+    @SuppressWarnings("unchecked")
     private String buildMetadata(Map<String, Object> request) {
-        if (!request.containsKey("fileIds")) return null;
-        Object fileIdsObj = request.get("fileIds");
-        try {
-            String fileIdsJson = objectToJson(fileIdsObj);
-            return "{\"fileIds\":" + fileIdsJson + "}";
-        } catch (Exception ignored) {
-            return null;
+        StringBuilder sb = new StringBuilder("{");
+        boolean hasContent = false;
+
+        // Include fileIds (numeric, backward compat)
+        if (request.containsKey("fileIds")) {
+            Object fileIdsObj = request.get("fileIds");
+            String json = objectToJson(fileIdsObj);
+            if (json != null) {
+                sb.append("\"fileIds\":").append(json);
+                hasContent = true;
+            }
         }
+
+        // Include file metadata (new style: array of {fileId, fileName, filePath, ext})
+        if (request.containsKey("files")) {
+            Object filesObj = request.get("files");
+            if (filesObj instanceof List) {
+                try {
+                    String filesJson = new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsString(filesObj);
+                    if (hasContent) sb.append(",");
+                    sb.append("\"files\":").append(filesJson);
+                    hasContent = true;
+                } catch (Exception ignored) {}
+            }
+        }
+
+        sb.append("}");
+        return hasContent ? sb.toString() : null;
     }
 
     private String objectToJson(Object obj) {

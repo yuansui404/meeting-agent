@@ -10,13 +10,13 @@ import {
   DeleteOutlined,
   EditOutlined,
   RobotOutlined,
-  SettingOutlined,
+  BulbOutlined,
   SunOutlined,
   MoonOutlined,
 } from '@ant-design/icons';
 import DialoguePanel from './components/DialoguePanel';
 import KnowledgeBase from './components/KnowledgeBase';
-import ProfileSettings from './components/ProfileSettings';
+import MemoryEditor from './components/MemoryEditor';
 import { listDialogues, createDialogue, deleteDialogue, renameDialogue, Dialogue } from './services/api';
 
 const { Sider, Content } = Layout;
@@ -24,7 +24,7 @@ const { Text } = Typography;
 
 const App: React.FC = () => {
   const [kbVisible, setKbVisible] = useState(false);
-  const [profileVisible, setProfileVisible] = useState(false);
+  const [memoryVisible, setMemoryVisible] = useState(false);
   const [dialogues, setDialogues] = useState<Dialogue[]>([]);
   const [activeDialogue, setActiveDialogue] = useState<Dialogue | null>(null);
   const [creating, setCreating] = useState(false);
@@ -262,10 +262,10 @@ const App: React.FC = () => {
             </div>
           </div>
 
-          {/* Profile Settings */}
+          {/* Agent Memory */}
           <div style={{ marginBottom: 8 }}>
             <div
-              onClick={() => setProfileVisible(true)}
+              onClick={() => setMemoryVisible(true)}
               style={{
                 display: 'flex', alignItems: 'center', gap: 10,
                 padding: '10px 12px', borderRadius: 8, cursor: 'pointer',
@@ -279,9 +279,9 @@ const App: React.FC = () => {
                 (e.currentTarget as HTMLElement).style.background = 'transparent';
               }}
             >
-              <SettingOutlined style={{ fontSize: 16, color: 'var(--text-tertiary)' }} />
+              <BulbOutlined style={{ fontSize: 16, color: 'var(--text-tertiary)' }} />
               <Text style={{ fontSize: 14, fontWeight: 500, color: 'var(--text-color)' }}>
-                个人设置
+                Agent 记忆
               </Text>
             </div>
           </div>
@@ -437,8 +437,8 @@ const App: React.FC = () => {
         />
       </Content>
 
-      {/* Profile Settings Drawer */}
-      <ProfileSettings visible={profileVisible} onClose={() => setProfileVisible(false)} />
+      {/* Memory Editor Drawer */}
+      <MemoryEditor visible={memoryVisible} onClose={() => setMemoryVisible(false)} />
 
       {/* Knowledge Base Right Panel */}
       {kbVisible && (

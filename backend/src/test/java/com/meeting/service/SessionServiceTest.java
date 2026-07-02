@@ -1,6 +1,7 @@
 package com.meeting.service;
 
 import com.meeting.entity.SessionEntity;
+import com.meeting.repository.DialogueMessageRepository;
 import com.meeting.repository.SessionRepository;
 import io.agentscope.core.message.UserMessage;
 import io.agentscope.core.state.AgentState;
@@ -27,6 +28,9 @@ class SessionServiceTest {
     @Mock
     private SessionRepository sessionRepository;
 
+    @Mock
+    private DialogueMessageRepository dialogueMessageRepository;
+
     @Captor
     private ArgumentCaptor<SessionEntity> entityCaptor;
 
@@ -34,7 +38,7 @@ class SessionServiceTest {
 
     @BeforeEach
     void setUp() {
-        sessionService = new SessionService(sessionRepository);
+        sessionService = new SessionService(sessionRepository, dialogueMessageRepository);
     }
 
     @Test
@@ -69,19 +73,22 @@ class SessionServiceTest {
 
     @Test
     void getSessionWithMessages_ShouldReturnDialogueAndMessages() {
-        AgentState state = AgentState.builder().sessionId("dialogue-1").build();
-        state.contextMutable().add(new UserMessage("hello"));
-        String json = state.toJson();
-
         SessionEntity entity = new SessionEntity();
         entity.setId(1L);
         entity.setSessionId("dialogue-1");
         entity.setTitle("测试");
         entity.setStatus("active");
-        entity.setStateJson(json);
         entity.setUpdatedAt(LocalDateTime.of(2026, 7, 1, 10, 0));
 
+        com.meeting.entity.DialogueMessageEntity msg = new com.meeting.entity.DialogueMessageEntity();
+        msg.setId(1L);
+        msg.setDialogueId(1L);
+        msg.setRole("user");
+        msg.setContent("hello");
+        msg.setMessageType("text");
+
         when(sessionRepository.findById(1L)).thenReturn(Optional.of(entity));
+        when(dialogueMessageRepository.findByDialogueIdOrderById(1L)).thenReturn(List.of(msg));
 
         Map<String, Object> result = sessionService.getSessionWithMessages(1L);
 
@@ -162,8 +169,9 @@ class SessionServiceTest {
     }
 
     @Test
-    void deleteSession_ShouldDeleteById() {
+    void deleteSession_ShouldDeleteMessagesAndSession() {
         sessionService.deleteSession(1L);
+        verify(dialogueMessageRepository).deleteByDialogueId(1L);
         verify(sessionRepository).deleteById(1L);
     }
 
@@ -188,7 +196,7 @@ class SessionServiceTest {
     }
 
     @Test
-    void addMessage_ShouldAppendToState() {
+    void addMessage_ShouldAppendToStateAndDialogueMessages() {
         AgentState state = AgentState.builder().sessionId("dialogue-1").build();
         String json = state.toJson();
 
@@ -199,6 +207,7 @@ class SessionServiceTest {
 
         when(sessionRepository.findById(1L)).thenReturn(Optional.of(entity));
         when(sessionRepository.save(any())).thenAnswer(i -> i.getArgument(0));
+        when(dialogueMessageRepository.save(any())).thenAnswer(i -> i.getArgument(0));
 
         sessionService.addMessage(1L, "user", "new message", "text", null);
 
@@ -206,6 +215,7 @@ class SessionServiceTest {
         SessionEntity saved = entityCaptor.getValue();
         assertNotNull(saved.getStateJson());
         assertTrue(saved.getStateJson().contains("new message"));
+        verify(dialogueMessageRepository).save(any());
     }
 
     @Test
@@ -217,6 +227,7 @@ class SessionServiceTest {
 
         when(sessionRepository.findById(1L)).thenReturn(Optional.of(entity));
         when(sessionRepository.save(any())).thenAnswer(i -> i.getArgument(0));
+        when(dialogueMessageRepository.save(any())).thenAnswer(i -> i.getArgument(0));
 
         sessionService.addMessage(1L, "assistant", "reply", "text", null);
 
@@ -224,6 +235,7 @@ class SessionServiceTest {
         SessionEntity saved = entityCaptor.getValue();
         assertNotNull(saved.getStateJson());
         assertTrue(saved.getStateJson().contains("reply"));
+        verify(dialogueMessageRepository).save(any());
     }
 
     @Test

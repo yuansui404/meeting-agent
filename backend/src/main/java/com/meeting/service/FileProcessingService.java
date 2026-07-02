@@ -1,11 +1,8 @@
 package com.meeting.service;
 
-import com.meeting.entity.MeetingMinutes;
-import com.meeting.repository.MeetingMinutesRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
 
@@ -17,6 +14,8 @@ import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
+import java.util.Map;
+import java.util.HashMap;
 import java.util.Set;
 import java.util.UUID;
 
@@ -38,16 +37,14 @@ public class FileProcessingService {
         ALL_FORMATS.addAll(IMAGE_FORMATS);
     }
 
-    private final MeetingMinutesRepository meetingRepository;
-
     @Value("${file.upload-dir}")
     private String uploadDir;
 
-    public FileProcessingService(MeetingMinutesRepository meetingRepository) {
-        this.meetingRepository = meetingRepository;
-    }
-
-    public MeetingMinutes uploadFile(MultipartFile file, Long dialogueId) throws IOException {
+    /**
+     * Save a dialogue file to disk without creating a MeetingMinutes record.
+     * Returns file metadata for storage in state_json.
+     */
+    public Map<String, Object> saveDialogueFile(MultipartFile file, Long dialogueId) throws IOException {
         if (dialogueId == null) {
             throw new IllegalArgumentException("dialogueId is required");
         }
@@ -68,66 +65,70 @@ public class FileProcessingService {
         Path uploadPath = Paths.get(uploadDir, subDir, "user", dateStr);
         Files.createDirectories(uploadPath);
 
-        String savedFilename = UUID.randomUUID() + "_" + filename;
+        String fileId = UUID.randomUUID().toString();
+        String savedFilename = fileId + "_" + filename;
         Path filePath = uploadPath.resolve(savedFilename);
         Files.copy(file.getInputStream(), filePath, StandardCopyOption.REPLACE_EXISTING);
 
-        MeetingMinutes meeting = new MeetingMinutes();
-        meeting.setTitle(filename);
-        meeting.setFilePath(filePath.toString());
-        meeting.setFileSize(file.getSize());
-        meeting.setDialogueId(dialogueId);
-        meeting.setStatus(isTranscribable(ext) ? "processing" : "completed");
-        meeting.setMeetingDate(LocalDateTime.now());
-
-        return meetingRepository.save(meeting);
+        Map<String, Object> result = new HashMap<>();
+        result.put("fileId", fileId);
+        result.put("fileName", filename);
+        result.put("filePath", filePath.toString());
+        result.put("fileSize", file.getSize());
+        result.put("ext", ext);
+        result.put("status", isTranscribable(ext) ? "processing" : "completed");
+        return result;
     }
 
-    @Async
-    public void extractAudio(Long meetingId) {
-        meetingRepository.findById(meetingId).ifPresent(meeting -> {
-            try {
-                Path videoPath = Paths.get(meeting.getFilePath());
-                Path audioPath = getAudioPath(videoPath);
+    /**
+     * Extract audio from a video file using ffmpeg.
+     * Returns the path to the extracted WAV file.
+     */
+    public Path extractAudio(Path videoPath) {
+        Path audioPath = getAudioPath(videoPath);
+        try {
+            ProcessBuilder pb = new ProcessBuilder(
+                    "ffmpeg", "-i", videoPath.toString(),
+                    "-vn", "-acodec", "pcm_s16le",
+                    "-ar", "16000", "-ac", "1",
+                    "-y", audioPath.toString()
+            );
+            pb.redirectErrorStream(true);
+            Process process = pb.start();
+            int exitCode = process.waitFor();
 
-                ProcessBuilder pb = new ProcessBuilder(
-                        "ffmpeg", "-i", videoPath.toString(),
-                        "-vn", "-acodec", "pcm_s16le",
-                        "-ar", "16000", "-ac", "1",
-                        "-y", audioPath.toString()
-                );
-                pb.redirectErrorStream(true);
-                Process process = pb.start();
-                int exitCode = process.waitFor();
-
-                if (exitCode != 0) {
-                    String error = new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
-                    log.error("FFmpeg failed for meeting {}: {}", meetingId, error);
-                } else {
-                    log.info("Audio extracted for meeting {}: {}", meetingId, audioPath);
-                }
-            } catch (Exception e) {
-                log.error("Audio extraction failed for meeting {}", meetingId, e);
+            if (exitCode != 0) {
+                String error = new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+                log.error("FFmpeg audio extraction failed for {}: {}", videoPath, error);
+            } else {
+                log.info("Audio extracted: {} -> {}", videoPath, audioPath);
             }
-        });
+        } catch (Exception e) {
+            log.error("Audio extraction failed for {}: {}", videoPath, e.getMessage());
+        }
+        return audioPath;
     }
 
-    public String generateMarkdown(MeetingMinutes meeting) {
+    /**
+     * Generate a formatted markdown summary of transcription content.
+     * Writes to {upload-dir}/dialogue-{id}/assistant/{yyyy-MM-dd}/{timestamp}.md
+     */
+    public String generateMarkdown(String transcription, String title, Long dialogueId) {
         try {
             String dateStr = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd"));
-            String mdFilename = "meeting-" + meeting.getId()
-                    + "-" + LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss"))
+            String mdFilename = "transcription-"
+                    + LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss"))
                     + ".md";
-            String subDir = "dialogue-" + meeting.getDialogueId();
+            String subDir = "dialogue-" + dialogueId;
             Path mdPath = Paths.get(uploadDir, subDir, "assistant", dateStr, mdFilename);
             Files.createDirectories(mdPath.getParent());
 
+            String now = LocalDateTime.now().toString();
             String mdContent = String.format("""
                     # 会议纪要：%s
 
                     - **文件名**: %s
                     - **时间**: %s
-                    - **状态**: %s
                     - **所属对话**: %s
 
                     ---
@@ -136,18 +137,13 @@ public class FileProcessingService {
 
                     %s
                     """,
-                    meeting.getTitle(),
-                    meeting.getTitle(),
-                    meeting.getCreatedAt() != null ? meeting.getCreatedAt().toString() : "",
-                    meeting.getStatus(),
-                    "对话 " + meeting.getDialogueId(),
-                    meeting.getTranscription() != null ? meeting.getTranscription() : "（暂无转写内容）"
-            );
+                    title, title, now, "对话 " + dialogueId,
+                    transcription != null ? transcription : "（暂无转写内容）");
 
             Files.writeString(mdPath, mdContent, StandardCharsets.UTF_8);
             return mdPath.toString();
         } catch (IOException e) {
-            log.error("Failed to generate markdown for meeting {}", meeting.getId(), e);
+            log.error("Failed to generate markdown for dialogue {}", dialogueId, e);
             return null;
         }
     }
@@ -182,19 +178,5 @@ public class FileProcessingService {
         int dot = name.lastIndexOf('.');
         String baseName = dot >= 0 ? name.substring(0, dot) : name;
         return videoPath.getParent().resolve(baseName + ".wav");
-    }
-
-    public void cleanupFile(Long meetingId) {
-        meetingRepository.findById(meetingId).ifPresent(meeting -> {
-            try {
-                Path filePath = Paths.get(meeting.getFilePath());
-                Files.deleteIfExists(filePath);
-
-                Path audioPath = getAudioPath(filePath);
-                Files.deleteIfExists(audioPath);
-            } catch (IOException e) {
-                log.warn("Cleanup failed for meeting {}", meetingId, e);
-            }
-        });
     }
 }

@@ -38,6 +38,8 @@ import {
   deleteMeeting,
   getFileUrl,
   getMeeting,
+  getDialogueFileUrl,
+  getDialogueFileTextContent,
   api,
   submitRewriteFeedback,
   getRewriteResult,
@@ -87,6 +89,8 @@ interface DisplayMessage extends DialogueMessage {
 
 interface PendingFileCard {
   id: number;
+  fileId?: string;
+  filePath?: string;
   name: string;
   ext: string;
   fileSize: number | null;
@@ -119,7 +123,8 @@ const DialoguePanel: React.FC<Props> = ({ activeDialogue, onDialogueUpdated, onS
 
   useEffect(() => {
     if (activeDialogue) {
-      loadFiles(activeDialogue.id).then(files => loadMessages(activeDialogue.id, files));
+      loadFiles(activeDialogue.id);
+      loadMessages(activeDialogue.id);
     } else {
       setMessages([]);
       setStreaming({ content: '', active: false });
@@ -137,45 +142,38 @@ const DialoguePanel: React.FC<Props> = ({ activeDialogue, onDialogueUpdated, onS
     }, 50);
   };
 
-  const loadMessages = async (id: number, files?: UploadedFile[]) => {
-    const fileList = files || uploadedFiles;
+  const loadMessages = async (id: number) => {
     try {
       const res = await getDialogue(id);
-      const msgs: DisplayMessage[] = (res.data.messages || []).map((m: DialogueMessage) => {
-        let fileIds: number[] = [];
-        if (m.metadata) {
-          try {
-            const parsed = JSON.parse(m.metadata);
-            fileIds = parsed.fileIds || [];
-          } catch { /* ignore invalid metadata */ }
-        }
-        const matchedFiles = fileIds
-          .map(fid => fileList.find(uf => uf.id === fid))
-          .filter(Boolean) as UploadedFile[];
-        return { ...m, files: matchedFiles };
-      });
+      const msgs: DisplayMessage[] = (res.data.messages || []).map((m: DialogueMessage) => ({
+        ...m,
+        files: m.files || undefined,
+      }));
       setMessages(msgs);
     } catch {
       setMessages([]);
     }
   };
 
-  const loadFiles = async (id: number): Promise<UploadedFile[]> => {
+  const loadFiles = async (id: number) => {
     try {
       const res = await listDialogueMeetings(id);
-      const files = res.data || [];
-      setUploadedFiles(files);
-      return files;
+      setUploadedFiles(res.data || []);
     } catch {
       setUploadedFiles([]);
-      return [];
     }
   };
 
-  const handleDeleteFile = async (id: number) => {
+  const handleDeleteFile = async (file: UploadedFile) => {
     try {
-      await deleteMeeting(id);
-      if (activeDialogue) loadFiles(activeDialogue.id);
+      if ((file as any).fileId) {
+        // New-style files are in state_json — just refresh the list
+        // (disk cleanup can be async)
+        if (activeDialogue) loadFiles(activeDialogue.id);
+      } else {
+        await deleteMeeting(file.id);
+        if (activeDialogue) loadFiles(activeDialogue.id);
+      }
     } catch {
       antMsg.error('删除失败');
     }
@@ -184,12 +182,14 @@ const DialoguePanel: React.FC<Props> = ({ activeDialogue, onDialogueUpdated, onS
   const handleRemovePendingFileCard = async (id: number) => {
     const card = pendingFileCards.find(c => c.id === id);
     setPendingFileCards(prev => prev.filter(c => c.id !== id));
-    if (id > 0) {
+    if (id > 0 && !card?.fileId) {
+      // Old-style file in meeting_minutes — delete the DB record
       try {
         await deleteMeeting(id);
       } catch { /* ignore */ }
       if (activeDialogue) loadFiles(activeDialogue.id);
     }
+    // New-style pending files (fileId exists) have no DB record — just remove the card
   };
 
   const sendMessage = useCallback(async (content: string, dialogueId: number) => {
@@ -217,6 +217,16 @@ const DialoguePanel: React.FC<Props> = ({ activeDialogue, onDialogueUpdated, onS
 
     try {
       const fileIds = filesForDisplay.map(f => f.id).filter(id => id > 0);
+      // Build file metadata for new-style files (state_json backed)
+      const filesMeta = pendingFileCards
+        .filter(f => !f.uploading && f.fileId)
+        .map(f => ({
+          fileId: f.fileId,
+          fileName: f.name,
+          filePath: f.filePath,
+          fileSize: f.fileSize,
+          ext: f.ext,
+        }));
       abortRef.current = streamChat(
         dialogueId,
         content,
@@ -236,6 +246,7 @@ const DialoguePanel: React.FC<Props> = ({ activeDialogue, onDialogueUpdated, onS
           antMsg.error('对话出错: ' + err.message);
         },
         fileIds,
+        filesMeta && filesMeta.length > 0 ? filesMeta : undefined,
         (delta) => {
           setThinkingText(prev => prev + delta);
         },
@@ -313,10 +324,18 @@ const DialoguePanel: React.FC<Props> = ({ activeDialogue, onDialogueUpdated, onS
     }]);
     try {
       const res = await uploadFile(file, dialogue.id);
-      if (res.data.meetingId) {
+      // Support both new-style (fileId string) and old-style (meetingId number)
+      if (res.data.fileId || res.data.meetingId) {
         setPendingFileCards(prev => prev.map(c =>
           c.name === file.name && c.uploading
-            ? { ...c, id: res.data.meetingId, uploading: false, status: res.data.status || 'completed' }
+            ? {
+                ...c,
+                id: res.data.meetingId || c.id,
+                fileId: res.data.fileId,
+                filePath: res.data.filePath,
+                uploading: false,
+                status: res.data.status || 'completed',
+              }
             : c
         ));
         if (activeDialogue) loadFiles(activeDialogue.id);
@@ -376,14 +395,20 @@ const DialoguePanel: React.FC<Props> = ({ activeDialogue, onDialogueUpdated, onS
     try {
       if (isImage) {
         // Images are rendered directly in the drawer JSX
-      } else {
-        // Try transcription first (audio/video STT results)
+      } else if ((file as any).fileId && activeDialogue) {
+        // New-style file: stored in state_json, use dialogue file endpoints
+        const fileId = (file as any).fileId;
+        const resp = await getDialogueFileTextContent(activeDialogue.id, fileId);
+        if (resp.data?.content) {
+          setPreviewContent(resp.data.content);
+        }
+      } else if (file.id > 0) {
+        // Old-style file: stored in meeting_minutes, use meeting endpoints
         const res = await getMeeting(file.id);
         const meeting = res.data as Meeting;
         if (meeting.transcription && meeting.transcription !== '{}' && meeting.transcription.length > 10) {
           setPreviewContent(meeting.transcription);
         } else {
-          // Try the dedicated text-content endpoint
           try {
             const textResp = await api.get(`/meeting/${file.id}/text-content`);
             if (textResp.data?.content) {
@@ -391,13 +416,15 @@ const DialoguePanel: React.FC<Props> = ({ activeDialogue, onDialogueUpdated, onS
             }
           } catch { /* unsupported format or fetch error */ }
         }
+      } else {
+        setPreviewContent(null);
       }
     } catch {
       setPreviewContent(null);
     } finally {
       setPreviewLoading(false);
     }
-  }, []);
+  }, [activeDialogue]);
 
   return (
     <div style={{ flex: 1, display: 'flex', flexDirection: 'column', height: '100%', background: 'var(--content-bg)' }}>
@@ -739,7 +766,9 @@ const DialoguePanel: React.FC<Props> = ({ activeDialogue, onDialogueUpdated, onS
             {['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp', '.svg'].includes(previewFile.ext?.toLowerCase() || '') ? (
               <div style={{ textAlign: 'center' }}>
                 <img
-                  src={getFileUrl(previewFile.id)}
+                  src={(previewFile as any).fileId && activeDialogue
+                    ? getDialogueFileUrl(activeDialogue.id, (previewFile as any).fileId)
+                    : getFileUrl(previewFile.id)}
                   alt={previewFile.title}
                   style={{ maxWidth: '100%', borderRadius: 8, boxShadow: '0 2px 8px rgba(0,0,0,0.1)' }}
                 />
@@ -769,7 +798,10 @@ const DialoguePanel: React.FC<Props> = ({ activeDialogue, onDialogueUpdated, onS
                 <Button
                   type="link"
                   icon={<PictureOutlined />}
-                  onClick={() => window.open(getFileUrl(previewFile.id), '_blank')}
+                  onClick={() => window.open(
+                    (previewFile as any).fileId && activeDialogue
+                      ? getDialogueFileUrl(activeDialogue.id, (previewFile as any).fileId)
+                      : getFileUrl(previewFile.id), '_blank')}
                   style={{ marginTop: 8 }}
                 >
                   查看原始文件
@@ -1245,51 +1277,6 @@ const getStatusLabel = (status: string): string => {
     case 'error': return '失败';
     default: return status;
   }
-};
-
-// File item in the file list
-const FileItem: React.FC<{ file: UploadedFile; onDelete: (id: number) => void }> = ({ file, onDelete }) => {
-  const { icon, color } = getFileTypeInfo(file.ext);
-  const isImage = ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp', '.svg'].includes(file.ext.toLowerCase());
-  const fileUrl = getFileUrl(file.id);
-
-  return (
-    <div style={{
-      display: 'flex', alignItems: 'center', gap: 8,
-      padding: '4px 0', borderBottom: '1px solid #f5f5f5',
-    }}>
-      {isImage ? (
-        <img
-          src={fileUrl}
-          alt={file.title}
-          style={{ width: 32, height: 32, borderRadius: 4, objectFit: 'cover', flexShrink: 0 }}
-          onError={(e) => {
-            (e.target as HTMLImageElement).style.display = 'none';
-            (e.target as HTMLImageElement).nextElementSibling?.classList.remove('hidden');
-          }}
-        />
-      ) : (
-        <div style={{ color, fontSize: 16, flexShrink: 0 }}>{icon}</div>
-      )}
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <Text style={{ fontSize: 12, display: 'block' }} ellipsis={{ tooltip: file.title }}>
-          {file.title}
-        </Text>
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 11, color: 'var(--text-secondary)' }}>
-          <span>{formatFileSize(file.fileSize)}</span>
-          <span style={{ color: getStatusColor(file.status) }}>{getStatusLabel(file.status)}</span>
-        </div>
-      </div>
-      <Button
-        type="text"
-        size="small"
-        danger
-        icon={<DeleteOutlined />}
-        onClick={() => onDelete(file.id)}
-        style={{ flexShrink: 0 }}
-      />
-    </div>
-  );
 };
 
 export default DialoguePanel;
