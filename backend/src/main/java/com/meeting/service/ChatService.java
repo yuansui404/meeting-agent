@@ -2,6 +2,8 @@ package com.meeting.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.meeting.config.AgentConfig;
+import com.meeting.config.DeepSeekProperties;
+import com.meeting.config.ZhiPuProperties;
 import com.meeting.document.service.DocumentTextExtractor;
 import com.meeting.conversation.model.entity.DialogueMessageEntity;
 import com.meeting.conversation.repository.DialogueMessageRepository;
@@ -18,28 +20,26 @@ import io.agentscope.core.model.OpenAIClient;
 import io.agentscope.harness.agent.HarnessAgent;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.cloud.context.config.annotation.RefreshScope;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
+
+import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.core.task.TaskExecutor;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.*;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
-import jakarta.annotation.PreDestroy;
 
 @Service
 @RefreshScope
 public class ChatService {
 
     private static final Logger log = LoggerFactory.getLogger(ChatService.class);
-    private static final ObjectMapper objectMapper = new ObjectMapper();
     private static final long MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB limit for file reading
 
     private static final Set<String> IMAGE_FORMATS = Set.of(".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp", ".svg");
@@ -49,51 +49,35 @@ public class ChatService {
     private final HarnessAgent agent;
     private final PgAgentStateStore pgAgentStateStore;
     private final DialogueMessageRepository dialogueMessageRepository;
-    private final ExecutorService executor = Executors.newFixedThreadPool(
-            Runtime.getRuntime().availableProcessors() * 2);
+    private final TaskExecutor taskExecutor;
     private final OpenAIClient openAIClient;
-
-    private final String deepseekApiKey;
-    private final String deepseekApiUrl;
-    private final String zhipuApiKey;
-    private final String zhipuModel;
-    private final String zhipuUrl;
+    private final ObjectMapper objectMapper;
+    private final TransactionTemplate txTemplate;
+    private final DeepSeekProperties deepSeekProps;
+    private final ZhiPuProperties zhiPuProps;
 
     public ChatService(HarnessAgent meetingAssistantAgent,
                        PgAgentStateStore pgAgentStateStore,
                        DialogueMessageRepository dialogueMessageRepository,
                        OpenAIClient openAIClient,
-                       @Value("${deepseek.api-key:}") String deepseekApiKey,
-                       @Value("${deepseek.url:https://api.deepseek.com}") String deepseekApiUrl,
-                       @Value("${zhipu.api-key:}") String zhipuApiKey,
-                       @Value("${zhipu.model:glm-4v}") String zhipuModel,
-                       @Value("${zhipu.url:https://open.bigmodel.cn/api/paas/v4}") String zhipuUrl) {
+                       @Qualifier("llmTaskExecutor") TaskExecutor taskExecutor,
+                       ObjectMapper objectMapper,
+                       TransactionTemplate txTemplate,
+                       DeepSeekProperties deepSeekProps,
+                       ZhiPuProperties zhiPuProps) {
         this.agent = meetingAssistantAgent;
         this.pgAgentStateStore = pgAgentStateStore;
         this.dialogueMessageRepository = dialogueMessageRepository;
+        this.taskExecutor = taskExecutor;
         this.openAIClient = openAIClient;
-        this.deepseekApiKey = deepseekApiKey;
-        this.deepseekApiUrl = deepseekApiUrl;
-        this.zhipuApiKey = zhipuApiKey;
-        this.zhipuModel = zhipuModel;
-        this.zhipuUrl = zhipuUrl;
-    }
-
-    @PreDestroy
-    public void shutdown() {
-        executor.shutdown();
-        try {
-            if (!executor.awaitTermination(10, TimeUnit.SECONDS)) {
-                executor.shutdownNow();
-            }
-        } catch (InterruptedException e) {
-            executor.shutdownNow();
-            Thread.currentThread().interrupt();
-        }
+        this.objectMapper = objectMapper;
+        this.txTemplate = txTemplate;
+        this.deepSeekProps = deepSeekProps;
+        this.zhiPuProps = zhiPuProps;
     }
 
     public void streamChat(Long dialogueId, String userMessage, String metadata, SseEmitter emitter) {
-        executor.submit(() -> {
+        taskExecutor.execute(() -> {
             try {
                 // Parse file info from metadata
                 List<Long> messageFileIds = parseFileIdsFromMetadata(metadata);
@@ -237,89 +221,9 @@ public class ChatService {
                 }
             }
 
-            // Clean up: replace enriched user message with clean original in persisted state.
-            try {
-                AgentState st = pgAgentStateStore.get("default", "dialogue-" + dialogueId,
-                        "agent_state", AgentState.class).orElse(null);
-                if (st != null) {
-                    var context = st.contextMutable();
-                    for (int i = context.size() - 1; i >= 0; i--) {
-                        if (context.get(i).getRole() == MsgRole.USER) {
-                            // Build a clean UserMessage preserving original text and file metadata
-                            UserMessage.Builder builder = UserMessage.builder().textContent(userMessage);
-                            Map<String, Object> meta = new HashMap<>();
-                            if (messageFileIds != null && !messageFileIds.isEmpty()) {
-                                meta.put("fileIds", messageFileIds);
-                            }
-                            if (messageFiles != null && !messageFiles.isEmpty()) {
-                                meta.put("files", messageFiles);
-                            }
-                            if (!meta.isEmpty()) {
-                                builder.metadata(meta);
-                            }
-                            context.set(i, builder.build());
-                            break;
-                        }
-                    }
-                    pgAgentStateStore.save("default", "dialogue-" + dialogueId, "agent_state", st);
-                } else {
-                    // New session: build initial state with user message + file metadata
-                    UserMessage.Builder builder = UserMessage.builder().textContent(userMessage);
-                    Map<String, Object> meta = new HashMap<>();
-                    if (messageFileIds != null && !messageFileIds.isEmpty()) {
-                        meta.put("fileIds", messageFileIds);
-                    }
-                    if (messageFiles != null && !messageFiles.isEmpty()) {
-                        meta.put("files", messageFiles);
-                    }
-                    if (!meta.isEmpty()) {
-                        builder.metadata(meta);
-                    }
-                    AgentState ns = AgentState.builder().sessionId("dialogue-" + dialogueId).build();
-                    ns.contextMutable().add(builder.build());
-                    String respText = fullResponse.toString();
-                    if (!respText.isEmpty()) {
-                        ns.contextMutable().add(new AssistantMessage(respText));
-                    }
-                    pgAgentStateStore.save("default", "dialogue-" + dialogueId, "agent_state", ns);
-                    log.info("Persisted user message to agent state for dialogue {} (state was empty, with file meta)", dialogueId);
-                }
-            } catch (Exception e) {
-                log.warn("Failed to clean up user message for dialogue {}: {}", dialogueId, e.getMessage());
-            }
-
-            // Persist user + assistant messages to dialogue_messages
-            try {
-                String filesJson = messageFiles != null && !messageFiles.isEmpty()
-                        ? objectMapper.writeValueAsString(messageFiles) : null;
-                DialogueMessageEntity dmUser = new DialogueMessageEntity();
-                dmUser.setDialogueId(dialogueId);
-                dmUser.setRole("user");
-                dmUser.setContent(userMessage);
-                dmUser.setMessageType("text");
-                dmUser.setFiles(filesJson);
-                dialogueMessageRepository.save(dmUser);
-
-                if (!finalResponse.isEmpty()) {
-                    DialogueMessageEntity asstMsg = new DialogueMessageEntity();
-                    asstMsg.setDialogueId(dialogueId);
-                    asstMsg.setRole("assistant");
-                    asstMsg.setContent(finalResponse);
-                    asstMsg.setMessageType("text");
-                    dialogueMessageRepository.save(asstMsg);
-                }
-            } catch (Exception e) {
-                log.warn("Failed to persist dialogue_messages for dialogue {}: {}", dialogueId, e.getMessage());
-            }
-
-            try {
-                emitter.send(SseEmitter.event().name("done").data(""));
-            } catch (IOException | IllegalStateException ignored) {
-            }
-            try {
-                emitter.complete();
-            } catch (Exception ignored) {
-            }
+            cleanUpUserMessageInState(dialogueId, userMessage, messageFileIds, messageFiles, fullResponse.toString());
+            persistDialogueMessages(dialogueId, userMessage, finalResponse, messageFiles);
+            completeEmitter(emitter);
         } catch (Exception e) {
             handleStreamError(emitter, e);
         }
@@ -356,12 +260,13 @@ public class ChatService {
             sysMsg.setRole("system");
             sysMsg.setContent(AgentConfig.SYSTEM_PROMPT);
 
+
             OpenAIMessage userMsg = new OpenAIMessage();
             userMsg.setRole("user");
             userMsg.setContent(contentParts);
 
             OpenAIRequest request = OpenAIRequest.builder()
-                    .model(zhipuModel)
+                    .model(zhiPuProps.getModel())
                     .messages(List.of(sysMsg, userMsg))
                     .stream(true)
                     .build();
@@ -370,7 +275,7 @@ public class ChatService {
             // so override the default endpoint to empty and pass the full URL as baseUrl
             GenerateOptions opts = GenerateOptions.builder().endpointPath("").build();
             AtomicBoolean clientDisconnected = new AtomicBoolean(false);
-            openAIClient.stream(zhipuApiKey, zhipuUrl + "/chat/completions", request, opts)
+            openAIClient.stream(zhiPuProps.getApiKey(), zhiPuProps.getUrl() + "/chat/completions", request, opts)
                     .doOnNext(response -> {
                         if (response.isChunk()) {
                             OpenAIMessage delta = response.getFirstChoice().getDelta();
@@ -392,94 +297,11 @@ public class ChatService {
                     })
                     .blockLast();
 
-            // Clean up: replace enriched user message with clean original in persisted state.
-            try {
-                AgentState st = pgAgentStateStore.get("default", "dialogue-" + dialogueId,
-                        "agent_state", AgentState.class).orElse(null);
-                if (st != null) {
-                    var ctx = st.contextMutable();
-                    for (int i = ctx.size() - 1; i >= 0; i--) {
-                        if (ctx.get(i).getRole() == MsgRole.USER) {
-                            UserMessage.Builder builder = UserMessage.builder().textContent(userMessage);
-                            Map<String, Object> meta = new HashMap<>();
-                            if (messageFileIds != null && !messageFileIds.isEmpty()) {
-                                meta.put("fileIds", messageFileIds);
-                            }
-                            if (messageFiles != null && !messageFiles.isEmpty()) {
-                                meta.put("files", messageFiles);
-                            }
-                            if (!meta.isEmpty()) {
-                                builder.metadata(meta);
-                            }
-                            ctx.set(i, builder.build());
-                            break;
-                        }
-                    }
-                    pgAgentStateStore.save("default", "dialogue-" + dialogueId, "agent_state", st);
-                } else {
-                    UserMessage.Builder builder = UserMessage.builder().textContent(userMessage);
-                    Map<String, Object> meta = new HashMap<>();
-                    if (messageFileIds != null && !messageFileIds.isEmpty()) {
-                        meta.put("fileIds", messageFileIds);
-                    }
-                    if (messageFiles != null && !messageFiles.isEmpty()) {
-                        meta.put("files", messageFiles);
-                    }
-                    if (!meta.isEmpty()) {
-                        builder.metadata(meta);
-                    }
-                    AgentState ns = AgentState.builder().sessionId("dialogue-" + dialogueId).build();
-                    ns.contextMutable().add(builder.build());
-                    String respText = fullResponse.toString();
-                    if (!respText.isEmpty()) {
-                        ns.contextMutable().add(new AssistantMessage(respText));
-                    }
-                    pgAgentStateStore.save("default", "dialogue-" + dialogueId, "agent_state", ns);
-                    log.info("Persisted user message to agent state for dialogue {} (state was empty, with file meta)", dialogueId);
-                }
-            } catch (Exception e) {
-                log.warn("Failed to clean up user message for dialogue {}: {}", dialogueId, e.getMessage());
-            }
-
-            // Persist user + assistant messages to dialogue_messages
-            try {
-                String respText = fullResponse.toString();
-                String filesJson = messageFiles != null && !messageFiles.isEmpty()
-                        ? objectMapper.writeValueAsString(messageFiles) : null;
-                DialogueMessageEntity dmUser = new DialogueMessageEntity();
-                dmUser.setDialogueId(dialogueId);
-                dmUser.setRole("user");
-                dmUser.setContent(userMessage);
-                dmUser.setMessageType("text");
-                dmUser.setFiles(filesJson);
-                dialogueMessageRepository.save(dmUser);
-
-                if (!respText.isEmpty()) {
-                    DialogueMessageEntity asstMsg = new DialogueMessageEntity();
-                    asstMsg.setDialogueId(dialogueId);
-                    asstMsg.setRole("assistant");
-                    asstMsg.setContent(respText);
-                    asstMsg.setMessageType("text");
-                    dialogueMessageRepository.save(asstMsg);
-                }
-            } catch (Exception e) {
-                log.warn("Failed to persist dialogue_messages for dialogue {}: {}", dialogueId, e.getMessage());
-            }
-
-            try {
-                emitter.send(SseEmitter.event().name("done").data(""));
-            } catch (IOException | IllegalStateException ignored) {
-            }
-            try {
-                emitter.complete();
-            } catch (Exception ignored) {
-            }
-
+            cleanUpUserMessageInState(dialogueId, userMessage, messageFileIds, messageFiles, fullResponse.toString());
+            persistDialogueMessages(dialogueId, userMessage, fullResponse.toString(), messageFiles);
+            completeEmitter(emitter);
         } catch (Exception e) {
-            try {
-                emitter.send(SseEmitter.event().name("error").data("智谱调用失败: " + e.getMessage()));
-            } catch (IOException ignored) {}
-            emitter.completeWithError(e);
+            handleStreamError(emitter, e);
         }
     }
 
@@ -536,7 +358,7 @@ public class ChatService {
 
         try {
             OpenAIRequest request = OpenAIRequest.builder()
-                    .model("deepseek-chat")
+                    .model(deepSeekProps.getModel())
                     .messages(List.of(
                             OpenAIMessage.builder().role("system")
                                     .content("你是一个严谨的回答质量检查员，检查回答是否存在事实错误、幻觉和表达问题。").build(),
@@ -546,7 +368,7 @@ public class ChatService {
                     .maxTokens(4096)
                     .build();
 
-            OpenAIResponse response = openAIClient.call(deepseekApiKey, deepseekApiUrl, request);
+            OpenAIResponse response = openAIClient.call(deepSeekProps.getApiKey(), deepSeekProps.getUrl(), request);
             String result = response.getFirstChoice().getMessage().getContentAsString();
 
             if (result == null || result.contains("无需修改") || result.contains("没有问题")) {
@@ -569,49 +391,38 @@ public class ChatService {
     private List<Long> parseFileIdsFromMetadata(String metadata) {
         if (metadata == null || metadata.isBlank()) return List.of();
         try {
-            int fileIdsIdx = metadata.indexOf("\"fileIds\"");
-            if (fileIdsIdx < 0) return List.of();
-            int start = metadata.indexOf("[", fileIdsIdx);
-            int end = metadata.indexOf("]", start);
-            if (start < 0 || end < 0) return List.of();
-            String arr = metadata.substring(start + 1, end);
-            if (arr.isBlank()) return List.of();
-            return Arrays.stream(arr.split(","))
-                    .map(String::trim)
-                    .filter(s -> !s.isEmpty())
-                    .map(Long::parseLong)
-                    .toList();
+            Map<String, Object> map = objectMapper.readValue(metadata, new com.fasterxml.jackson.core.type.TypeReference<>() {});
+            Object fileIds = map.get("fileIds");
+            if (fileIds instanceof List<?> list) {
+                return list.stream()
+                        .filter(Objects::nonNull)
+                        .map(item -> item instanceof Number n ? n.longValue() : Long.parseLong(item.toString()))
+                        .toList();
+            }
+            return List.of();
         } catch (Exception e) {
             log.warn("Failed to parse fileIds from metadata: {}", e.getMessage());
             return List.of();
         }
     }
 
-    /**
-     * Parse file metadata array from metadata JSON string.
-     * New format: {"files":[{"fileId":"uuid","filePath":"/path","ext":".docx",...}]}
-     */
-    @SuppressWarnings("unchecked")
     private List<Map<String, Object>> parseFilesFromMetadata(String metadata) {
         if (metadata == null || metadata.isBlank()) return List.of();
         try {
-            int filesIdx = metadata.indexOf("\"files\"");
-            if (filesIdx < 0) return List.of();
-            // Find the start of the JSON array after "files":
-            int arrayStart = metadata.indexOf("[", filesIdx);
-            if (arrayStart < 0) return List.of();
-            // Find the matching closing bracket (simple approach: find last ] after arrayStart)
-            int arrayEnd = metadata.lastIndexOf("]");
-            if (arrayEnd <= arrayStart) return List.of();
-            String arrayJson = metadata.substring(arrayStart, arrayEnd + 1);
-            var list = objectMapper.readValue(arrayJson, List.class);
-            List<Map<String, Object>> result = new ArrayList<>();
-            for (Object item : list) {
-                if (item instanceof Map) {
-                    result.add((Map<String, Object>) item);
+            Map<String, Object> map = objectMapper.readValue(metadata, new com.fasterxml.jackson.core.type.TypeReference<>() {});
+            Object files = map.get("files");
+            if (files instanceof List<?> list) {
+                List<Map<String, Object>> result = new ArrayList<>();
+                for (Object item : list) {
+                    if (item instanceof Map) {
+                        @SuppressWarnings("unchecked")
+                        Map<String, Object> m = (Map<String, Object>) item;
+                        result.add(m);
+                    }
                 }
+                return result;
             }
-            return result;
+            return List.of();
         } catch (Exception e) {
             log.warn("Failed to parse files from metadata: {}", e.getMessage());
             return List.of();
@@ -716,6 +527,96 @@ public class ChatService {
             return null;
         } catch (Exception e) {
             return null;
+        }
+    }
+
+    private void cleanUpUserMessageInState(Long dialogueId, String userMessage,
+                                           List<Long> messageFileIds,
+                                           List<Map<String, Object>> messageFiles,
+                                           String responseText) {
+        try {
+            AgentState st = pgAgentStateStore.get("default", "dialogue-" + dialogueId,
+                    "agent_state", AgentState.class).orElse(null);
+            if (st != null) {
+                var context = st.contextMutable();
+                for (int i = context.size() - 1; i >= 0; i--) {
+                    if (context.get(i).getRole() == MsgRole.USER) {
+                        context.set(i, buildCleanUserMessage(userMessage, messageFileIds, messageFiles));
+                        break;
+                    }
+                }
+                pgAgentStateStore.save("default", "dialogue-" + dialogueId, "agent_state", st);
+            } else {
+                AgentState ns = AgentState.builder().sessionId("dialogue-" + dialogueId).build();
+                ns.contextMutable().add(buildCleanUserMessage(userMessage, messageFileIds, messageFiles));
+                if (!responseText.isEmpty()) {
+                    ns.contextMutable().add(new AssistantMessage(responseText));
+                }
+                pgAgentStateStore.save("default", "dialogue-" + dialogueId, "agent_state", ns);
+            }
+        } catch (Exception e) {
+            log.warn("Failed to clean up user message for dialogue {}: {}", dialogueId, e.getMessage());
+        }
+    }
+
+    private UserMessage buildCleanUserMessage(String userMessage,
+                                              List<Long> messageFileIds,
+                                              List<Map<String, Object>> messageFiles) {
+        UserMessage.Builder builder = UserMessage.builder().textContent(userMessage);
+        Map<String, Object> meta = new HashMap<>();
+        if (messageFileIds != null && !messageFileIds.isEmpty()) {
+            meta.put("fileIds", messageFileIds);
+        }
+        if (messageFiles != null && !messageFiles.isEmpty()) {
+            meta.put("files", messageFiles);
+        }
+        if (!meta.isEmpty()) {
+            builder.metadata(meta);
+        }
+        return builder.build();
+    }
+
+    private void persistDialogueMessages(Long dialogueId, String userMessage,
+                                         String assistantResponse,
+                                         List<Map<String, Object>> messageFiles) {
+        try {
+            txTemplate.executeWithoutResult(status -> {
+                try {
+                    String filesJson = messageFiles != null && !messageFiles.isEmpty()
+                            ? objectMapper.writeValueAsString(messageFiles) : null;
+                    DialogueMessageEntity dmUser = new DialogueMessageEntity();
+                    dmUser.setDialogueId(dialogueId);
+                    dmUser.setRole("user");
+                    dmUser.setContent(userMessage);
+                    dmUser.setMessageType("text");
+                    dmUser.setFiles(filesJson);
+                    dialogueMessageRepository.save(dmUser);
+
+                    if (!assistantResponse.isEmpty()) {
+                        DialogueMessageEntity asstMsg = new DialogueMessageEntity();
+                        asstMsg.setDialogueId(dialogueId);
+                        asstMsg.setRole("assistant");
+                        asstMsg.setContent(assistantResponse);
+                        asstMsg.setMessageType("text");
+                        dialogueMessageRepository.save(asstMsg);
+                    }
+                } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
+                    throw new RuntimeException(e);
+                }
+            });
+        } catch (Exception e) {
+            log.warn("Failed to persist dialogue_messages for dialogue {}: {}", dialogueId, e.getMessage());
+        }
+    }
+
+    private void completeEmitter(SseEmitter emitter) {
+        try {
+            emitter.send(SseEmitter.event().name("done").data(""));
+        } catch (IOException | IllegalStateException ignored) {
+        }
+        try {
+            emitter.complete();
+        } catch (Exception ignored) {
         }
     }
 

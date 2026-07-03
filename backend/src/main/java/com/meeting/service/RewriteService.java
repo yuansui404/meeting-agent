@@ -1,5 +1,6 @@
 package com.meeting.service;
 
+import com.meeting.config.DeepSeekProperties;
 import com.meeting.conversation.model.entity.RewriteResult;
 import com.meeting.conversation.repository.RewriteResultRepository;
 import io.agentscope.core.formatter.openai.dto.OpenAIMessage;
@@ -12,18 +13,17 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
+import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.core.task.TaskExecutor;
+
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.LocalDateTime;
 import java.util.*;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.Collectors;
-import jakarta.annotation.PreDestroy;
 
 @Service
 public class RewriteService {
@@ -34,44 +34,25 @@ public class RewriteService {
     private final RewriteResultRepository rewriteResultRepository;
     private final SessionService sessionService;
     private final StyleLearningService styleLearningService;
-    private final ExecutorService executor = Executors.newFixedThreadPool(
-            Runtime.getRuntime().availableProcessors() * 2);
-
-    private final String deepseekApiKey;
-    private final String deepseekModel;
-    private final String deepseekUrl;
+    private final TaskExecutor taskExecutor;
+    private final DeepSeekProperties deepSeekProps;
     private final String uploadDir;
     private final OpenAIClient openAIClient;
 
-    public RewriteService(@Value("${deepseek.api-key:}") String apiKey,
-                          @Value("${deepseek.model:deepseek-chat}") String modelName,
-                          @Value("${deepseek.url:https://api.deepseek.com}") String apiUrl,
-                          @Value("${file.upload-dir:/app/data/uploads}") String uploadDir,
+    public RewriteService(@Value("${file.upload-dir:/app/data/uploads}") String uploadDir,
                           RewriteResultRepository rewriteResultRepository,
                           SessionService sessionService,
                           StyleLearningService styleLearningService,
-                          OpenAIClient openAIClient) {
+                          OpenAIClient openAIClient,
+                          @Qualifier("llmTaskExecutor") TaskExecutor taskExecutor,
+                          DeepSeekProperties deepSeekProps) {
         this.rewriteResultRepository = rewriteResultRepository;
         this.sessionService = sessionService;
         this.styleLearningService = styleLearningService;
-        this.deepseekApiKey = apiKey;
-        this.deepseekModel = modelName;
-        this.deepseekUrl = apiUrl;
         this.uploadDir = uploadDir;
         this.openAIClient = openAIClient;
-    }
-
-    @PreDestroy
-    public void shutdown() {
-        executor.shutdown();
-        try {
-            if (!executor.awaitTermination(10, TimeUnit.SECONDS)) {
-                executor.shutdownNow();
-            }
-        } catch (InterruptedException e) {
-            executor.shutdownNow();
-            Thread.currentThread().interrupt();
-        }
+        this.taskExecutor = taskExecutor;
+        this.deepSeekProps = deepSeekProps;
     }
 
     /**
@@ -79,7 +60,7 @@ public class RewriteService {
      * Skips file loading — uses the provided content directly.
      */
     public void streamRewriteWithContent(Long dialogueId, String sourceContent, SseEmitter emitter) {
-        executor.submit(() -> {
+        taskExecutor.execute(() -> {
             StringBuilder fullResponse = new StringBuilder();
 
             try {
@@ -168,7 +149,7 @@ public class RewriteService {
     private String streamDeepSeek(String prompt, SseEmitter emitter, StringBuilder fullResponse) throws IOException {
         try {
             OpenAIRequest request = OpenAIRequest.builder()
-                    .model(deepseekModel)
+                    .model(deepSeekProps.getModel())
                     .messages(List.of(
                             OpenAIMessage.builder().role("system")
                                     .content("你是专业的会议纪要撰写助手，擅长润色和改写会议记录。").build(),
@@ -178,7 +159,7 @@ public class RewriteService {
                     .build();
 
             final AtomicBoolean clientDisconnected = new AtomicBoolean(false);
-            openAIClient.stream(deepseekApiKey, deepseekUrl, request, null)
+            openAIClient.stream(deepSeekProps.getApiKey(), deepSeekProps.getUrl(), request, null)
                     .doOnNext(response -> {
                         if (response.isChunk()) {
                             OpenAIMessage delta = response.getFirstChoice().getDelta();
@@ -311,7 +292,7 @@ public class RewriteService {
     private String callDeepSeekNonStreaming(String systemMessage, String userMessage, int maxTokens) throws IOException {
         try {
             OpenAIRequest request = OpenAIRequest.builder()
-                    .model(deepseekModel)
+                    .model(deepSeekProps.getModel())
                     .messages(List.of(
                             OpenAIMessage.builder().role("system").content(systemMessage).build(),
                             OpenAIMessage.builder().role("user").content(userMessage).build()
@@ -319,7 +300,7 @@ public class RewriteService {
                     .maxTokens(maxTokens)
                     .build();
 
-            OpenAIResponse response = openAIClient.call(deepseekApiKey, deepseekUrl, request);
+            OpenAIResponse response = openAIClient.call(deepSeekProps.getApiKey(), deepSeekProps.getUrl(), request);
             return response.getFirstChoice().getMessage().getContentAsString();
         } catch (Exception e) {
             throw new IOException("DeepSeek non-streaming call failed: " + e.getMessage(), e);
