@@ -20,6 +20,7 @@ import io.agentscope.core.model.OpenAIClient;
 import io.agentscope.harness.agent.HarnessAgent;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import lombok.RequiredArgsConstructor;
 import org.springframework.cloud.context.config.annotation.RefreshScope;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.support.TransactionTemplate;
@@ -37,6 +38,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 @Service
 @RefreshScope
+@RequiredArgsConstructor
 public class ChatService {
 
     private static final Logger log = LoggerFactory.getLogger(ChatService.class);
@@ -49,32 +51,12 @@ public class ChatService {
     private final HarnessAgent agent;
     private final PgAgentStateStore pgAgentStateStore;
     private final DialogueMessageRepository dialogueMessageRepository;
-    private final TaskExecutor taskExecutor;
+    @Qualifier("llmTaskExecutor") private final TaskExecutor taskExecutor;
     private final OpenAIClient openAIClient;
     private final ObjectMapper objectMapper;
     private final TransactionTemplate txTemplate;
     private final DeepSeekProperties deepSeekProps;
     private final ZhiPuProperties zhiPuProps;
-
-    public ChatService(HarnessAgent meetingAssistantAgent,
-                       PgAgentStateStore pgAgentStateStore,
-                       DialogueMessageRepository dialogueMessageRepository,
-                       OpenAIClient openAIClient,
-                       @Qualifier("llmTaskExecutor") TaskExecutor taskExecutor,
-                       ObjectMapper objectMapper,
-                       TransactionTemplate txTemplate,
-                       DeepSeekProperties deepSeekProps,
-                       ZhiPuProperties zhiPuProps) {
-        this.agent = meetingAssistantAgent;
-        this.pgAgentStateStore = pgAgentStateStore;
-        this.dialogueMessageRepository = dialogueMessageRepository;
-        this.taskExecutor = taskExecutor;
-        this.openAIClient = openAIClient;
-        this.objectMapper = objectMapper;
-        this.txTemplate = txTemplate;
-        this.deepSeekProps = deepSeekProps;
-        this.zhiPuProps = zhiPuProps;
-    }
 
     public void streamChat(Long dialogueId, String userMessage, String metadata, SseEmitter emitter) {
         taskExecutor.execute(() -> {

@@ -2,6 +2,7 @@ package com.meeting.service;
 
 import com.meeting.config.DeepSeekProperties;
 import com.meeting.conversation.model.entity.RewriteResult;
+import lombok.RequiredArgsConstructor;
 import com.meeting.conversation.repository.RewriteResultRepository;
 import io.agentscope.core.formatter.openai.dto.OpenAIMessage;
 import io.agentscope.core.formatter.openai.dto.OpenAIRequest;
@@ -26,6 +27,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.Collectors;
 
 @Service
+@RequiredArgsConstructor
 public class RewriteService {
 
     private static final Logger log = LoggerFactory.getLogger(RewriteService.class);
@@ -34,26 +36,10 @@ public class RewriteService {
     private final RewriteResultRepository rewriteResultRepository;
     private final SessionService sessionService;
     private final StyleLearningService styleLearningService;
-    private final TaskExecutor taskExecutor;
+    @Qualifier("llmTaskExecutor") private final TaskExecutor taskExecutor;
     private final DeepSeekProperties deepSeekProps;
-    private final String uploadDir;
+    @Value("${file.upload-dir:/app/data/uploads}") private final String uploadDir;
     private final OpenAIClient openAIClient;
-
-    public RewriteService(@Value("${file.upload-dir:/app/data/uploads}") String uploadDir,
-                          RewriteResultRepository rewriteResultRepository,
-                          SessionService sessionService,
-                          StyleLearningService styleLearningService,
-                          OpenAIClient openAIClient,
-                          @Qualifier("llmTaskExecutor") TaskExecutor taskExecutor,
-                          DeepSeekProperties deepSeekProps) {
-        this.rewriteResultRepository = rewriteResultRepository;
-        this.sessionService = sessionService;
-        this.styleLearningService = styleLearningService;
-        this.uploadDir = uploadDir;
-        this.openAIClient = openAIClient;
-        this.taskExecutor = taskExecutor;
-        this.deepSeekProps = deepSeekProps;
-    }
 
     /**
      * Rewrite with pre-loaded source content (used by multi-intent flow).
