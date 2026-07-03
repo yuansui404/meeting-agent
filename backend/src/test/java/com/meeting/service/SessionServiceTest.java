@@ -80,7 +80,7 @@ class SessionServiceTest {
         entity.setStatus("active");
         entity.setUpdatedAt(LocalDateTime.of(2026, 7, 1, 10, 0));
 
-        com.meeting.entity.DialogueMessageEntity msg = new com.meeting.entity.DialogueMessageEntity();
+        com.meeting.conversation.model.entity.DialogueMessageEntity msg = new com.meeting.conversation.model.entity.DialogueMessageEntity();
         msg.setId(1L);
         msg.setDialogueId(1L);
         msg.setRole("user");

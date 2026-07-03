@@ -36,7 +36,7 @@ public class RewriteService {
     private final StyleLearningService styleLearningService;
     @Qualifier("llmTaskExecutor") private final TaskExecutor taskExecutor;
     private final DeepSeekProperties deepSeekProps;
-    @Value("${file.upload-dir:/app/data/uploads}") private final String uploadDir;
+    @Value("${file.upload-dir:/app/data/uploads}") private final String uploadDir = "/app/data/uploads";
     private final OpenAIClient openAIClient;
 
     /**

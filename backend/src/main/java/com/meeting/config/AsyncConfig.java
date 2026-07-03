@@ -4,14 +4,14 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 
-import java.util.concurrent.Executor;
+import org.springframework.core.task.TaskExecutor;
 import java.util.concurrent.ThreadPoolExecutor;
 
 @Configuration
 public class AsyncConfig {
 
     @Bean("llmTaskExecutor")
-    public Executor llmTaskExecutor() {
+    public TaskExecutor llmTaskExecutor() {
         int cores = Runtime.getRuntime().availableProcessors();
         ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
         executor.setCorePoolSize(cores * 2);
