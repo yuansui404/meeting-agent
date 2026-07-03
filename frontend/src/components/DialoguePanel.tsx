@@ -147,7 +147,10 @@ const DialoguePanel: React.FC<Props> = ({ activeDialogue, onDialogueUpdated, onS
       const res = await getDialogue(id);
       const msgs: DisplayMessage[] = (res.data.messages || []).map((m: DialogueMessage) => ({
         ...m,
-        files: m.files || undefined,
+        files: (m.files || []).map((f: any) => ({
+          ...f,
+          title: f.title || f.fileName || f.name || '未知文件',
+        })),
       }));
       setMessages(msgs);
     } catch {

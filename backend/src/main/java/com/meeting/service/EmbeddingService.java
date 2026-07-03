@@ -53,6 +53,10 @@ public class EmbeddingService {
     }
 
     public float[] generateEmbedding(String text) {
+        if (restClient == null) {
+            log.warn("Embedding API key not configured, falling back to simple embedding");
+            return generateSimpleEmbedding(text);
+        }
         return switch (provider) {
             case "openai" -> generateOpenAiEmbedding(text);
             case "deepseek" -> generateDeepSeekEmbedding(text);

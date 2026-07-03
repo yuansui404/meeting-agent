@@ -43,6 +43,8 @@ services:
       NACOS_AUTH_ENABLE: "false"
       JVM_XMS: 256m
       JVM_XMX: 512m
+    volumes:
+      - ~/.nacos/data:/home/nacos/data
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8848/nacos/actuator/health"]
       interval: 15s
@@ -64,9 +66,7 @@ services:
       - REDIS_URL=redis://redis:6379
       - NACOS_ADDR=nacos:8848
       - FILE_UPLOAD_DIR=/app/data/uploads
-      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY:-placeholder}
-      - MIMO_API_KEY=${MIMO_API_KEY:-placeholder}
-      - TAVILY_API_KEY=${TAVILY_API_KEY:-placeholder}
+      - SPRING_CLOUD_NACOS_CONFIG_SERVER-ADDR=nacos:8848
     depends_on:
       postgres:
         condition: service_healthy

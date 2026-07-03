@@ -1,9 +1,6 @@
 package com.meeting.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.meeting.config.AgentConfig;
-import com.meeting.config.DeepSeekProperties;
-import com.meeting.config.ZhiPuProperties;
 import com.meeting.document.service.DocumentTextExtractor;
 import com.meeting.conversation.model.entity.DialogueMessageEntity;
 import com.meeting.conversation.repository.DialogueMessageRepository;
@@ -11,12 +8,7 @@ import com.meeting.state.PgAgentStateStore;
 import io.agentscope.core.agent.RuntimeContext;
 import io.agentscope.core.state.AgentState;
 import io.agentscope.core.event.*;
-import io.agentscope.core.formatter.openai.dto.OpenAIMessage;
-import io.agentscope.core.formatter.openai.dto.OpenAIRequest;
-import io.agentscope.core.formatter.openai.dto.OpenAIResponse;
 import io.agentscope.core.message.*;
-import io.agentscope.core.model.GenerateOptions;
-import io.agentscope.core.model.OpenAIClient;
 import io.agentscope.harness.agent.HarnessAgent;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -45,34 +37,20 @@ public class ChatService {
     private static final Set<String> IMAGE_FORMATS = Set.of(".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp", ".svg");
     private static final Set<String> TEXT_FORMATS = Set.of(".txt", ".md", ".csv", ".json", ".xml", ".html", ".yaml", ".yml", ".properties");
     private static final Set<String> DOC_FORMATS = Set.of(".pdf", ".doc", ".docx");
-
-    private final HarnessAgent agent;
+    @Qualifier("meetingAssistantAgent") private final HarnessAgent agent;
     private final PgAgentStateStore pgAgentStateStore;
     private final DialogueMessageRepository dialogueMessageRepository;
+    private final com.meeting.conversation.repository.SessionRepository sessionRepository;
     @Qualifier("llmTaskExecutor") private final TaskExecutor taskExecutor;
-    private final OpenAIClient openAIClient;
     private final ObjectMapper objectMapper;
     private final TransactionTemplate txTemplate;
-    private final DeepSeekProperties deepSeekProps;
-    private final ZhiPuProperties zhiPuProps;
 
     public void streamChat(Long dialogueId, String userMessage, String metadata, SseEmitter emitter) {
         taskExecutor.execute(() -> {
             try {
-                // Parse file info from metadata
                 List<Long> messageFileIds = parseFileIdsFromMetadata(metadata);
                 List<Map<String, Object>> messageFiles = parseFilesFromMetadata(metadata);
-
-                // Build file blocks (images for multimodal, others for text context)
-                List<ContentBlock> fileBlocks = buildFileBlocks(dialogueId, messageFileIds, messageFiles);
-                boolean hasImages = fileBlocks.stream().anyMatch(b -> b instanceof ImageBlock);
-
-                // ZhiPu only for multimodal (images), DeepSeek for all text
-                if (hasImages) {
-                    streamChatWithZhipu(dialogueId, userMessage, fileBlocks, messageFileIds, messageFiles, emitter);
-                } else {
-                    streamChatWithDeepSeek(dialogueId, userMessage, fileBlocks, messageFileIds, messageFiles, emitter);
-                }
+                streamChatWithDeepSeek(dialogueId, userMessage, messageFileIds, messageFiles, emitter);
             } catch (Exception e) {
                 handleStreamError(emitter, e);
             }
@@ -80,45 +58,45 @@ public class ChatService {
     }
 
     private void streamChatWithDeepSeek(Long dialogueId, String userMessage,
-                                        List<ContentBlock> fileBlocks,
                                         List<Long> messageFileIds,
                                         List<Map<String, Object>> messageFiles,
                                         SseEmitter emitter) {
         StringBuilder fullResponse = new StringBuilder();
         try {
-            // Profile context removed from user message to avoid polluting saved state.
-            // Agent can read profile via read_profile tool when needed.
             String fileContext = buildFileTextContext(dialogueId, messageFileIds, messageFiles);
-            UserMessage msg;
-            if (!fileBlocks.isEmpty()) {
-                String enriched = buildEnrichedMessage(fileContext, userMessage);
-                List<ContentBlock> blocks = new ArrayList<>();
-                blocks.add(TextBlock.builder().text(enriched).build());
-                blocks.addAll(fileBlocks);
-                msg = new UserMessage(blocks);
-            } else {
-                String enriched = buildEnrichedMessage(fileContext, userMessage);
-                msg = new UserMessage(enriched);
-            }
+            String enriched = buildEnrichedMessage(fileContext, userMessage);
+            UserMessage msg = new UserMessage(enriched);
 
             RuntimeContext ctx = RuntimeContext.builder()
                     .sessionId("dialogue-" + dialogueId)
                     .build();
 
+            // Auto-approve all tool calls (bypass permission confirmation)
+            agent.setPermissionMode(ctx, io.agentscope.core.permission.PermissionMode.BYPASS);
+
             final AtomicBoolean clientDisconnected = new AtomicBoolean(false);
             final AtomicBoolean invokedTools = new AtomicBoolean(false);
+            final AtomicBoolean subagentActive = new AtomicBoolean(false);
             agent.streamEvents(msg, ctx)
                     .doOnNext(event -> {
-                        if (event instanceof ToolCallStartEvent) {
+                        // Track subagent lifecycle — suppress all subagent output
+                        if (event instanceof AgentStartEvent) {
+                            subagentActive.set(true);
+                        } else if (event instanceof AgentEndEvent) {
+                            subagentActive.set(false);
+                        }
+                        if (event instanceof ToolCallStartEvent e) {
                             invokedTools.set(true);
                         }
                         if (!clientDisconnected.get()) {
                             try {
                                 if (event instanceof TextBlockDeltaEvent e) {
+                                    if (subagentActive.get()) return; // subagent text → skip
                                     String delta = e.getDelta();
                                     fullResponse.append(delta);
                                     emitter.send(SseEmitter.event().data(delta));
                                 } else if (event instanceof ThinkingBlockDeltaEvent e) {
+                                    if (subagentActive.get()) return; // subagent thinking → skip
                                     String delta = e.getDelta();
                                     if (delta != null) {
                                         delta = delta.replaceAll("(?i)exit\\s*code:?\\s*\\d+", "").trim();
@@ -172,113 +150,10 @@ public class ChatService {
                     })
                     .blockLast();
 
-            // Self-check: validate response when tools were invoked
             String responseText = fullResponse.toString();
-            String finalResponse = responseText;
-            if (invokedTools.get() && !clientDisconnected.get() && !responseText.isEmpty()) {
-                try {
-                    String corrected = performSelfCheck(userMessage, responseText);
-                    if (corrected != null && !corrected.equals(responseText)) {
-                        emitter.send(SseEmitter.event().name("corrected").data(corrected));
-                        finalResponse = corrected;
-                        // Update the agent state with corrected content
-                        AgentState state = pgAgentStateStore.get("default", "dialogue-" + dialogueId,
-                                "agent_state", AgentState.class).orElse(null);
-                        if (state != null) {
-                            var context = state.contextMutable();
-                            for (int i = context.size() - 1; i >= 0; i--) {
-                                if ("assistant".equals(context.get(i).getRole())) {
-                                    context.set(i, new AssistantMessage(corrected));
-                                    break;
-                                }
-                            }
-                            pgAgentStateStore.save("default", "dialogue-" + dialogueId, "agent_state", state);
-                        }
-                        log.info("Self-check corrected response for dialogue {}", dialogueId);
-                    }
-                } catch (Exception e) {
-                    log.warn("Self-check failed for dialogue {}: {}", dialogueId, e.getMessage());
-                }
-            }
 
-            cleanUpUserMessageInState(dialogueId, userMessage, messageFileIds, messageFiles, fullResponse.toString());
-            persistDialogueMessages(dialogueId, userMessage, finalResponse, messageFiles);
-            completeEmitter(emitter);
-        } catch (Exception e) {
-            handleStreamError(emitter, e);
-        }
-    }
-
-    private void streamChatWithZhipu(Long dialogueId, String userMessage,
-                                     List<ContentBlock> fileBlocks,
-                                     List<Long> messageFileIds,
-                                     List<Map<String, Object>> messageFiles,
-                                     SseEmitter emitter) {
-        StringBuilder fullResponse = new StringBuilder();
-        try {
-            String fileContext = buildFileTextContext(dialogueId, messageFileIds, messageFiles);
-            String enriched = buildEnrichedMessage(fileContext, userMessage);
-
-            // Build multimodal content parts
-            List<Object> contentParts = new ArrayList<>();
-            contentParts.add(Map.of("type", "text", "text", enriched));
-            for (ContentBlock block : fileBlocks) {
-                if (block instanceof ImageBlock ib) {
-                    Source source = ib.getSource();
-                    if (source instanceof Base64Source b64) {
-                        contentParts.add(Map.of(
-                                "type", "image_url",
-                                "image_url", Map.of("url",
-                                        "data:" + b64.getMediaType() + ";base64," + b64.getData())
-                        ));
-                    }
-                }
-            }
-
-            // Build messages using AgentScope DTOs
-            OpenAIMessage sysMsg = new OpenAIMessage();
-            sysMsg.setRole("system");
-            sysMsg.setContent(AgentConfig.SYSTEM_PROMPT);
-
-
-            OpenAIMessage userMsg = new OpenAIMessage();
-            userMsg.setRole("user");
-            userMsg.setContent(contentParts);
-
-            OpenAIRequest request = OpenAIRequest.builder()
-                    .model(zhiPuProps.getModel())
-                    .messages(List.of(sysMsg, userMsg))
-                    .stream(true)
-                    .build();
-
-            // Stream via OpenAIClient — ZhiPu uses /chat/completions (no /v1 prefix),
-            // so override the default endpoint to empty and pass the full URL as baseUrl
-            GenerateOptions opts = GenerateOptions.builder().endpointPath("").build();
-            AtomicBoolean clientDisconnected = new AtomicBoolean(false);
-            openAIClient.stream(zhiPuProps.getApiKey(), zhiPuProps.getUrl() + "/chat/completions", request, opts)
-                    .doOnNext(response -> {
-                        if (response.isChunk()) {
-                            OpenAIMessage delta = response.getFirstChoice().getDelta();
-                            if (delta != null) {
-                                String content = delta.getContentAsString();
-                                if (content != null && !content.isEmpty()) {
-                                    fullResponse.append(content);
-                                    if (!clientDisconnected.get()) {
-                                        try {
-                                            emitter.send(SseEmitter.event().data(content));
-                                        } catch (IOException | IllegalStateException ex) {
-                                            clientDisconnected.set(true);
-                                            log.info("Client disconnected during ZhiPu stream: {}", ex.getMessage());
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    })
-                    .blockLast();
-
-            cleanUpUserMessageInState(dialogueId, userMessage, messageFileIds, messageFiles, fullResponse.toString());
-            persistDialogueMessages(dialogueId, userMessage, fullResponse.toString(), messageFiles);
+            cleanUpUserMessageInState(dialogueId, userMessage, messageFileIds, messageFiles, responseText);
+            persistDialogueMessages(dialogueId, userMessage, responseText, messageFiles);
             completeEmitter(emitter);
         } catch (Exception e) {
             handleStreamError(emitter, e);
@@ -312,55 +187,6 @@ public class ChatService {
         sb.append("\n资料内容：\n").append(fileContext);
         sb.append("\n\n问题：").append(userMessage);
         return sb.toString();
-    }
-
-    /**
-     * Self-check: validate response via non-streaming DeepSeek call.
-     * Returns corrected text if issues found, or original text if none.
-     */
-    private String performSelfCheck(String userMessage, String responseText) {
-        String checkPrompt = """
-                你是一个AI助手回答质量检查员。检查以下回答的质量：
-
-                检查要点：
-                1. 回答是否准确、完整地回应了用户的问题
-                2. 是否存在事实性错误或幻觉信息
-                3. 是否存在错别字、语法错误或表达不清晰的地方
-                4. 如果引用了外部信息，是否与问题相关
-
-                用户问题：%s
-
-                AI回答：%s
-
-                如果回答有错误或需要改进，请给出修正后的完整版本。
-                如果回答没有问题，请直接回复「无需修改」。
-                """.formatted(userMessage, responseText);
-
-        try {
-            OpenAIRequest request = OpenAIRequest.builder()
-                    .model(deepSeekProps.getModel())
-                    .messages(List.of(
-                            OpenAIMessage.builder().role("system")
-                                    .content("你是一个严谨的回答质量检查员，检查回答是否存在事实错误、幻觉和表达问题。").build(),
-                            OpenAIMessage.builder().role("user").content(checkPrompt).build()
-                    ))
-                    .temperature(0.1)
-                    .maxTokens(4096)
-                    .build();
-
-            OpenAIResponse response = openAIClient.call(deepSeekProps.getApiKey(), deepSeekProps.getUrl(), request);
-            String result = response.getFirstChoice().getMessage().getContentAsString();
-
-            if (result == null || result.contains("无需修改") || result.contains("没有问题")) {
-                return responseText;
-            }
-
-            log.info("Self-check found issues, providing corrected response");
-            return result;
-        } catch (Exception e) {
-            log.warn("Self-check OpenAIClient call failed: {}", e.getMessage());
-            return responseText;
-        }
     }
 
     /**
@@ -467,35 +293,6 @@ public class ChatService {
         }
     }
 
-    private List<ContentBlock> buildFileBlocks(Long dialogueId, List<Long> messageFileIds, List<Map<String, Object>> messageFiles) {
-        List<ContentBlock> blocks = new ArrayList<>();
-
-        // New-style files from metadata
-        if (messageFiles != null) {
-            for (Map<String, Object> fm : messageFiles) {
-                String ext = (String) fm.get("ext");
-                if (ext == null || !IMAGE_FORMATS.contains(ext.toLowerCase())) continue;
-                String path = (String) fm.get("filePath");
-                if (path == null) continue;
-                Path filePath = Path.of(path);
-                if (!Files.exists(filePath)) continue;
-                try {
-                    if (Files.size(filePath) > MAX_FILE_SIZE) {
-                        log.warn("Image too large, skipping: {} ({} bytes)", path, Files.size(filePath));
-                        continue;
-                    }
-                    String mediaType = getImageMimeType(ext.toLowerCase());
-                    String base64 = Base64.getEncoder().encodeToString(Files.readAllBytes(filePath));
-                    blocks.add(new ImageBlock(new Base64Source(mediaType, base64)));
-                } catch (IOException e) {
-                    log.warn("Failed to read image {}: {}", path, e.getMessage());
-                }
-            }
-        }
-
-        return blocks;
-    }
-
     private String extractFileContent(Path filePath, String ext) {
         try {
             if (TEXT_FORMATS.contains(ext)) {
@@ -580,6 +377,12 @@ public class ChatService {
                         asstMsg.setMessageType("text");
                         dialogueMessageRepository.save(asstMsg);
                     }
+
+                    // Update session updatedAt so dialogue list shows correct time
+                    sessionRepository.findById(dialogueId).ifPresent(session -> {
+                        session.setUpdatedAt(java.time.LocalDateTime.now());
+                        sessionRepository.save(session);
+                    });
                 } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
                     throw new RuntimeException(e);
                 }
@@ -600,15 +403,4 @@ public class ChatService {
         }
     }
 
-    private String getImageMimeType(String ext) {
-        return switch (ext) {
-            case ".jpg", ".jpeg" -> "image/jpeg";
-            case ".png" -> "image/png";
-            case ".gif" -> "image/gif";
-            case ".webp" -> "image/webp";
-            case ".bmp" -> "image/bmp";
-            case ".svg" -> "image/svg+xml";
-            default -> "image/png";
-        };
-    }
 }

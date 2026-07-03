@@ -1,10 +1,6 @@
 package com.meeting.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import io.agentscope.core.formatter.openai.dto.OpenAIMessage;
-import io.agentscope.core.formatter.openai.dto.OpenAIRequest;
-import io.agentscope.core.formatter.openai.dto.OpenAIResponse;
-import io.agentscope.core.model.OpenAIClient;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -27,12 +23,9 @@ public class TranscriptionService {
 
     private final FileProcessingService fileProcessingService;
     private final MeetingDateExtractor meetingDateExtractor;
-    private final OpenAIClient openAIClient;
 
     @Value("${mimo.api-key:}") private final String mimoApiKey = "";
     @Value("${mimo.url:https://token-plan-cn.xiaomimimo.com}") private final String mimoUrl = "https://token-plan-cn.xiaomimimo.com";
-    @Value("${deepseek.api-key:}") private final String deepseekApiKey = "";
-    @Value("${deepseek.url:https://api.deepseek.com}") private final String deepseekApiUrl = "https://api.deepseek.com";
 
     /**
      * Start asynchronous transcription for a dialogue audio/video file.
@@ -53,21 +46,6 @@ public class TranscriptionService {
 
             // Call MiMo-V2.5-ASR HTTP API
             String result = callMiMoASR(audioPath);
-
-            // Transcription self-check: validate person names, terms, numbers
-            if (result != null && !result.isEmpty() && !result.startsWith("转写失败")
-                    && deepseekApiKey != null && !deepseekApiKey.isBlank()) {
-                try {
-                    String corrected = performTranscriptionSelfCheck(result);
-                    if (corrected != null && !corrected.equals(result)) {
-                        log.info("Transcription self-check corrected {} errors for {}",
-                                countDifferences(result, corrected), fileName);
-                        result = corrected;
-                    }
-                } catch (Exception e) {
-                    log.warn("Transcription self-check failed for {}: {}", fileName, e.getMessage());
-                }
-            }
 
             // Write transcription to sidecar file
             Path transcriptionPath = Path.of(filePath + ".transcription.md");
@@ -176,67 +154,4 @@ public class TranscriptionService {
         }
     }
 
-    /**
-     * Self-check: validate transcription text via DeepSeek for person names,
-     * technical terminology, numbers, and other common ASR errors.
-     */
-    private String performTranscriptionSelfCheck(String text) {
-        String checkPrompt = """
-                你是一个语音识别文本校对专家。请检查以下会议转写文本，修正：
-
-                1. 人名拼写错误（如"张弢"而非"张涛"、"李钜"而非"李炬"等常见人名错误）
-                2. 专业术语错误（ICT/金融/法律等行业术语）
-                3. 数字错误（日期、金额、百分比等）
-                4. 同音字/近音字错误
-                5. 明显的语法或断句问题
-
-                注意事项：
-                - 只修正确定有误的内容，不要随意改动
-                - 保持原文风格和语气
-                - 不要添加原文没有的信息
-                - 如果无需修改，回复「无需修改」
-
-                转写文本：
-                %s
-                """.formatted(text);
-
-        try {
-            OpenAIRequest request = OpenAIRequest.builder()
-                    .model("deepseek-chat")
-                    .messages(List.of(
-                            OpenAIMessage.builder().role("system")
-                                    .content("你是一个严谨的语音转写文本校对专家。").build(),
-                            OpenAIMessage.builder().role("user").content(checkPrompt).build()
-                    ))
-                    .temperature(0.1)
-                    .maxTokens(8192)
-                    .build();
-
-            OpenAIResponse response = openAIClient.call(deepseekApiKey, deepseekApiUrl, request);
-            String corrected = response.getFirstChoice().getMessage().getContentAsString();
-
-            if (corrected == null || corrected.contains("无需修改") || corrected.contains("无需修正")) {
-                return text;
-            }
-
-            log.info("Transcription self-check found corrections: original={} chars, corrected={} chars",
-                    text.length(), corrected.length());
-            return corrected;
-        } catch (Exception e) {
-            log.warn("Transcription self-check OpenAIClient call failed: {}", e.getMessage());
-            return text;
-        }
-    }
-
-    /**
-     * Rough character-by-character difference count between two strings.
-     */
-    private int countDifferences(String original, String corrected) {
-        int len = Math.min(original.length(), corrected.length());
-        int diffs = Math.abs(original.length() - corrected.length());
-        for (int i = 0; i < len; i++) {
-            if (original.charAt(i) != corrected.charAt(i)) diffs++;
-        }
-        return diffs;
-    }
 }

@@ -80,9 +80,12 @@ public class SessionService {
             m.put("timestamp", msg.getCreatedAt() != null ? msg.getCreatedAt().toString() : null);
             m.put("metadata", msg.getMetadata());
             // Parse files JSON into list
-            if (msg.getFiles() != null && !msg.getFiles().isBlank()) {
+            if (msg.getFiles() != null && !msg.getFiles().isBlank() && !"{}".equals(msg.getFiles())) {
                 try {
-                    m.put("files", objectMapper.readValue(msg.getFiles(), List.class));
+                    List<?> files = objectMapper.readValue(msg.getFiles(), List.class);
+                    if (!files.isEmpty()) {
+                        m.put("files", files);
+                    }
                 } catch (JsonProcessingException e) {
                     log.warn("Failed to parse files JSON for message {}: {}", msg.getId(), e.getMessage());
                 }

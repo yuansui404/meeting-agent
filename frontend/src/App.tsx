@@ -27,6 +27,7 @@ const App: React.FC = () => {
   const [memoryVisible, setMemoryVisible] = useState(false);
   const [dialogues, setDialogues] = useState<Dialogue[]>([]);
   const [activeDialogue, setActiveDialogue] = useState<Dialogue | null>(null);
+  const dialoguesLoadedRef = React.useRef(false);
   const [creating, setCreating] = useState(false);
   const [renameModal, setRenameModal] = useState<{ visible: boolean; dialogue: Dialogue | null; value: string }>({
     visible: false, dialogue: null, value: '',
@@ -58,6 +59,27 @@ const App: React.FC = () => {
   useEffect(() => {
     refreshDialogues();
   }, [refreshDialogues]);
+
+  // Restore active dialogue from localStorage after dialogues are loaded
+  useEffect(() => {
+    if (dialogues.length > 0 && !dialoguesLoadedRef.current) {
+      dialoguesLoadedRef.current = true;
+      const savedId = localStorage.getItem('active-dialogue-id');
+      if (savedId) {
+        const found = dialogues.find(d => String(d.id) === savedId);
+        if (found) setActiveDialogue(found);
+      }
+    }
+  }, [dialogues]);
+
+  // Persist active dialogue ID to localStorage
+  useEffect(() => {
+    if (activeDialogue) {
+      localStorage.setItem('active-dialogue-id', String(activeDialogue.id));
+    } else {
+      localStorage.removeItem('active-dialogue-id');
+    }
+  }, [activeDialogue]);
 
   const handleNewDialogue = async () => {
     if (creating) return;

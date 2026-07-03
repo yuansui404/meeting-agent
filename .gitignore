@@ -37,3 +37,4 @@ Thumbs.db
 # Models
 models/
 
+.nacos
