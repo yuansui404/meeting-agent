@@ -12,6 +12,10 @@ management:
         include: refresh,health
 
 spring:
+  servlet:
+    multipart:
+      max-file-size: 500MB
+      max-request-size: 500MB
   application:
     name: meeting-agent
   cloud:
@@ -25,13 +29,13 @@ spring:
     import: optional:nacos:meeting-agent.yaml
   datasource:
     url: jdbc:postgresql://localhost:5432/meeting_agent
-    username: user
-    password: password
+    username: ${DB_USERNAME:user}
+    password: ${DB_PASSWORD:password}
     driver-class-name: org.postgresql.Driver
   jpa:
     hibernate:
       ddl-auto: update
-    show-sql: true
+    show-sql: false
     properties:
       hibernate:
         dialect: org.hibernate.dialect.PostgreSQLDialect
@@ -84,9 +88,11 @@ spring:
         refresh-enabled: true
   datasource:
     url: jdbc:postgresql://postgres:5432/meeting_agent
-    username: user
-    password: password
+    username: ${DB_USERNAME:user}
+    password: ${DB_PASSWORD:password}
   jpa:
+    hibernate:
+      ddl-auto: none
     show-sql: false
 rag:
   chunk:
@@ -121,12 +127,12 @@ mimo:
 file:
   upload-dir: /app/data/uploads
 zhipu:
-  api-key: ${ZHIPU_API_KEY:bd986bb8c1da40ce9d58c3e0c069020c.Be4WaBn3AoAwoVg0}
+  api-key: ${ZHIPU_API_KEY:}
   model: glm-4v
   url: https://open.bigmodel.cn/api/paas/v4
 embedding:
   provider: openai
-  api-key: ${ZHIPU_API_KEY:bd986bb8c1da40ce9d58c3e0c069020c.Be4WaBn3AoAwoVg0}
+  api-key: ${ZHIPU_API_KEY:}
   model: embedding-2
   url: https://open.bigmodel.cn/api/paas/v4/embeddings
 deepseek:

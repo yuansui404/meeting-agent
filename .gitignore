@@ -31,6 +31,9 @@ Thumbs.db
 .env
 *.local.*
 
+# AgentScope
+.agentscope/
+
 # Models
 models/
 

@@ -20,7 +20,10 @@ import java.time.LocalDateTime;
 import java.util.*;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.Collectors;
+import jakarta.annotation.PreDestroy;
 
 @Service
 public class RewriteService {
@@ -31,13 +34,14 @@ public class RewriteService {
     private final RewriteResultRepository rewriteResultRepository;
     private final SessionService sessionService;
     private final StyleLearningService styleLearningService;
-    private final ExecutorService executor = Executors.newCachedThreadPool();
+    private final ExecutorService executor = Executors.newFixedThreadPool(
+            Runtime.getRuntime().availableProcessors() * 2);
 
     private final String deepseekApiKey;
     private final String deepseekModel;
     private final String deepseekUrl;
     private final String uploadDir;
-    private final OpenAIClient openAIClient = new OpenAIClient();
+    private final OpenAIClient openAIClient;
 
     public RewriteService(@Value("${deepseek.api-key:}") String apiKey,
                           @Value("${deepseek.model:deepseek-chat}") String modelName,
@@ -45,7 +49,8 @@ public class RewriteService {
                           @Value("${file.upload-dir:/app/data/uploads}") String uploadDir,
                           RewriteResultRepository rewriteResultRepository,
                           SessionService sessionService,
-                          StyleLearningService styleLearningService) {
+                          StyleLearningService styleLearningService,
+                          OpenAIClient openAIClient) {
         this.rewriteResultRepository = rewriteResultRepository;
         this.sessionService = sessionService;
         this.styleLearningService = styleLearningService;
@@ -53,6 +58,20 @@ public class RewriteService {
         this.deepseekModel = modelName;
         this.deepseekUrl = apiUrl;
         this.uploadDir = uploadDir;
+        this.openAIClient = openAIClient;
+    }
+
+    @PreDestroy
+    public void shutdown() {
+        executor.shutdown();
+        try {
+            if (!executor.awaitTermination(10, TimeUnit.SECONDS)) {
+                executor.shutdownNow();
+            }
+        } catch (InterruptedException e) {
+            executor.shutdownNow();
+            Thread.currentThread().interrupt();
+        }
     }
 
     /**
@@ -158,7 +177,7 @@ public class RewriteService {
                     .stream(true)
                     .build();
 
-            final boolean[] clientDisconnected = {false};
+            final AtomicBoolean clientDisconnected = new AtomicBoolean(false);
             openAIClient.stream(deepseekApiKey, deepseekUrl, request, null)
                     .doOnNext(response -> {
                         if (response.isChunk()) {
@@ -167,11 +186,11 @@ public class RewriteService {
                                 String content = delta.getContentAsString();
                                 if (content != null && !content.isEmpty()) {
                                     fullResponse.append(content);
-                                    if (!clientDisconnected[0]) {
+                                    if (!clientDisconnected.get()) {
                                         try {
                                             emitter.send(SseEmitter.event().data(content));
                                         } catch (IOException ex) {
-                                            clientDisconnected[0] = true;
+                                            clientDisconnected.set(true);
                                             log.info("Client disconnected during rewrite stream, continuing to accumulate");
                                         }
                                     }
@@ -303,7 +322,7 @@ public class RewriteService {
             OpenAIResponse response = openAIClient.call(deepseekApiKey, deepseekUrl, request);
             return response.getFirstChoice().getMessage().getContentAsString();
         } catch (Exception e) {
-            throw new IOException("DeepSeek non-streaming call failed: " + e.getMessage());
+            throw new IOException("DeepSeek non-streaming call failed: " + e.getMessage(), e);
         }
     }
 }

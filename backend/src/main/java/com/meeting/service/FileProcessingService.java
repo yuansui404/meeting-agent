@@ -124,6 +124,7 @@ public class FileProcessingService {
             Files.createDirectories(mdPath.getParent());
 
             String now = LocalDateTime.now().toString();
+            String safeTitle = title != null ? title.replace("<", "&lt;").replace(">", "&gt;") : "未知";
             String mdContent = String.format("""
                     # 会议纪要：%s
 
@@ -137,7 +138,7 @@ public class FileProcessingService {
 
                     %s
                     """,
-                    title, title, now, "对话 " + dialogueId,
+                    safeTitle, safeTitle, now, "对话 " + dialogueId,
                     transcription != null ? transcription : "（暂无转写内容）");
 
             Files.writeString(mdPath, mdContent, StandardCharsets.UTF_8);

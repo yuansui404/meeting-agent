@@ -95,8 +95,6 @@ public class PgAgentStateStore implements AgentStateStore {
 
     @Override
     public Set<String> listSessionIds(String userId) {
-        return new HashSet<>(sessionRepository.findAll().stream()
-                .map(SessionEntity::getSessionId)
-                .toList());
+        return new HashSet<>(sessionRepository.findAllSessionIds());
     }
 }

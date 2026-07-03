@@ -14,8 +14,6 @@ import java.util.List;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
-import org.springframework.beans.factory.annotation.Value;
-
 @Service
 public class ProfileService {
 
@@ -23,8 +21,8 @@ public class ProfileService {
 
     private final Path profileDir;
 
-    public ProfileService() {
-        this.profileDir = Path.of("../.agentscope/workspace", "profile");
+    public ProfileService(@Value("${file.upload-dir:/app/data/uploads}") String uploadDir) {
+        this.profileDir = Path.of(uploadDir, "profile");
     }
 
     @PostConstruct
@@ -57,7 +55,10 @@ public class ProfileService {
     /** Read the content of a profile .md file. */
     public String readFile(String filename) {
         Path file = profileDir.resolve(filename);
-        if (!Files.exists(file) || !file.startsWith(profileDir)) {
+        if (!file.startsWith(profileDir)) {
+            throw new IllegalArgumentException("Invalid filename: " + filename);
+        }
+        if (!Files.exists(file)) {
             throw new IllegalArgumentException("Profile file not found: " + filename);
         }
         try {

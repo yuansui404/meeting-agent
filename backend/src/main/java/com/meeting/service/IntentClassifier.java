@@ -30,11 +30,12 @@ public class IntentClassifier {
 
     public IntentClassifier(@Value("${deepseek.api-key:}") String apiKey,
                             @Value("${deepseek.url:https://api.deepseek.com}") String apiUrl,
-                            @Value("${deepseek.model:deepseek-chat}") String model) {
+                            @Value("${deepseek.model:deepseek-chat}") String model,
+                            OpenAIClient openAIClient) {
         this.apiKey = apiKey;
         this.apiUrl = apiUrl;
         this.model = model;
-        this.openAIClient = new OpenAIClient();
+        this.openAIClient = openAIClient;
     }
 
     /**
@@ -59,7 +60,9 @@ public class IntentClassifier {
                     .build();
 
             OpenAIResponse response = openAIClient.call(apiKey, apiUrl, request);
-            String content = response.getFirstChoice().getMessage().getContentAsString();
+            String content = response.getFirstChoice() != null
+                    ? response.getFirstChoice().getMessage().getContentAsString()
+                    : null;
             return parseIntents(content);
         } catch (Exception e) {
             log.warn("Intent classification failed, falling back to CHAT: {}", e.getMessage());

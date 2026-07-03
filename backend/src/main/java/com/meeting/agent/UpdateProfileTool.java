@@ -66,23 +66,19 @@ public class UpdateProfileTool implements AgentTool {
         }
 
         try {
-            // Check if the file exists; if so, append, if not, create new
-            boolean exists;
+            // Read once to avoid TOCTOU race condition
+            String existing = null;
             try {
-                profileService.readFile(filename);
-                exists = true;
+                existing = profileService.readFile(filename);
             } catch (IllegalArgumentException e) {
-                exists = false;
+                // file does not exist
             }
 
-            if (exists) {
-                // Append to existing content
-                String existing = profileService.readFile(filename);
+            if (existing != null) {
                 String updated = existing.trim() + "\n\n" + content.trim();
                 profileService.saveFile(filename, updated);
                 log.info("Updated profile file: {}", filename);
             } else {
-                // Create new file
                 profileService.saveFile(filename, content);
                 log.info("Created profile file: {}", filename);
             }

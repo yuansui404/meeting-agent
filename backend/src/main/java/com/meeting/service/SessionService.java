@@ -79,7 +79,7 @@ public class SessionService {
             Map<String, Object> m = new HashMap<>();
             m.put("id", msg.getId());
             m.put("dialogueId", dialogueId);
-            m.put("role", msg.getRole().toLowerCase());
+            m.put("role", msg.getRole() != null ? msg.getRole().toLowerCase() : "unknown");
             m.put("content", msg.getContent() != null ? msg.getContent() : "");
             m.put("messageType", msg.getMessageType() != null ? msg.getMessageType() : "text");
             m.put("timestamp", msg.getCreatedAt() != null ? msg.getCreatedAt().toString() : null);

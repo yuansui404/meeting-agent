@@ -1,5 +1,6 @@
 package com.meeting.agent;
 
+import com.meeting.common.JsonUtil;
 import com.meeting.meeting.model.entity.MeetingMinutes;
 import com.meeting.meeting.repository.MeetingMinutesRepository;
 import com.meeting.service.QueryRewriter;
@@ -87,72 +88,60 @@ public class SearchKnowledgeBaseTool implements AgentTool {
             // 2. Extract keywords and do precise matching
             List<String> keywords = queryRewriter.extractKeywords(query);
 
-            // 3. Build result items — keep all vector chunks (not deduplicated by meeting_id)
-            //    so the agent sees multiple relevant chunks from the same meeting
-            Map<Long, String> titleCache = new HashMap<>();
-            Map<Long, String> dateCache = new HashMap<>();
-            Set<Long> meetingsInResults = new HashSet<>();
+            // 3. Batch-load all meeting metadata to avoid N+1 queries
+            Set<Long> allMeetingIds = new HashSet<>();
+            for (ScoredVector v : vectorResults) allMeetingIds.add(v.meetingId());
+            for (String keyword : keywords) {
+                for (MeetingMinutes mm : meetingRepository.searchByParticipants(keyword)) {
+                    allMeetingIds.add(mm.getId());
+                }
+            }
+            Map<Long, MeetingMinutes> meetingMap = meetingRepository.findAllById(allMeetingIds).stream()
+                    .collect(Collectors.toMap(MeetingMinutes::getId, m -> m));
 
+            DateTimeFormatter fmt = DateTimeFormatter.ISO_LOCAL_DATE;
+
+            // 4. Build result items — keep all vector chunks
+            Set<Long> meetingsInResults = new HashSet<>();
             List<Map<String, Object>> items = new ArrayList<>();
 
             for (ScoredVector v : vectorResults) {
                 Long mid = v.meetingId();
-                titleCache.computeIfAbsent(mid, id -> meetingRepository.findById(id)
-                        .map(MeetingMinutes::getTitle).orElse("未知文件"));
-                dateCache.computeIfAbsent(mid, id -> meetingRepository.findById(id)
-                        .map(m -> m.getMeetingDate() != null
-                                ? m.getMeetingDate().format(DateTimeFormatter.ISO_LOCAL_DATE)
-                                : "")
-                        .orElse(""));
                 meetingsInResults.add(mid);
+                MeetingMinutes mm = meetingMap.get(mid);
 
                 Map<String, Object> item = new LinkedHashMap<>();
-                item.put("source", titleCache.get(mid));
-                item.put("content", v.content());
+                item.put("source", mm != null && mm.getTitle() != null ? mm.getTitle() : "未知文件");
+                item.put("content", v.content() != null ? v.content() : "");
                 item.put("similarity", Math.round(v.similarity() * 100.0) / 100.0);
-                item.put("date", dateCache.get(mid));
+                item.put("date", mm != null && mm.getMeetingDate() != null ? mm.getMeetingDate().format(fmt) : "");
                 items.add(item);
             }
 
-            // Then, add keyword-based results — only for meetings NOT already covered
-            // by vector search, so we don't override chunk content with empty strings.
+            // 5. Add keyword-based results — only for meetings NOT already covered
             for (String keyword : keywords) {
-                // Search participants column
                 List<MeetingMinutes> byParticipants = meetingRepository.searchByParticipants(keyword);
                 for (MeetingMinutes mm : byParticipants) {
                     if (!meetingsInResults.contains(mm.getId())) {
-                        titleCache.computeIfAbsent(mm.getId(), id -> mm.getTitle());
-                        dateCache.computeIfAbsent(mm.getId(), id -> mm.getMeetingDate() != null
-                                ? mm.getMeetingDate().format(DateTimeFormatter.ISO_LOCAL_DATE)
-                                : "");
-
                         Map<String, Object> item = new LinkedHashMap<>();
-                        item.put("source", mm.getTitle());
-                        item.put("content", "与会人: " + mm.getParticipants());
+                        item.put("source", mm.getTitle() != null ? mm.getTitle() : "");
+                        item.put("content", "与会人: " + (mm.getParticipants() != null ? mm.getParticipants() : "未知"));
                         item.put("similarity", 0.95);
-                        item.put("date", dateCache.get(mm.getId()));
+                        item.put("date", mm.getMeetingDate() != null ? mm.getMeetingDate().format(fmt) : "");
                         items.add(item);
                         meetingsInResults.add(mm.getId());
                     }
                 }
 
-                // Search vector content via ILIKE
                 List<Long> contentMatchIds = searchVectorContent(keyword, topK);
                 for (Long mid : contentMatchIds) {
                     if (!meetingsInResults.contains(mid)) {
-                        titleCache.computeIfAbsent(mid, id -> meetingRepository.findById(id)
-                                .map(MeetingMinutes::getTitle).orElse("未知文件"));
-                        dateCache.computeIfAbsent(mid, id -> meetingRepository.findById(id)
-                                .map(m -> m.getMeetingDate() != null
-                                        ? m.getMeetingDate().format(DateTimeFormatter.ISO_LOCAL_DATE)
-                                        : "")
-                                .orElse(""));
-
+                        MeetingMinutes mm = meetingMap.get(mid);
                         Map<String, Object> item = new LinkedHashMap<>();
-                        item.put("source", titleCache.get(mid));
+                        item.put("source", mm != null && mm.getTitle() != null ? mm.getTitle() : "未知文件");
                         item.put("content", "");
                         item.put("similarity", 0.5);
-                        item.put("date", dateCache.get(mid));
+                        item.put("date", mm != null && mm.getMeetingDate() != null ? mm.getMeetingDate().format(fmt) : "");
                         items.add(item);
                         meetingsInResults.add(mid);
                     }
@@ -164,16 +153,14 @@ public class SearchKnowledgeBaseTool implements AgentTool {
             }
 
             // Sort by similarity descending, limit to topK
-            items.sort((a, b) -> Double.compare(
-                    ((Number) b.get("similarity")).doubleValue(),
-                    ((Number) a.get("similarity")).doubleValue()));
+            items.sort((a, b) -> Double.compare(toDouble(b.get("similarity")), toDouble(a.get("similarity"))));
             if (items.size() > topK) {
                 items = items.subList(0, topK);
             }
 
-            return Mono.just(ToolResultBlock.text(toJson(items)));
+            return Mono.just(ToolResultBlock.text(JsonUtil.toJsonArray(items)));
         } catch (Exception e) {
-            log.warn("Knowledge base search failed: {}", e.getMessage());
+            log.warn("Knowledge base search failed", e);
             return Mono.just(ToolResultBlock.error("搜索知识库异常，请稍后重试"));
         }
     }
@@ -181,7 +168,8 @@ public class SearchKnowledgeBaseTool implements AgentTool {
     private List<Long> searchVectorContent(String keyword, int limit) {
         try {
             String sql = "SELECT DISTINCT meeting_id FROM meeting_vectors WHERE content ILIKE ? LIMIT ?";
-            String pattern = "%" + keyword + "%";
+            String escaped = keyword.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_");
+            String pattern = "%" + escaped + "%";
             List<Map<String, Object>> rows = jdbcTemplate.queryForList(sql, pattern, limit);
             return rows.stream()
                     .map(r -> ((Number) r.get("meeting_id")).longValue())
@@ -192,34 +180,7 @@ public class SearchKnowledgeBaseTool implements AgentTool {
         }
     }
 
-    private String toJson(List<Map<String, Object>> items) {
-        StringBuilder sb = new StringBuilder("[");
-        for (int i = 0; i < items.size(); i++) {
-            if (i > 0) sb.append(",");
-            sb.append("{");
-            Map<String, Object> item = items.get(i);
-            int j = 0;
-            for (var entry : item.entrySet()) {
-                if (j++ > 0) sb.append(",");
-                sb.append("\"").append(escapeJson(entry.getKey())).append("\":");
-                Object val = entry.getValue();
-                if (val instanceof String s) {
-                    sb.append("\"").append(escapeJson(s)).append("\"");
-                } else {
-                    sb.append(val);
-                }
-            }
-            sb.append("}");
-        }
-        sb.append("]");
-        return sb.toString();
-    }
-
-    private String escapeJson(String s) {
-        return s.replace("\\", "\\\\")
-                .replace("\"", "\\\"")
-                .replace("\n", "\\n")
-                .replace("\r", "\\r")
-                .replace("\t", "\\t");
+    private static double toDouble(Object o) {
+        return o instanceof Number n ? n.doubleValue() : 0.0;
     }
 }

@@ -38,7 +38,11 @@ public class ConversationChatController {
         SseEmitter emitter = new SseEmitter(300_000L);
         String traceId = MDC.get("traceId");
 
-        java.util.concurrent.Executors.newSingleThreadExecutor().submit(() -> {
+        java.util.concurrent.Executors.newSingleThreadExecutor(r -> {
+            Thread t = new Thread(r, "sse-chat-" + id);
+            t.setDaemon(true);
+            return t;
+        }).submit(() -> {
             try {
                 conversationService.addMessage(id, "user", request.getContent(), traceId, "{}");
 
@@ -75,7 +79,7 @@ public class ConversationChatController {
             } catch (Exception e) {
                 log.error("Chat stream error", e);
                 try {
-                    emitter.send(SseEmitter.event().name("error").data(e.getMessage()));
+                    emitter.send(SseEmitter.event().name("error").data("对话处理失败，请稍后重试"));
                 } catch (IOException ex) {
                     // ignore
                 }

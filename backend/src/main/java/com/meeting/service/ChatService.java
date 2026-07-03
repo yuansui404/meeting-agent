@@ -46,6 +46,9 @@ import java.time.Duration;
 import java.util.stream.Collectors;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import jakarta.annotation.PreDestroy;
 
 @Service
 @RefreshScope
@@ -122,8 +125,9 @@ public class ChatService {
     private final ReadProfileTool readProfileTool;
     private final UpdateProfileTool updateProfileTool;
     private final VectorizationService vectorizationService;
-    private final ExecutorService executor = Executors.newCachedThreadPool();
-    private final OpenAIClient openAIClient = new OpenAIClient();
+    private final ExecutorService executor = Executors.newFixedThreadPool(
+            Runtime.getRuntime().availableProcessors() * 2);
+    private final OpenAIClient openAIClient;
 
     private final String deepseekApiKey;
     private final String deepseekApiUrl;
@@ -141,6 +145,7 @@ public class ChatService {
                        PgAgentStateStore pgAgentStateStore,
                        DialogueMessageRepository dialogueMessageRepository,
                        VectorizationService vectorizationService,
+                       OpenAIClient openAIClient,
                        UploadToKnowledgeBaseTool uploadToKnowledgeBaseTool,
                        SearchKnowledgeBaseTool searchKnowledgeBaseTool,
                        SearchDocumentsTool searchDocumentsTool,
@@ -151,6 +156,7 @@ public class ChatService {
         this.pgAgentStateStore = pgAgentStateStore;
         this.dialogueMessageRepository = dialogueMessageRepository;
         this.vectorizationService = vectorizationService;
+        this.openAIClient = openAIClient;
         this.uploadToKnowledgeBaseTool = uploadToKnowledgeBaseTool;
         this.searchKnowledgeBaseTool = searchKnowledgeBaseTool;
         this.searchDocumentsTool = searchDocumentsTool;
@@ -208,11 +214,25 @@ public class ChatService {
                         .keepMessages(10)
                         .build())
                 .disableSessionPersistence()
+                .disableWorkspaceContext()
                 .enableTaskList(false)
                 .maxIters(8)
                 .stateStore(pgAgentStateStore)
                 .disableFilesystemTools()
                 .build();
+    }
+
+    @PreDestroy
+    public void shutdown() {
+        executor.shutdown();
+        try {
+            if (!executor.awaitTermination(10, TimeUnit.SECONDS)) {
+                executor.shutdownNow();
+            }
+        } catch (InterruptedException e) {
+            executor.shutdownNow();
+            Thread.currentThread().interrupt();
+        }
     }
 
     public void streamChat(Long dialogueId, String userMessage, String metadata, SseEmitter emitter) {
@@ -264,14 +284,14 @@ public class ChatService {
                     .sessionId("dialogue-" + dialogueId)
                     .build();
 
-            final boolean[] clientDisconnected = {false};
-            final boolean[] invokedTools = {false};
+            final AtomicBoolean clientDisconnected = new AtomicBoolean(false);
+            final AtomicBoolean invokedTools = new AtomicBoolean(false);
             agent.streamEvents(msg, ctx)
                     .doOnNext(event -> {
                         if (event instanceof ToolCallStartEvent) {
-                            invokedTools[0] = true;
+                            invokedTools.set(true);
                         }
-                        if (!clientDisconnected[0]) {
+                        if (!clientDisconnected.get()) {
                             try {
                                 if (event instanceof TextBlockDeltaEvent e) {
                                     String delta = e.getDelta();
@@ -287,43 +307,45 @@ public class ChatService {
                                     }
                                 } else if (event instanceof ToolCallStartEvent e) {
                                     emitter.send(SseEmitter.event().name("tool_call")
-                                            .data(objectToJson(Map.of(
+                                            .data(objectMapper.writeValueAsString(Map.of(
                                                     "action", "start",
                                                     "id", e.getToolCallId(),
                                                     "name", e.getToolCallName()
                                             ))));
                                 } else if (event instanceof ToolCallEndEvent e) {
                                     emitter.send(SseEmitter.event().name("tool_call")
-                                            .data(objectToJson(Map.of(
+                                            .data(objectMapper.writeValueAsString(Map.of(
                                                     "action", "end",
                                                     "id", e.getToolCallId(),
                                                     "name", e.getToolCallName()
                                             ))));
                                 } else if (event instanceof ToolResultStartEvent e) {
                                     emitter.send(SseEmitter.event().name("tool_result")
-                                            .data(objectToJson(Map.of(
+                                            .data(objectMapper.writeValueAsString(Map.of(
                                                     "action", "start",
                                                     "id", e.getToolCallId(),
                                                     "name", e.getToolCallName()
                                             ))));
                                 } else if (event instanceof ToolResultTextDeltaEvent e) {
                                     emitter.send(SseEmitter.event().name("tool_result")
-                                            .data(objectToJson(Map.of(
+                                            .data(objectMapper.writeValueAsString(Map.of(
                                                     "action", "delta",
                                                     "id", e.getToolCallId(),
                                                     "delta", e.getDelta()
                                             ))));
                                 } else if (event instanceof ToolResultEndEvent e) {
                                     emitter.send(SseEmitter.event().name("tool_result")
-                                            .data(objectToJson(Map.of(
+                                            .data(objectMapper.writeValueAsString(Map.of(
                                                     "action", "end",
                                                     "id", e.getToolCallId(),
                                                     "name", e.getToolCallName()
                                             ))));
                                 }
                             } catch (IOException | IllegalStateException ex) {
-                                clientDisconnected[0] = true;
+                                clientDisconnected.set(true);
                                 log.info("Client disconnected during DeepSeek stream: {}", ex.getMessage());
+                            } catch (Exception ex) {
+                                log.warn("Failed to serialize SSE event: {}", ex.getMessage());
                             }
                         }
                     })
@@ -332,7 +354,7 @@ public class ChatService {
             // Self-check: validate response when tools were invoked
             String responseText = fullResponse.toString();
             String finalResponse = responseText;
-            if (invokedTools[0] && !clientDisconnected[0] && !responseText.isEmpty()) {
+            if (invokedTools.get() && !clientDisconnected.get() && !responseText.isEmpty()) {
                 try {
                     String corrected = performSelfCheck(userMessage, responseText);
                     if (corrected != null && !corrected.equals(responseText)) {
@@ -490,7 +512,7 @@ public class ChatService {
             // Stream via OpenAIClient — ZhiPu uses /chat/completions (no /v1 prefix),
             // so override the default endpoint to empty and pass the full URL as baseUrl
             GenerateOptions opts = GenerateOptions.builder().endpointPath("").build();
-            boolean[] clientDisconnected = {false};
+            AtomicBoolean clientDisconnected = new AtomicBoolean(false);
             openAIClient.stream(zhipuApiKey, zhipuUrl + "/chat/completions", request, opts)
                     .doOnNext(response -> {
                         if (response.isChunk()) {
@@ -499,11 +521,11 @@ public class ChatService {
                                 String content = delta.getContentAsString();
                                 if (content != null && !content.isEmpty()) {
                                     fullResponse.append(content);
-                                    if (!clientDisconnected[0]) {
+                                    if (!clientDisconnected.get()) {
                                         try {
                                             emitter.send(SseEmitter.event().data(content));
                                         } catch (IOException | IllegalStateException ex) {
-                                            clientDisconnected[0] = true;
+                                            clientDisconnected.set(true);
                                             log.info("Client disconnected during ZhiPu stream: {}", ex.getMessage());
                                         }
                                     }
@@ -602,47 +624,6 @@ public class ChatService {
             } catch (IOException ignored) {}
             emitter.completeWithError(e);
         }
-    }
-
-    private String objectToJson(Object obj) {
-        // Simple JSON serialization for our use case
-        if (obj instanceof Map map) {
-            StringBuilder sb = new StringBuilder("{");
-            boolean first = true;
-            for (var entry : (Set<Map.Entry>) map.entrySet()) {
-                if (!first) sb.append(",");
-                first = false;
-                sb.append("\"").append(escapeJson(entry.getKey().toString())).append("\":");
-                sb.append(objectToJson(entry.getValue()));
-            }
-            sb.append("}");
-            return sb.toString();
-        } else if (obj instanceof List list) {
-            StringBuilder sb = new StringBuilder("[");
-            boolean first = true;
-            for (var item : list) {
-                if (!first) sb.append(",");
-                first = false;
-                sb.append(objectToJson(item));
-            }
-            sb.append("]");
-            return sb.toString();
-        } else if (obj instanceof String s) {
-            return "\"" + escapeJson(s) + "\"";
-        } else if (obj instanceof Boolean b) {
-            return b.toString();
-        } else if (obj instanceof Number n) {
-            return n.toString();
-        }
-        return "null";
-    }
-
-    private String escapeJson(String s) {
-        return s.replace("\\", "\\\\")
-                .replace("\"", "\\\"")
-                .replace("\n", "\\n")
-                .replace("\r", "\\r")
-                .replace("\t", "\\t");
     }
 
     private void handleStreamError(SseEmitter emitter, Exception e) {
@@ -766,8 +747,7 @@ public class ChatService {
             int arrayEnd = metadata.lastIndexOf("]");
             if (arrayEnd <= arrayStart) return List.of();
             String arrayJson = metadata.substring(arrayStart, arrayEnd + 1);
-            var mapper = new com.fasterxml.jackson.databind.ObjectMapper();
-            var list = mapper.readValue(arrayJson, List.class);
+            var list = objectMapper.readValue(arrayJson, List.class);
             List<Map<String, Object>> result = new ArrayList<>();
             for (Object item : list) {
                 if (item instanceof Map) {
@@ -852,10 +832,16 @@ public class ChatService {
                 Path filePath = Path.of(path);
                 if (!Files.exists(filePath)) continue;
                 try {
+                    if (Files.size(filePath) > MAX_FILE_SIZE) {
+                        log.warn("Image too large, skipping: {} ({} bytes)", path, Files.size(filePath));
+                        continue;
+                    }
                     String mediaType = getImageMimeType(ext.toLowerCase());
                     String base64 = Base64.getEncoder().encodeToString(Files.readAllBytes(filePath));
                     blocks.add(new ImageBlock(new Base64Source(mediaType, base64)));
-                } catch (IOException ignored) {}
+                } catch (IOException e) {
+                    log.warn("Failed to read image {}: {}", path, e.getMessage());
+                }
             }
         }
 

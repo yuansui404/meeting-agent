@@ -11,6 +11,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 
+import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URI;
@@ -26,6 +27,7 @@ public class TranscriptionService {
 
     private final FileProcessingService fileProcessingService;
     private final MeetingDateExtractor meetingDateExtractor;
+    private final OpenAIClient openAIClient;
 
     @Value("${mimo.api-key:}")
     private String mimoApiKey;
@@ -39,12 +41,12 @@ public class TranscriptionService {
     @Value("${deepseek.url:https://api.deepseek.com}")
     private String deepseekApiUrl;
 
-    private final OpenAIClient openAIClient = new OpenAIClient();
-
     public TranscriptionService(FileProcessingService fileProcessingService,
-                                MeetingDateExtractor meetingDateExtractor) {
+                                MeetingDateExtractor meetingDateExtractor,
+                                OpenAIClient openAIClient) {
         this.fileProcessingService = fileProcessingService;
         this.meetingDateExtractor = meetingDateExtractor;
+        this.openAIClient = openAIClient;
     }
 
     /**
@@ -116,12 +118,18 @@ public class TranscriptionService {
         }
 
         try {
-            // 1. Read audio file and base64 encode
+            // 1. Check file size before reading into memory (warn at 200MB)
+            long fileSize = Files.size(path);
+            if (fileSize > 200 * 1024 * 1024) {
+                log.warn("Audio file too large ({}MB), may cause memory issues: {}", fileSize / 1024 / 1024, audioPath);
+            }
+
+            // 2. Read audio file and base64 encode
             byte[] audioBytes = Files.readAllBytes(path);
             String base64Audio = Base64.getEncoder().encodeToString(audioBytes);
             String ext = audioPath.toLowerCase().endsWith(".wav") ? "wav" : "mp3";
 
-            // 2. Build OpenAI-compatible request
+            // 3. Build OpenAI-compatible request
             Map<String, Object> requestBody = new LinkedHashMap<>();
             requestBody.put("model", "MiMo-V2.5-ASR");
             requestBody.put("messages", List.of(Map.of(
@@ -135,45 +143,48 @@ public class TranscriptionService {
                     ))
             )));
 
-            // 3. HTTP POST to MiMo API
+            // 4. HTTP POST to MiMo API
             String apiUrl = mimoUrl + "/v1/chat/completions";
             HttpURLConnection conn = (HttpURLConnection) URI.create(apiUrl).toURL().openConnection();
-            conn.setRequestMethod("POST");
-            conn.setRequestProperty("Content-Type", "application/json");
-            conn.setRequestProperty("api-key", mimoApiKey);
-            conn.setDoOutput(true);
-            conn.setConnectTimeout(60000);
-            conn.setReadTimeout(300000);
+            try {
+                conn.setRequestMethod("POST");
+                conn.setRequestProperty("Content-Type", "application/json");
+                conn.setRequestProperty("api-key", mimoApiKey);
+                conn.setDoOutput(true);
+                conn.setConnectTimeout(60000);
+                conn.setReadTimeout(300000);
 
-            ObjectMapper mapper = new ObjectMapper();
-            try (OutputStream os = conn.getOutputStream()) {
-                os.write(mapper.writeValueAsBytes(requestBody));
+                ObjectMapper mapper = new ObjectMapper();
+                try (OutputStream os = conn.getOutputStream()) {
+                    os.write(mapper.writeValueAsBytes(requestBody));
+                }
+
+                // 5. Parse response
+                int responseCode = conn.getResponseCode();
+                if (responseCode != 200) {
+                    InputStream errStream = conn.getErrorStream();
+                    String errorBody = errStream != null
+                            ? new String(errStream.readAllBytes(), StandardCharsets.UTF_8)
+                            : "(no error body)";
+                    log.warn("MiMo ASR HTTP {}: {}", responseCode, errorBody);
+                    return "转写失败: MiMo API 返回 " + responseCode;
+                }
+
+                String responseBody = new String(conn.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+                log.info("MiMo ASR raw response length={}", responseBody.length());
+
+                // 6. Parse response using ObjectMapper instead of fragile string matching
+                com.fasterxml.jackson.databind.JsonNode root = mapper.readTree(responseBody);
+                String text = root.path("choices").path(0).path("message").path("content").asText(null);
+                if (text == null || text.isBlank()) {
+                    log.warn("MiMo ASR response missing content field: {}", responseBody);
+                    return "转写完成（无文本输出）";
+                }
+                log.info("MiMo ASR completed, text length={}", text.length());
+                return text;
+            } finally {
+                conn.disconnect();
             }
-
-            // 4. Parse response
-            int responseCode = conn.getResponseCode();
-            if (responseCode != 200) {
-                String errorBody = new String(conn.getErrorStream().readAllBytes(), StandardCharsets.UTF_8);
-                log.warn("MiMo ASR HTTP {}: {}", responseCode, errorBody);
-                return "转写失败: MiMo API 返回 " + responseCode;
-            }
-
-            String responseBody = new String(conn.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
-            log.info("MiMo ASR raw response length={}", responseBody.length());
-
-            // Extract content from response: {"choices":[{"message":{"content":"..."}}]}
-            int contentStart = responseBody.indexOf("\"content\":\"");
-            if (contentStart < 0) {
-                log.warn("MiMo ASR response missing content field: {}", responseBody);
-                return "转写完成（无文本输出）";
-            }
-            contentStart += 11;
-            int contentEnd = responseBody.indexOf("\"", contentStart);
-            if (contentEnd < 0) return "转写完成（无文本输出）";
-
-            String text = responseBody.substring(contentStart, contentEnd);
-            log.info("MiMo ASR completed, text length={}", text.length());
-            return text;
         } catch (Exception e) {
             log.error("MiMo ASR failed for {}: {}", audioPath, e.getMessage());
             return "转写失败: " + e.getMessage();

@@ -12,7 +12,6 @@ import reactor.core.publisher.Mono;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.stream.Collectors;
 
 @Component
 public class ReadProfileTool implements AgentTool {
@@ -67,7 +66,7 @@ public class ReadProfileTool implements AgentTool {
 
             return Mono.just(ToolResultBlock.text(sb.toString()));
         } catch (Exception e) {
-            log.warn("Read profile failed: {}", e.getMessage());
+            log.warn("Read profile failed", e);
             return Mono.just(ToolResultBlock.error("读取用户画像异常，请稍后重试"));
         }
     }

@@ -1,5 +1,6 @@
 package com.meeting.agent;
 
+import com.meeting.common.JsonUtil;
 import com.meeting.meeting.model.entity.MeetingMinutes;
 import com.meeting.meeting.repository.MeetingMinutesRepository;
 import io.agentscope.core.message.ToolResultBlock;
@@ -76,47 +77,17 @@ public class SearchMeetingTitlesTool implements AgentTool {
             for (MeetingMinutes m : meetings) {
                 Map<String, Object> item = new LinkedHashMap<>();
                 item.put("id", m.getId());
-                item.put("title", m.getTitle());
+                item.put("title", m.getTitle() != null ? m.getTitle() : "");
                 item.put("date", m.getMeetingDate() != null ? m.getMeetingDate().format(fmt) : "");
                 item.put("status", m.getStatus());
                 items.add(item);
             }
 
-            return Mono.just(ToolResultBlock.text(toJson(items)));
+            return Mono.just(ToolResultBlock.text(JsonUtil.toJsonArray(items)));
         } catch (Exception e) {
-            log.warn("Search meeting titles failed: {}", e.getMessage());
+            log.warn("Search meeting titles failed", e);
             return Mono.just(ToolResultBlock.error("搜索会议异常，请稍后重试"));
         }
     }
 
-    private String toJson(List<Map<String, Object>> items) {
-        StringBuilder sb = new StringBuilder("[");
-        for (int i = 0; i < items.size(); i++) {
-            if (i > 0) sb.append(",");
-            sb.append("{");
-            Map<String, Object> item = items.get(i);
-            int j = 0;
-            for (var entry : item.entrySet()) {
-                if (j++ > 0) sb.append(",");
-                sb.append("\"").append(escapeJson(entry.getKey())).append("\":");
-                Object val = entry.getValue();
-                if (val instanceof String s) {
-                    sb.append("\"").append(escapeJson(s)).append("\"");
-                } else {
-                    sb.append(val);
-                }
-            }
-            sb.append("}");
-        }
-        sb.append("]");
-        return sb.toString();
-    }
-
-    private String escapeJson(String s) {
-        return s.replace("\\", "\\\\")
-                .replace("\"", "\\\"")
-                .replace("\n", "\\n")
-                .replace("\r", "\\r")
-                .replace("\t", "\\t");
-    }
 }

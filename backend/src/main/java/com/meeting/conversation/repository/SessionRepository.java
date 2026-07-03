@@ -2,6 +2,7 @@ package com.meeting.conversation.repository;
 
 import com.meeting.conversation.model.entity.SessionEntity;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Query;
 import org.springframework.stereotype.Repository;
 
 import java.util.List;
@@ -17,4 +18,7 @@ public interface SessionRepository extends JpaRepository<SessionEntity, Long> {
     boolean existsBySessionId(String sessionId);
 
     void deleteBySessionId(String sessionId);
+
+    @Query("SELECT s.sessionId FROM SessionEntity s")
+    List<String> findAllSessionIds();
 }

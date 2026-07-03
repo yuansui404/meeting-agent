@@ -1,5 +1,6 @@
 package com.meeting.agent;
 
+import com.meeting.common.JsonUtil;
 import com.meeting.meeting.model.entity.MeetingMinutes;
 import com.meeting.meeting.repository.MeetingMinutesRepository;
 import io.agentscope.core.message.ToolResultBlock;
@@ -76,7 +77,7 @@ public class ListMeetingsTool implements AgentTool {
             for (MeetingMinutes m : meetings) {
                 Map<String, Object> item = new LinkedHashMap<>();
                 item.put("id", m.getId());
-                item.put("title", m.getTitle());
+                item.put("title", m.getTitle() != null ? m.getTitle() : "");
                 item.put("date", m.getMeetingDate() != null ? m.getMeetingDate().format(fmt) : "");
                 item.put("status", m.getStatus());
                 items.add(item);
@@ -87,51 +88,11 @@ public class ListMeetingsTool implements AgentTool {
             result.put("page", meetingPage.getNumber());
             result.put("items", items);
 
-            return Mono.just(ToolResultBlock.text(toJson(result)));
+            return Mono.just(ToolResultBlock.text(JsonUtil.toJson(result)));
         } catch (Exception e) {
-            log.warn("List meetings failed: {}", e.getMessage());
+            log.warn("List meetings failed", e);
             return Mono.just(ToolResultBlock.error("获取会议列表异常，请稍后重试"));
         }
     }
 
-    private String toJson(Map<String, Object> map) {
-        StringBuilder sb = new StringBuilder("{");
-        boolean first = true;
-        for (var entry : map.entrySet()) {
-            if (!first) sb.append(",");
-            first = false;
-            sb.append("\"").append(escapeJson(entry.getKey())).append("\":");
-            sb.append(toJsonValue(entry.getValue()));
-        }
-        sb.append("}");
-        return sb.toString();
-    }
-
-    @SuppressWarnings("unchecked")
-    private String toJsonValue(Object val) {
-        if (val == null) return "null";
-        if (val instanceof String s) return "\"" + escapeJson(s) + "\"";
-        if (val instanceof Number || val instanceof Boolean) return val.toString();
-        if (val instanceof List<?> list) {
-            StringBuilder sb = new StringBuilder("[");
-            for (int i = 0; i < list.size(); i++) {
-                if (i > 0) sb.append(",");
-                sb.append(toJsonValue(list.get(i)));
-            }
-            sb.append("]");
-            return sb.toString();
-        }
-        if (val instanceof Map<?, ?> m) {
-            return toJson((Map<String, Object>) m);
-        }
-        return "\"" + escapeJson(val.toString()) + "\"";
-    }
-
-    private String escapeJson(String s) {
-        return s.replace("\\", "\\\\")
-                .replace("\"", "\\\"")
-                .replace("\n", "\\n")
-                .replace("\r", "\\r")
-                .replace("\t", "\\t");
-    }
 }

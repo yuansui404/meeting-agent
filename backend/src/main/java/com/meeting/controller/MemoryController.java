@@ -1,5 +1,6 @@
 package com.meeting.controller;
 
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
@@ -13,14 +14,18 @@ import java.util.Map;
 @RequestMapping("/api")
 public class MemoryController {
 
-    private static final Path MEMORY_FILE = Path.of("../.agentscope/workspace", "MEMORY.md");
+    private final Path memoryFile;
+
+    public MemoryController(@Value("${file.upload-dir:/app/data/uploads}") String uploadDir) {
+        this.memoryFile = Path.of(uploadDir, "memory", "MEMORY.md");
+    }
 
     @GetMapping("/memory")
     public ResponseEntity<Map<String, Object>> readMemory() {
         String content = "";
-        if (Files.exists(MEMORY_FILE)) {
+        if (Files.exists(memoryFile)) {
             try {
-                content = Files.readString(MEMORY_FILE, StandardCharsets.UTF_8);
+                content = Files.readString(memoryFile, StandardCharsets.UTF_8);
             } catch (IOException e) {
                 return ResponseEntity.ok(Map.of("success", false, "error", "读取记忆文件失败"));
             }
@@ -31,9 +36,12 @@ public class MemoryController {
     @PutMapping("/memory")
     public ResponseEntity<Map<String, Object>> saveMemory(@RequestBody Map<String, String> body) {
         String content = body.getOrDefault("content", "");
+        if (content.length() > 100_000) {
+            return ResponseEntity.badRequest().body(Map.of("success", false, "error", "内容过长，最大100KB"));
+        }
         try {
-            Files.createDirectories(MEMORY_FILE.getParent());
-            Files.writeString(MEMORY_FILE, content, StandardCharsets.UTF_8);
+            Files.createDirectories(memoryFile.getParent());
+            Files.writeString(memoryFile, content, StandardCharsets.UTF_8);
             return ResponseEntity.ok(Map.of("success", true));
         } catch (IOException e) {
             return ResponseEntity.badRequest().body(Map.of("success", false, "error", "保存记忆文件失败"));

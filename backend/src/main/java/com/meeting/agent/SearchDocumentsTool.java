@@ -1,5 +1,6 @@
 package com.meeting.agent;
 
+import com.meeting.common.JsonUtil;
 import com.meeting.retrieval.model.ChunkResult;
 import com.meeting.retrieval.service.HybridSearchService;
 import io.agentscope.core.message.ToolResultBlock;
@@ -69,7 +70,7 @@ public class SearchDocumentsTool implements AgentTool {
             HybridSearchService.SearchResult result = hybridSearchService.search(query, timeRange);
 
             if (result.chunks().isEmpty()) {
-                return Mono.just(ToolResultBlock.text(toJson(Map.of(
+                return Mono.just(ToolResultBlock.text(JsonUtil.toJson(Map.of(
                         "evidenceLevel", result.evidenceLevel(),
                         "results", List.of(),
                         "citations", result.citations(),
@@ -82,7 +83,7 @@ public class SearchDocumentsTool implements AgentTool {
             for (ChunkResult chunk : result.chunks()) {
                 Map<String, Object> item = new LinkedHashMap<>();
                 item.put("source", chunk.getFileName() != null ? chunk.getFileName() : "未知文档");
-                item.put("content", chunk.getContent());
+                item.put("content", chunk.getContent() != null ? chunk.getContent() : "");
                 item.put("score", Math.round(chunk.getFinalScore() * 100.0) / 100.0);
                 item.put("speaker", chunk.getSpeaker() != null ? chunk.getSpeaker() : "");
                 item.put("sectionType", chunk.getSectionType() != null ? chunk.getSectionType() : "");
@@ -96,52 +97,11 @@ public class SearchDocumentsTool implements AgentTool {
             toolResult.put("queryUsed", result.queryUsed());
             toolResult.put("retried", result.retried());
 
-            return Mono.just(ToolResultBlock.text(toJson(toolResult)));
+            return Mono.just(ToolResultBlock.text(JsonUtil.toJson(toolResult)));
         } catch (Exception e) {
-            log.warn("Document search failed: {}", e.getMessage());
+            log.warn("Document search failed", e);
             return Mono.just(ToolResultBlock.error("{\"evidenceLevel\":\"NONE\",\"results\":[],\"citations\":[],\"error\":\"搜索异常，请稍后重试\"}"));
         }
     }
 
-    @SuppressWarnings("unchecked")
-    private String toJson(Map<String, Object> map) {
-        StringBuilder sb = new StringBuilder("{");
-        boolean first = true;
-        for (var entry : map.entrySet()) {
-            if (!first) sb.append(",");
-            first = false;
-            sb.append("\"").append(escapeJson(entry.getKey())).append("\":");
-            sb.append(toJsonValue(entry.getValue()));
-        }
-        sb.append("}");
-        return sb.toString();
-    }
-
-    @SuppressWarnings("unchecked")
-    private String toJsonValue(Object val) {
-        if (val == null) return "null";
-        if (val instanceof String s) return "\"" + escapeJson(s) + "\"";
-        if (val instanceof Number || val instanceof Boolean) return val.toString();
-        if (val instanceof List<?> list) {
-            StringBuilder sb = new StringBuilder("[");
-            for (int i = 0; i < list.size(); i++) {
-                if (i > 0) sb.append(",");
-                sb.append(toJsonValue(list.get(i)));
-            }
-            sb.append("]");
-            return sb.toString();
-        }
-        if (val instanceof Map<?, ?> m) {
-            return toJson((Map<String, Object>) m);
-        }
-        return "\"" + escapeJson(val.toString()) + "\"";
-    }
-
-    private String escapeJson(String s) {
-        return s.replace("\\", "\\\\")
-                .replace("\"", "\\\"")
-                .replace("\n", "\\n")
-                .replace("\r", "\\r")
-                .replace("\t", "\\t");
-    }
 }

@@ -19,10 +19,16 @@ public class FeedbackController {
     private final MessageRepository messageRepository;
     private final ObjectMapper objectMapper;
 
+    private static final java.util.Set<String> VALID_FEEDBACK_TYPES = java.util.Set.of("like", "dislike");
+
     @PostMapping("/{messageId}")
     public ApiResponse<Void> feedback(
             @PathVariable Long messageId,
             @RequestParam String type) {
+
+        if (!VALID_FEEDBACK_TYPES.contains(type)) {
+            return ApiResponse.error("无效的反馈类型，仅支持 like/dislike");
+        }
 
         MessageEntity msg = messageRepository.findById(messageId).orElse(null);
         if (msg == null) {

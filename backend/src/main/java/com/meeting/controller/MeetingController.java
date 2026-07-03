@@ -99,7 +99,8 @@ public class MeetingController {
         } catch (IllegalArgumentException e) {
             return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
         } catch (Exception e) {
-            return ResponseEntity.internalServerError().body(Map.of("error", e.getMessage()));
+            log.error("Upload failed", e);
+            return ResponseEntity.internalServerError().body(Map.of("error", "上传失败，请稍后重试"));
         }
     }
 
@@ -225,7 +226,20 @@ public class MeetingController {
             ));
         } catch (Exception e) {
             log.error("Knowledge base upload failed", e);
-            return ResponseEntity.internalServerError().body(Map.of("error", "上传失败: " + e.getMessage()));
+            return ResponseEntity.internalServerError().body(Map.of("error", "上传失败，请稍后重试"));
+        }
+    }
+
+    /**
+     * Validate that a resolved path is within the upload directory (prevent path traversal).
+     */
+    private boolean isPathSafe(Path path) {
+        try {
+            Path uploadRoot = Path.of(uploadDir).toAbsolutePath().normalize();
+            Path resolved = path.toAbsolutePath().normalize();
+            return resolved.startsWith(uploadRoot);
+        } catch (Exception e) {
+            return false;
         }
     }
 
@@ -233,7 +247,7 @@ public class MeetingController {
     public ResponseEntity<?> getMeetingFile(@PathVariable Long id) {
         return meetingRepository.findById(id).map(meeting -> {
             Path filePath = Path.of(meeting.getFilePath());
-            if (!filePath.toFile().exists()) {
+            if (!isPathSafe(filePath) || !filePath.toFile().exists()) {
                 return ResponseEntity.notFound().build();
             }
             Resource resource = new FileSystemResource(filePath);
@@ -251,7 +265,7 @@ public class MeetingController {
     public ResponseEntity<?> getMeetingTextContent(@PathVariable Long id) {
         return meetingRepository.findById(id).map(meeting -> {
             Path filePath = Path.of(meeting.getFilePath());
-            if (!filePath.toFile().exists()) {
+            if (!isPathSafe(filePath) || !filePath.toFile().exists()) {
                 return ResponseEntity.notFound().build();
             }
             String ext = FileProcessingService.getExtension(meeting.getTitle()).toLowerCase();
@@ -271,8 +285,8 @@ public class MeetingController {
                 }
                 return ResponseEntity.ok(Map.of("content", content));
             } catch (IOException e) {
-                log.error("Failed to read file {}: {}", id, e.getMessage());
-                return ResponseEntity.internalServerError().body(Map.of("error", "读取文件失败: " + e.getMessage()));
+                log.error("Failed to read file {}", id, e);
+                return ResponseEntity.internalServerError().body(Map.of("error", "读取文件失败"));
             }
         }).orElse(ResponseEntity.notFound().build());
     }
@@ -286,7 +300,7 @@ public class MeetingController {
             return ResponseEntity.notFound().build();
         }
         Path path = Path.of(filePath);
-        if (!path.toFile().exists()) {
+        if (!isPathSafe(path) || !path.toFile().exists()) {
             return ResponseEntity.notFound().build();
         }
         Resource resource = new FileSystemResource(path);
@@ -306,7 +320,7 @@ public class MeetingController {
             return ResponseEntity.notFound().build();
         }
         Path path = Path.of(filePath);
-        if (!path.toFile().exists()) {
+        if (!isPathSafe(path) || !path.toFile().exists()) {
             return ResponseEntity.notFound().build();
         }
         try {
