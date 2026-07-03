@@ -10,6 +10,7 @@ import io.agentscope.core.tool.mcp.McpClientBuilder;
 import io.agentscope.core.tool.mcp.McpClientWrapper;
 import io.agentscope.harness.agent.HarnessAgent;
 import io.agentscope.harness.agent.memory.compaction.CompactionConfig;
+import io.agentscope.harness.agent.subagent.SubagentDeclaration;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
@@ -144,6 +145,12 @@ public class AgentConfig {
                 .disableWorkspaceContext()
                 .disableMemoryTools()
                 .disableMemoryHooks()
+                .subagent(SubagentDeclaration.builder()
+                        .name("rewrite_agent")
+                        .description("改写成正式会议纪要，润色校对")
+                        .mode(SubagentDeclaration.Mode.SUBAGENT)
+                        .steps(10)
+                        .build())
                 .enableTaskList(false)
                 .maxIters(8)
                 .stateStore(pgAgentStateStore)
