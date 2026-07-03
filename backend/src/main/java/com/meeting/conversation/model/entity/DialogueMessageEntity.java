@@ -1,8 +1,12 @@
 package com.meeting.conversation.model.entity;
 
 import jakarta.persistence.*;
+import lombok.Getter;
+import lombok.Setter;
 import java.time.LocalDateTime;
 
+@Getter
+@Setter
 @Entity
 @Table(name = "dialogue_messages")
 public class DialogueMessageEntity {
@@ -38,28 +42,4 @@ public class DialogueMessageEntity {
         if (messageType == null) messageType = "text";
         if (createdAt == null) createdAt = LocalDateTime.now();
     }
-
-    public Long getId() { return id; }
-    public void setId(Long id) { this.id = id; }
-
-    public Long getDialogueId() { return dialogueId; }
-    public void setDialogueId(Long dialogueId) { this.dialogueId = dialogueId; }
-
-    public String getRole() { return role; }
-    public void setRole(String role) { this.role = role; }
-
-    public String getContent() { return content; }
-    public void setContent(String content) { this.content = content; }
-
-    public String getFiles() { return files; }
-    public void setFiles(String files) { this.files = files; }
-
-    public String getMessageType() { return messageType; }
-    public void setMessageType(String messageType) { this.messageType = messageType; }
-
-    public String getMetadata() { return metadata; }
-    public void setMetadata(String metadata) { this.metadata = metadata; }
-
-    public LocalDateTime getCreatedAt() { return createdAt; }
-    public void setCreatedAt(LocalDateTime createdAt) { this.createdAt = createdAt; }
 }

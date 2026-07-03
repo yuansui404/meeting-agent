@@ -18,9 +18,8 @@ import io.agentscope.core.message.*;
 import io.agentscope.core.model.GenerateOptions;
 import io.agentscope.core.model.OpenAIClient;
 import io.agentscope.harness.agent.HarnessAgent;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.cloud.context.config.annotation.RefreshScope;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.support.TransactionTemplate;
@@ -36,12 +35,11 @@ import java.nio.file.Path;
 import java.util.*;
 import java.util.concurrent.atomic.AtomicBoolean;
 
+@Slf4j
 @Service
 @RefreshScope
 @RequiredArgsConstructor
 public class ChatService {
-
-    private static final Logger log = LoggerFactory.getLogger(ChatService.class);
     private static final long MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB limit for file reading
 
     private static final Set<String> IMAGE_FORMATS = Set.of(".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp", ".svg");

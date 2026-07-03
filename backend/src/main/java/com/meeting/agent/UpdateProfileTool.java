@@ -4,8 +4,8 @@ import com.meeting.service.ProfileService;
 import io.agentscope.core.message.ToolResultBlock;
 import io.agentscope.core.tool.AgentTool;
 import io.agentscope.core.tool.ToolCallParam;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 import reactor.core.publisher.Mono;
 
@@ -13,16 +13,12 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
+@Slf4j
 @Component
+@RequiredArgsConstructor
 public class UpdateProfileTool implements AgentTool {
 
-    private static final Logger log = LoggerFactory.getLogger(UpdateProfileTool.class);
-
     private final ProfileService profileService;
-
-    public UpdateProfileTool(ProfileService profileService) {
-        this.profileService = profileService;
-    }
 
     @Override
     public String getName() {

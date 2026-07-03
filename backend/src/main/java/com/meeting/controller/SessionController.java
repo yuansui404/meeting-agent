@@ -3,6 +3,7 @@ package com.meeting.controller;
 import com.meeting.conversation.model.entity.RewriteResult;
 import com.meeting.service.RewriteService;
 import com.meeting.service.SessionService;
+import lombok.RequiredArgsConstructor;
 import org.springframework.core.io.FileSystemResource;
 import org.springframework.core.io.Resource;
 import org.springframework.http.HttpHeaders;
@@ -15,15 +16,11 @@ import java.util.Map;
 
 @RestController
 @RequestMapping("/api")
+@RequiredArgsConstructor
 public class SessionController {
 
     private final SessionService sessionService;
     private final RewriteService rewriteService;
-
-    public SessionController(SessionService sessionService, RewriteService rewriteService) {
-        this.sessionService = sessionService;
-        this.rewriteService = rewriteService;
-    }
 
     @PostMapping("/dialogue")
     public ResponseEntity<?> createSession(@RequestBody Map<String, Object> request) {

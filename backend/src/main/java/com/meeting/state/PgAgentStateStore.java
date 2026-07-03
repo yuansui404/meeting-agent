@@ -5,24 +5,21 @@ import com.meeting.conversation.repository.SessionRepository;
 import io.agentscope.core.state.AgentState;
 import io.agentscope.core.state.AgentStateStore;
 import io.agentscope.core.state.State;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.*;
 
+@Slf4j
 @Component
+@RequiredArgsConstructor
 public class PgAgentStateStore implements AgentStateStore {
 
-    private static final Logger log = LoggerFactory.getLogger(PgAgentStateStore.class);
     private static final String AGENT_STATE_KEY = "agent_state";
 
     private final SessionRepository sessionRepository;
-
-    public PgAgentStateStore(SessionRepository sessionRepository) {
-        this.sessionRepository = sessionRepository;
-    }
 
     @Override
     @Transactional

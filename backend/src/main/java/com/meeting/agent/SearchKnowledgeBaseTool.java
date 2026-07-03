@@ -9,8 +9,8 @@ import com.meeting.service.VectorizationService.ScoredVector;
 import io.agentscope.core.message.ToolResultBlock;
 import io.agentscope.core.tool.AgentTool;
 import io.agentscope.core.tool.ToolCallParam;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
 import reactor.core.publisher.Mono;
@@ -19,25 +19,15 @@ import java.time.format.DateTimeFormatter;
 import java.util.*;
 import java.util.stream.Collectors;
 
+@Slf4j
 @Component
+@RequiredArgsConstructor
 public class SearchKnowledgeBaseTool implements AgentTool {
-
-    private static final Logger log = LoggerFactory.getLogger(SearchKnowledgeBaseTool.class);
 
     private final VectorizationService vectorizationService;
     private final MeetingMinutesRepository meetingRepository;
     private final QueryRewriter queryRewriter;
     private final JdbcTemplate jdbcTemplate;
-
-    public SearchKnowledgeBaseTool(VectorizationService vectorizationService,
-                                    MeetingMinutesRepository meetingRepository,
-                                    QueryRewriter queryRewriter,
-                                    JdbcTemplate jdbcTemplate) {
-        this.vectorizationService = vectorizationService;
-        this.meetingRepository = meetingRepository;
-        this.queryRewriter = queryRewriter;
-        this.jdbcTemplate = jdbcTemplate;
-    }
 
     @Override
     public String getName() {

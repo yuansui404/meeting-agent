@@ -1,6 +1,7 @@
 package com.meeting.agent;
 
 import com.meeting.service.TranscriptionService;
+import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
 
 /**
@@ -8,13 +9,10 @@ import org.springframework.stereotype.Component;
  * 负责调用 MiMo-V2.5-ASR 服务进行语音识别
  */
 @Component
+@RequiredArgsConstructor
 public class TranscriptionAgent {
 
     private final TranscriptionService transcriptionService;
-
-    public TranscriptionAgent(TranscriptionService transcriptionService) {
-        this.transcriptionService = transcriptionService;
-    }
 
     public void startTranscription(String filePath, String fileName, Long dialogueId) {
         transcriptionService.startTranscription(filePath, fileName, dialogueId);

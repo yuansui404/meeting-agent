@@ -5,8 +5,7 @@ import io.agentscope.core.formatter.openai.dto.OpenAIMessage;
 import io.agentscope.core.formatter.openai.dto.OpenAIRequest;
 import io.agentscope.core.formatter.openai.dto.OpenAIResponse;
 import io.agentscope.core.model.OpenAIClient;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
@@ -17,11 +16,10 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
+@Slf4j
 @Component
 @ConditionalOnProperty(name = "rag.retrieval.rerank-enabled", havingValue = "true")
 public class DeepSeekReranker implements Reranker {
-
-    private static final Logger log = LoggerFactory.getLogger(DeepSeekReranker.class);
     private static final int BATCH_SIZE = 10;
     private static final Pattern SCORE_PATTERN = Pattern.compile("(\\d+)(?:/10)?\\s*[:：]");
 

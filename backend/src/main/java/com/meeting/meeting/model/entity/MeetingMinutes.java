@@ -1,8 +1,12 @@
 package com.meeting.meeting.model.entity;
 
 import jakarta.persistence.*;
+import lombok.Getter;
+import lombok.Setter;
 import java.time.LocalDateTime;
 
+@Getter
+@Setter
 @Entity
 @Table(name = "meeting_minutes")
 public class MeetingMinutes {
@@ -63,35 +67,4 @@ public class MeetingMinutes {
     protected void onUpdate() {
         updatedAt = LocalDateTime.now();
     }
-
-    public Long getId() { return id; }
-    public void setId(Long id) { this.id = id; }
-    public String getTitle() { return title; }
-    public void setTitle(String title) { this.title = title; }
-    public String getFilePath() { return filePath; }
-    public void setFilePath(String filePath) { this.filePath = filePath; }
-    public Long getFileSize() { return fileSize; }
-    public void setFileSize(Long fileSize) { this.fileSize = fileSize; }
-    public Integer getDuration() { return duration; }
-    public void setDuration(Integer duration) { this.duration = duration; }
-    public String getTranscription() { return transcription; }
-    public void setTranscription(String transcription) { this.transcription = transcription; }
-    public LocalDateTime getCreatedAt() { return createdAt; }
-    public void setCreatedAt(LocalDateTime createdAt) { this.createdAt = createdAt; }
-    public LocalDateTime getUpdatedAt() { return updatedAt; }
-    public void setUpdatedAt(LocalDateTime updatedAt) { this.updatedAt = updatedAt; }
-    public String getStatus() { return status; }
-    public void setStatus(String status) { this.status = status; }
-    public Long getDialogueId() { return dialogueId; }
-    public void setDialogueId(Long dialogueId) { this.dialogueId = dialogueId; }
-    public String getMdFilePath() { return mdFilePath; }
-    public void setMdFilePath(String mdFilePath) { this.mdFilePath = mdFilePath; }
-    public LocalDateTime getMeetingDate() { return meetingDate; }
-    public void setMeetingDate(LocalDateTime meetingDate) { this.meetingDate = meetingDate; }
-    public Boolean getStyleExemplar() { return styleExemplar; }
-    public void setStyleExemplar(Boolean styleExemplar) { this.styleExemplar = styleExemplar; }
-    public String getStyleTags() { return styleTags; }
-    public void setStyleTags(String styleTags) { this.styleTags = styleTags; }
-    public String getParticipants() { return participants; }
-    public void setParticipants(String participants) { this.participants = participants; }
 }

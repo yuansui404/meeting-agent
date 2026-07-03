@@ -7,17 +7,15 @@ import org.apache.poi.xwpf.usermodel.XWPFDocument;
 import org.apache.pdfbox.Loader;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.text.PDFTextStripper;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import lombok.extern.slf4j.Slf4j;
 
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 
+@Slf4j
 public class DocumentTextExtractor {
-
-    private static final Logger log = LoggerFactory.getLogger(DocumentTextExtractor.class);
 
     public static String extractText(Path filePath, String ext) throws IOException {
         if (".pdf".equalsIgnoreCase(ext)) {

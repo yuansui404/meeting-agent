@@ -1,6 +1,7 @@
 package com.meeting.controller;
 
 import com.meeting.service.SearchService;
+import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
@@ -8,13 +9,10 @@ import java.util.Map;
 
 @RestController
 @RequestMapping("/api")
+@RequiredArgsConstructor
 public class SearchController {
 
     private final SearchService searchService;
-
-    public SearchController(SearchService searchService) {
-        this.searchService = searchService;
-    }
 
     @GetMapping("/search")
     public ResponseEntity<?> search(

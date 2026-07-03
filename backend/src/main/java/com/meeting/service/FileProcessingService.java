@@ -1,7 +1,6 @@
 package com.meeting.service;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
@@ -19,10 +18,9 @@ import java.util.HashMap;
 import java.util.Set;
 import java.util.UUID;
 
+@Slf4j
 @Service
 public class FileProcessingService {
-
-    private static final Logger log = LoggerFactory.getLogger(FileProcessingService.class);
 
     private static final Set<String> VIDEO_FORMATS = Set.of(".mp4", ".avi", ".mov", ".mkv", ".webm", ".wmv", ".flv");
     private static final Set<String> AUDIO_FORMATS = Set.of(".mp3", ".wav", ".m4a", ".aac", ".ogg", ".wma", ".flac");

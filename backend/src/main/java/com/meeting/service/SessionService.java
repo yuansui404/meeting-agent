@@ -9,8 +9,8 @@ import com.meeting.conversation.repository.SessionRepository;
 import io.agentscope.core.message.Msg;
 import io.agentscope.core.message.MsgRole;
 import io.agentscope.core.state.AgentState;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -19,20 +19,15 @@ import java.nio.file.Path;
 import java.time.LocalDateTime;
 import java.util.*;
 
+@Slf4j
 @Service
+@RequiredArgsConstructor
 public class SessionService {
 
-    private static final Logger log = LoggerFactory.getLogger(SessionService.class);
     private static final ObjectMapper objectMapper = new ObjectMapper();
 
     private final SessionRepository sessionRepository;
     private final DialogueMessageRepository dialogueMessageRepository;
-
-    public SessionService(SessionRepository sessionRepository,
-                          DialogueMessageRepository dialogueMessageRepository) {
-        this.sessionRepository = sessionRepository;
-        this.dialogueMessageRepository = dialogueMessageRepository;
-    }
 
     @Transactional
     public SessionEntity createSession(String title, Long meetingId) {

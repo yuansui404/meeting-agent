@@ -1,8 +1,12 @@
 package com.meeting.conversation.model.entity;
 
 import jakarta.persistence.*;
+import lombok.Getter;
+import lombok.Setter;
 import java.time.LocalDateTime;
 
+@Getter
+@Setter
 @Entity
 @Table(name = "rewrite_feedback")
 public class RewriteFeedback {
@@ -27,15 +31,4 @@ public class RewriteFeedback {
     protected void onCreate() {
         createdAt = LocalDateTime.now();
     }
-
-    public Long getId() { return id; }
-    public void setId(Long id) { this.id = id; }
-    public Long getRewriteResultId() { return rewriteResultId; }
-    public void setRewriteResultId(Long rewriteResultId) { this.rewriteResultId = rewriteResultId; }
-    public Integer getParagraphIndex() { return paragraphIndex; }
-    public void setParagraphIndex(Integer paragraphIndex) { this.paragraphIndex = paragraphIndex; }
-    public String getAction() { return action; }
-    public void setAction(String action) { this.action = action; }
-    public LocalDateTime getCreatedAt() { return createdAt; }
-    public void setCreatedAt(LocalDateTime createdAt) { this.createdAt = createdAt; }
 }

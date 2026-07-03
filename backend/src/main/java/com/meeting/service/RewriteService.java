@@ -3,13 +3,12 @@ package com.meeting.service;
 import com.meeting.config.DeepSeekProperties;
 import com.meeting.conversation.model.entity.RewriteResult;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import com.meeting.conversation.repository.RewriteResultRepository;
 import io.agentscope.core.formatter.openai.dto.OpenAIMessage;
 import io.agentscope.core.formatter.openai.dto.OpenAIRequest;
 import io.agentscope.core.formatter.openai.dto.OpenAIResponse;
 import io.agentscope.core.model.OpenAIClient;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
@@ -26,11 +25,10 @@ import java.util.*;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.Collectors;
 
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class RewriteService {
-
-    private static final Logger log = LoggerFactory.getLogger(RewriteService.class);
     private static final int MAX_TOKENS = 8000;
 
     private final RewriteResultRepository rewriteResultRepository;

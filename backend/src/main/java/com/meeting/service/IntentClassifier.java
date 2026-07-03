@@ -4,18 +4,18 @@ import io.agentscope.core.formatter.openai.dto.OpenAIMessage;
 import io.agentscope.core.formatter.openai.dto.OpenAIRequest;
 import io.agentscope.core.formatter.openai.dto.OpenAIResponse;
 import io.agentscope.core.model.OpenAIClient;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
 import java.util.List;
 
+@Slf4j
 @Service
+@RequiredArgsConstructor
 public class IntentClassifier {
-
-    private static final Logger log = LoggerFactory.getLogger(IntentClassifier.class);
 
     public enum Intent {
         REWRITE,
@@ -23,20 +23,10 @@ public class IntentClassifier {
         CHAT
     }
 
-    private final String apiKey;
-    private final String apiUrl;
-    private final String model;
+    @Value("${deepseek.api-key:}") private final String apiKey = "";
+    @Value("${deepseek.url:https://api.deepseek.com}") private final String apiUrl = "https://api.deepseek.com";
+    @Value("${deepseek.model:deepseek-chat}") private final String model = "deepseek-chat";
     private final OpenAIClient openAIClient;
-
-    public IntentClassifier(@Value("${deepseek.api-key:}") String apiKey,
-                            @Value("${deepseek.url:https://api.deepseek.com}") String apiUrl,
-                            @Value("${deepseek.model:deepseek-chat}") String model,
-                            OpenAIClient openAIClient) {
-        this.apiKey = apiKey;
-        this.apiUrl = apiUrl;
-        this.model = model;
-        this.openAIClient = openAIClient;
-    }
 
     /**
      * Classify user message intent. Returns a list of intents ordered by execution priority.

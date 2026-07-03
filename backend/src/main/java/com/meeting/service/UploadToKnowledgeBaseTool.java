@@ -12,8 +12,8 @@ import io.agentscope.core.state.AgentState;
 import io.agentscope.core.message.ToolResultBlock;
 import io.agentscope.core.tool.AgentTool;
 import io.agentscope.core.tool.ToolCallParam;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 import reactor.core.publisher.Mono;
 
@@ -24,28 +24,16 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
+@Slf4j
 @Component
+@RequiredArgsConstructor
 public class UploadToKnowledgeBaseTool implements AgentTool {
-
-    private static final Logger log = LoggerFactory.getLogger(UploadToKnowledgeBaseTool.class);
 
     private final MeetingMinutesRepository meetingRepository;
     private final VectorizationService vectorizationService;
     private final SessionRepository sessionRepository;
     private final DialogueMessageRepository dialogueMessageRepository;
     private final SessionService sessionService;
-
-    public UploadToKnowledgeBaseTool(MeetingMinutesRepository meetingRepository,
-                                     VectorizationService vectorizationService,
-                                     SessionRepository sessionRepository,
-                                     DialogueMessageRepository dialogueMessageRepository,
-                                     SessionService sessionService) {
-        this.meetingRepository = meetingRepository;
-        this.vectorizationService = vectorizationService;
-        this.sessionRepository = sessionRepository;
-        this.dialogueMessageRepository = dialogueMessageRepository;
-        this.sessionService = sessionService;
-    }
 
     @Override
     public String getName() {

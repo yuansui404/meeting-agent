@@ -7,8 +7,8 @@ import com.meeting.meeting.repository.MeetingVectorRepository;
 import com.meeting.service.FileProcessingService;
 import com.meeting.service.TranscriptionService;
 import com.meeting.service.VectorizationService;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.core.io.FileSystemResource;
 import org.springframework.core.io.Resource;
 import org.springframework.beans.factory.annotation.Value;
@@ -37,14 +37,14 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
+@Slf4j
 @RestController
 @RequestMapping("/api")
+@RequiredArgsConstructor
 public class MeetingController {
 
-    private static final Logger log = LoggerFactory.getLogger(MeetingController.class);
-
     @Value("${file.upload-dir:/app/data/uploads}")
-    private String uploadDir;
+    private final String uploadDir = "/app/data/uploads";
 
     private final FileProcessingService fileProcessingService;
     private final TranscriptionService transcriptionService;
@@ -55,26 +55,6 @@ public class MeetingController {
     private final MeetingDateExtractor meetingDateExtractor;
     private final JdbcTemplate jdbcTemplate;
     private final SessionService sessionService;
-
-    public MeetingController(FileProcessingService fileProcessingService,
-                             TranscriptionService transcriptionService,
-                             MeetingMinutesRepository meetingRepository,
-                             MeetingVectorRepository vectorRepository,
-                             VectorizationService vectorizationService,
-                             RewriteFeedbackService rewriteFeedbackService,
-                             MeetingDateExtractor meetingDateExtractor,
-                             JdbcTemplate jdbcTemplate,
-                             SessionService sessionService) {
-        this.fileProcessingService = fileProcessingService;
-        this.transcriptionService = transcriptionService;
-        this.meetingRepository = meetingRepository;
-        this.vectorRepository = vectorRepository;
-        this.vectorizationService = vectorizationService;
-        this.rewriteFeedbackService = rewriteFeedbackService;
-        this.meetingDateExtractor = meetingDateExtractor;
-        this.jdbcTemplate = jdbcTemplate;
-        this.sessionService = sessionService;
-    }
 
     @PostMapping("/upload")
     public ResponseEntity<?> uploadFile(

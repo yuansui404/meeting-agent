@@ -6,23 +6,23 @@ import com.meeting.meeting.model.entity.MeetingMinutes;
 import com.meeting.meeting.model.entity.MeetingVector;
 import com.meeting.meeting.repository.MeetingMinutesRepository;
 import com.meeting.meeting.repository.MeetingVectorRepository;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.*;
 import java.util.stream.Collectors;
 
+@Slf4j
 @Service
+@RequiredArgsConstructor
 public class VectorizationService {
-
-    private static final Logger log = LoggerFactory.getLogger(VectorizationService.class);
     private static final int MAX_CHUNK_SIZE = 1500;
     private static final int CHUNK_OVERLAP = 50;
 
@@ -31,6 +31,13 @@ public class VectorizationService {
      * similarity ranges from 0 (completely dissimilar) to 1 (identical).
      */
     public record ScoredVector(Long id, Long meetingId, String content, Integer chunkIndex, double similarity) {}
+
+    private final MeetingMinutesRepository meetingRepository;
+    private final MeetingVectorRepository vectorRepository;
+    private final EmbeddingService embeddingService;
+    private final JdbcTemplate jdbcTemplate;
+    private final DeepSeekChatClient deepSeekChatClient;
+    @Value("${file.upload-dir:/app/data/uploads}") private final String uploadDir;
 
     /**
      * Search vectors weighted by priority_score for style example retrieval.
@@ -110,26 +117,6 @@ public class VectorizationService {
         }
     }
 
-    private final MeetingMinutesRepository meetingRepository;
-    private final MeetingVectorRepository vectorRepository;
-    private final EmbeddingService embeddingService;
-    private final JdbcTemplate jdbcTemplate;
-    private final DeepSeekChatClient deepSeekChatClient;
-    private final String uploadDir;
-
-    public VectorizationService(MeetingMinutesRepository meetingRepository,
-                                MeetingVectorRepository vectorRepository,
-                                EmbeddingService embeddingService,
-                                JdbcTemplate jdbcTemplate,
-                                DeepSeekChatClient deepSeekChatClient,
-                                @Value("${file.upload-dir:/app/data/uploads}") String uploadDir) {
-        this.meetingRepository = meetingRepository;
-        this.vectorRepository = vectorRepository;
-        this.embeddingService = embeddingService;
-        this.jdbcTemplate = jdbcTemplate;
-        this.deepSeekChatClient = deepSeekChatClient;
-        this.uploadDir = uploadDir;
-    }
 
     @Transactional
     public void vectorizeMeeting(Long meetingId) {

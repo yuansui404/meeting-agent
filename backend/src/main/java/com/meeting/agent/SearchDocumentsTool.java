@@ -6,23 +6,19 @@ import com.meeting.retrieval.service.HybridSearchService;
 import io.agentscope.core.message.ToolResultBlock;
 import io.agentscope.core.tool.AgentTool;
 import io.agentscope.core.tool.ToolCallParam;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 import reactor.core.publisher.Mono;
 
 import java.util.*;
 
+@Slf4j
 @Component
+@RequiredArgsConstructor
 public class SearchDocumentsTool implements AgentTool {
 
-    private static final Logger log = LoggerFactory.getLogger(SearchDocumentsTool.class);
-
     private final HybridSearchService hybridSearchService;
-
-    public SearchDocumentsTool(HybridSearchService hybridSearchService) {
-        this.hybridSearchService = hybridSearchService;
-    }
 
     @Override
     public String getName() {

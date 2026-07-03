@@ -1,8 +1,12 @@
 package com.meeting.meeting.model.entity;
 
 import jakarta.persistence.*;
+import lombok.Getter;
+import lombok.Setter;
 import java.time.LocalDateTime;
 
+@Getter
+@Setter
 @Entity
 @Table(name = "meeting_vectors")
 public class MeetingVector {
@@ -33,19 +37,4 @@ public class MeetingVector {
     protected void onCreate() {
         createdAt = LocalDateTime.now();
     }
-
-    public Long getId() { return id; }
-    public void setId(Long id) { this.id = id; }
-    public Long getMeetingId() { return meetingId; }
-    public void setMeetingId(Long meetingId) { this.meetingId = meetingId; }
-    public String getContent() { return content; }
-    public void setContent(String content) { this.content = content; }
-    public float[] getEmbedding() { return embedding; }
-    public void setEmbedding(float[] embedding) { this.embedding = embedding; }
-    public Integer getChunkIndex() { return chunkIndex; }
-    public void setChunkIndex(Integer chunkIndex) { this.chunkIndex = chunkIndex; }
-    public LocalDateTime getCreatedAt() { return createdAt; }
-    public void setCreatedAt(LocalDateTime createdAt) { this.createdAt = createdAt; }
-    public Double getPriorityScore() { return priorityScore; }
-    public void setPriorityScore(Double priorityScore) { this.priorityScore = priorityScore; }
 }

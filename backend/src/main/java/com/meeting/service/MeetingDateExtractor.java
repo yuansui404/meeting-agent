@@ -2,8 +2,8 @@ package com.meeting.service;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.meeting.config.DeepSeekChatClient;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
 import java.time.LocalDateTime;
@@ -11,10 +11,11 @@ import java.time.format.DateTimeFormatter;
 import java.util.List;
 import java.util.Map;
 
+@Slf4j
 @Component
+@RequiredArgsConstructor
 public class MeetingDateExtractor {
 
-    private static final Logger log = LoggerFactory.getLogger(MeetingDateExtractor.class);
     private static final DateTimeFormatter[] FORMATTERS = {
             DateTimeFormatter.ISO_LOCAL_DATE_TIME,
             DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss"),
@@ -24,10 +25,6 @@ public class MeetingDateExtractor {
     };
 
     private final DeepSeekChatClient deepSeekChatClient;
-
-    public MeetingDateExtractor(DeepSeekChatClient deepSeekChatClient) {
-        this.deepSeekChatClient = deepSeekChatClient;
-    }
 
     /**
      * Extract meeting date from document/transcription text using LLM.

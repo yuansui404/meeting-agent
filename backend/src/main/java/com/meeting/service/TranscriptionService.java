@@ -5,8 +5,8 @@ import io.agentscope.core.formatter.openai.dto.OpenAIMessage;
 import io.agentscope.core.formatter.openai.dto.OpenAIRequest;
 import io.agentscope.core.formatter.openai.dto.OpenAIResponse;
 import io.agentscope.core.model.OpenAIClient;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
@@ -20,34 +20,19 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.*;
 
+@Slf4j
 @Service
+@RequiredArgsConstructor
 public class TranscriptionService {
-
-    private static final Logger log = LoggerFactory.getLogger(TranscriptionService.class);
 
     private final FileProcessingService fileProcessingService;
     private final MeetingDateExtractor meetingDateExtractor;
     private final OpenAIClient openAIClient;
 
-    @Value("${mimo.api-key:}")
-    private String mimoApiKey;
-
-    @Value("${mimo.url:https://token-plan-cn.xiaomimimo.com}")
-    private String mimoUrl;
-
-    @Value("${deepseek.api-key:}")
-    private String deepseekApiKey;
-
-    @Value("${deepseek.url:https://api.deepseek.com}")
-    private String deepseekApiUrl;
-
-    public TranscriptionService(FileProcessingService fileProcessingService,
-                                MeetingDateExtractor meetingDateExtractor,
-                                OpenAIClient openAIClient) {
-        this.fileProcessingService = fileProcessingService;
-        this.meetingDateExtractor = meetingDateExtractor;
-        this.openAIClient = openAIClient;
-    }
+    @Value("${mimo.api-key:}") private final String mimoApiKey = "";
+    @Value("${mimo.url:https://token-plan-cn.xiaomimimo.com}") private final String mimoUrl = "https://token-plan-cn.xiaomimimo.com";
+    @Value("${deepseek.api-key:}") private final String deepseekApiKey = "";
+    @Value("${deepseek.url:https://api.deepseek.com}") private final String deepseekApiUrl = "https://api.deepseek.com";
 
     /**
      * Start asynchronous transcription for a dialogue audio/video file.

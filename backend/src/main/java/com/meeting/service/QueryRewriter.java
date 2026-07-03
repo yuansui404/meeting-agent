@@ -2,24 +2,20 @@ package com.meeting.service;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.meeting.config.DeepSeekChatClient;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
+@Slf4j
 @Service
+@RequiredArgsConstructor
 public class QueryRewriter {
 
-    private static final Logger log = LoggerFactory.getLogger(QueryRewriter.class);
-
     private final DeepSeekChatClient deepSeekChatClient;
-
-    public QueryRewriter(DeepSeekChatClient deepSeekChatClient) {
-        this.deepSeekChatClient = deepSeekChatClient;
-    }
 
     /**
      * Extract search keywords from the user's natural language query.
