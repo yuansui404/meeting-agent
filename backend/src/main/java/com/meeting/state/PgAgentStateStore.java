@@ -7,13 +7,11 @@ import io.agentscope.core.state.AgentStateStore;
 import io.agentscope.core.state.State;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.*;
 
 @Slf4j
-@Component
 @RequiredArgsConstructor
 public class PgAgentStateStore implements AgentStateStore {
 
