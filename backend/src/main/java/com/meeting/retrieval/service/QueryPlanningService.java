@@ -1,5 +1,7 @@
 package com.meeting.retrieval.service;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.meeting.config.DeepSeekProperties;
 import io.agentscope.core.formatter.openai.dto.OpenAIMessage;
 import io.agentscope.core.formatter.openai.dto.OpenAIRequest;
@@ -9,8 +11,8 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
+import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
 
 @Slf4j
 @Service
@@ -19,6 +21,7 @@ public class QueryPlanningService {
 
     private final OpenAIClient openAIClient;
     private final DeepSeekProperties deepSeekProps;
+    private final ObjectMapper objectMapper;
 
     public record QueryPlan(String strategy, String rewrittenQuery, List<String> subQueries) {
         public static QueryPlan direct(String query) {
@@ -47,26 +50,36 @@ public class QueryPlanningService {
             OpenAIResponse response = openAIClient.call(deepSeekProps.getApiKey(), deepSeekProps.getUrl(), request);
             String content = response.getFirstChoice().getMessage().getContentAsString();
 
-            if (content.contains("\"REWRITE\"")) {
-                return new QueryPlan("REWRITE", extractFromJson(content, "rewritten_query"),
-                        List.of(extractFromJson(content, "rewritten_query")));
-            } else if (content.contains("\"DECOMPOSE\"")) {
-                return new QueryPlan("DECOMPOSE", originalQuery, List.of(originalQuery));
-            }
-            return QueryPlan.direct(originalQuery);
+            JsonNode root = objectMapper.readTree(content);
+            String strategy = root.has("strategy") ? root.get("strategy").asText("DIRECT") : "DIRECT";
 
+            switch (strategy) {
+                case "REWRITE" -> {
+                    String rewritten = root.has("rewritten_query") ? root.get("rewritten_query").asText(originalQuery) : originalQuery;
+                    return new QueryPlan("REWRITE", rewritten, List.of(rewritten));
+                }
+                case "DECOMPOSE" -> {
+                    List<String> subQueries = parseSubQueries(root, originalQuery);
+                    return new QueryPlan("DECOMPOSE", originalQuery, subQueries);
+                }
+                default -> {
+                    return QueryPlan.direct(originalQuery);
+                }
+            }
         } catch (Exception e) {
             log.warn("Query planning failed, fallback to DIRECT: {}", e.getMessage());
             return QueryPlan.direct(originalQuery);
         }
     }
 
-    private String extractFromJson(String json, String key) {
-        int start = json.indexOf("\"" + key + "\"");
-        if (start == -1) return "";
-        start = json.indexOf(":", start) + 1;
-        start = json.indexOf("\"", start) + 1;
-        int end = json.indexOf("\"", start);
-        return json.substring(start, end);
+    private List<String> parseSubQueries(JsonNode root, String fallback) {
+        List<String> result = new ArrayList<>();
+        if (root.has("sub_queries") && root.get("sub_queries").isArray()) {
+            for (JsonNode node : root.get("sub_queries")) {
+                String q = node.asText("").trim();
+                if (!q.isBlank()) result.add(q);
+            }
+        }
+        return result.isEmpty() ? List.of(fallback) : result;
     }
 }

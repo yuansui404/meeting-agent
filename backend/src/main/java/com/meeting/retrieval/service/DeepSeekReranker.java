@@ -23,7 +23,7 @@ import java.util.stream.Collectors;
 @ConditionalOnProperty(name = "rag.retrieval.rerank-enabled", havingValue = "true")
 public class DeepSeekReranker implements Reranker {
     private static final int BATCH_SIZE = 10;
-    private static final Pattern SCORE_PATTERN = Pattern.compile("(\\d+)(?:/10)?\\s*[:：]");
+    private static final Pattern SCORE_PATTERN = Pattern.compile("^\\d+\\s*[:：]\\s*(\\d+)(?:/10)?", Pattern.MULTILINE);
 
     private final DeepSeekProperties deepSeekProps;
     private final OpenAIClient openAIClient;
@@ -80,7 +80,8 @@ public class DeepSeekReranker implements Reranker {
             sb.append(i + 1).append(": ").append(preview).append("\n---\n");
         }
         sb.append("\n请对每个段落给出 0-10 的整数评分（0=完全不相关，10=高度相关）。\n");
-        sb.append("输出格式：每行一个 \"序号: 分数\"，如 \"1: 8\"、\"2: 3\"，不要其他内容。");
+        sb.append("输出格式：每行一个 \"序号: 分数\"，如 \"1: 8\"、\"2: 3\"。\n");
+        sb.append("严格要求：只输出评分行，不要包含任何前言、解释、总结或其他文字。");
 
         try {
             OpenAIRequest request = OpenAIRequest.builder()

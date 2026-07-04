@@ -1,8 +1,11 @@
 package com.meeting.retrieval.algorithm;
 
+import org.springframework.stereotype.Component;
+
 import java.time.LocalDate;
 import java.time.temporal.ChronoUnit;
 
+@Component
 public class TimeDecayScorer {
 
     public record TimeDecayConfig(
@@ -11,7 +14,7 @@ public class TimeDecayScorer {
             double oldWeight, double archiveWeight
     ) {}
 
-    public static double apply(double rrfScore, LocalDate meetingDate, TimeDecayConfig config) {
+    public double apply(double rrfScore, LocalDate meetingDate, TimeDecayConfig config) {
         if (!config.enabled() || meetingDate == null) return rrfScore;
 
         long daysOld = ChronoUnit.DAYS.between(meetingDate, LocalDate.now());

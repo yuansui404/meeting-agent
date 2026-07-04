@@ -16,6 +16,7 @@ public class FullTextSearchService {
     private final JdbcTemplate jdbcTemplate;
 
     public List<ChunkResult> search(String query, int topK) {
+        int effectiveTopK = Math.max(1, Math.min(topK, 100));
         String sql = """
             SELECT c.id, c.document_id, c.content, c.chunk_index, c.speaker, c.section_type,
                    d.title AS file_name,
@@ -31,7 +32,7 @@ public class FullTextSearchService {
                 ps -> {
                     ps.setString(1, query);
                     ps.setString(2, query);
-                    ps.setInt(3, topK);
+                    ps.setInt(3, effectiveTopK);
                 },
                 (rs, rowNum) -> ChunkResult.builder()
                         .chunkId(rs.getLong("id"))
@@ -42,11 +43,11 @@ public class FullTextSearchService {
                         .sectionType(rs.getString("section_type"))
                         .fileName(rs.getString("file_name"))
                         .ftsScore(rs.getDouble("score"))
-                        .ftsRank(rowNum + 1)
+                        .ftsRank(Integer.valueOf(rowNum + 1))
                         .build()
         );
 
-        log.debug("Full-text search: query={}, topK={}, found={}", query, topK, results.size());
+        log.debug("Full-text search: query={}, topK={}, found={}", query, effectiveTopK, results.size());
         return results;
     }
 }

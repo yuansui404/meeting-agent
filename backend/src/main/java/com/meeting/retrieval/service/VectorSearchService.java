@@ -11,9 +11,9 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
 
 @Slf4j
 @Service
@@ -33,7 +33,7 @@ public class VectorSearchService {
         List<VectorSearchHit> hits = chunkRepository.vectorSearch(vectorStr, topK);
 
         List<ChunkResult> results = new ArrayList<>();
-        Map<Long, DocumentEntity> docCache = new ConcurrentHashMap<>();
+        Map<Long, DocumentEntity> docCache = new HashMap<>();
 
         for (int i = 0; i < hits.size(); i++) {
             VectorSearchHit hit = hits.get(i);
@@ -50,7 +50,7 @@ public class VectorSearchService {
                     .sectionType(hit.sectionType())
                     .fileName(doc != null ? doc.getTitle() : "")
                     .vectorScore(hit.similarityScore())
-                    .vectorRank(i + 1)
+                    .vectorRank(Integer.valueOf(i + 1))
                     .build());
         }
 

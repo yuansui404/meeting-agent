@@ -2,12 +2,14 @@ package com.meeting.retrieval.algorithm;
 
 import com.meeting.retrieval.model.ChunkResult;
 import com.meeting.retrieval.model.EvidenceLevel;
+import org.springframework.stereotype.Component;
 
 import java.util.List;
 
+@Component
 public class EvidenceEvaluator {
 
-    public static EvidenceLevel evaluate(List<ChunkResult> topChunks, int vectorCount, int ftsCount) {
+    public EvidenceLevel evaluate(List<ChunkResult> topChunks, int vectorCount, int ftsCount) {
         boolean hasVector = vectorCount > 0;
         boolean hasFts = ftsCount > 0;
         long distinctDocs = topChunks.stream()

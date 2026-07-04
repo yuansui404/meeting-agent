@@ -19,6 +19,6 @@ public class ChunkResult {
     private double ftsScore;
     private double rrfScore;
     private double finalScore;
-    private int vectorRank;
-    private int ftsRank;
+    private Integer vectorRank;
+    private Integer ftsRank;
 }

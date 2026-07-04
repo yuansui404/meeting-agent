@@ -1,17 +1,21 @@
 package com.meeting.retrieval.service;
 
+import com.meeting.common.TtlMdcAdapter;
 import com.meeting.config.RagProperties;
 import com.meeting.document.model.entity.DocumentChunkEntity;
 import com.meeting.document.model.entity.DocumentEntity;
 import com.meeting.document.repository.DocumentChunkRepository;
 import com.meeting.document.repository.DocumentRepository;
-import com.meeting.retrieval.algorithm.*;
+import com.meeting.retrieval.algorithm.CitationBuilder;
+import com.meeting.retrieval.algorithm.DocumentDeduplicator;
+import com.meeting.retrieval.algorithm.EvidenceEvaluator;
+import com.meeting.retrieval.algorithm.RrfMerger;
+import com.meeting.retrieval.algorithm.TimeDecayScorer;
 import com.meeting.retrieval.model.ChunkResult;
+import com.meeting.retrieval.model.Citation;
 import com.meeting.retrieval.model.EvidenceLevel;
-import com.meeting.common.TtlMdcAdapter;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.slf4j.MDC;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.core.task.TaskExecutor;
 import org.springframework.stereotype.Service;
@@ -30,6 +34,11 @@ public class HybridSearchService {
     private final FullTextSearchService fullTextSearchService;
     private final QueryPlanningService queryPlanningService;
     private final Reranker reranker;
+    private final RrfMerger rrfMerger;
+    private final TimeDecayScorer timeDecayScorer;
+    private final DocumentDeduplicator documentDeduplicator;
+    private final EvidenceEvaluator evidenceEvaluator;
+    private final CitationBuilder citationBuilder;
     private final RagProperties ragProperties;
     private final DocumentChunkRepository chunkRepository;
     private final DocumentRepository documentRepository;
@@ -39,7 +48,7 @@ public class HybridSearchService {
     public record SearchResult(
             List<ChunkResult> chunks,
             String evidenceLevel,
-            List<Map<String, String>> citations,
+            List<Citation> citations,
             String queryUsed,
             boolean retried
     ) {}
@@ -50,74 +59,58 @@ public class HybridSearchService {
             QueryPlanningService.QueryPlan plan = queryPlanningService.plan(query);
             log.info("Query plan: strategy={}, rewritten={}", plan.strategy(), plan.rewrittenQuery());
 
-            String actualQuery = plan.rewrittenQuery();
-            String searchQuery = actualQuery;
-            int vectorTopK = ragProperties.getRetrieval().getVectorTopk();
-            int ftsTopK = ragProperties.getRetrieval().getFtsTopk();
             boolean retried = false;
+            String actualQuery = plan.rewrittenQuery();
 
-            CompletableFuture<List<ChunkResult>> vectorFuture = CompletableFuture.supplyAsync(() ->
-                    vectorSearchService.search(searchQuery, vectorTopK), taskExecutor);
-            CompletableFuture<List<ChunkResult>> ftsFuture = CompletableFuture.supplyAsync(() ->
-                    fullTextSearchService.search(searchQuery, ftsTopK), taskExecutor);
-            List<ChunkResult> vectorResults = vectorFuture.join();
-            List<ChunkResult> ftsResults = ftsFuture.join();
+            // Step 1: Execute searches (supports DECOMPOSE with multiple sub-queries)
+            List<ChunkResult> vectorResults = new ArrayList<>();
+            List<ChunkResult> ftsResults = new ArrayList<>();
+            for (String subQuery : plan.subQueries()) {
+                CompletableFuture<List<ChunkResult>> vectorF = CompletableFuture.supplyAsync(() ->
+                        vectorSearchService.search(subQuery, ragProperties.getRetrieval().getVectorTopk()), taskExecutor);
+                CompletableFuture<List<ChunkResult>> ftsF = CompletableFuture.supplyAsync(() ->
+                        fullTextSearchService.search(subQuery, ragProperties.getRetrieval().getFtsTopk()), taskExecutor);
+                vectorResults.addAll(vectorF.join());
+                ftsResults.addAll(ftsF.join());
+            }
 
-            List<ChunkResult> merged = RrfMerger.merge(vectorResults, ftsResults, ragProperties.getRetrieval().getRrfK());
+            // Step 2: RRF merge
+            List<ChunkResult> merged = rrfMerger.merge(vectorResults, ftsResults, ragProperties.getRetrieval().getRrfK());
 
+            // Step 3: Rerank
             if (ragProperties.getRetrieval().isRerankEnabled()) {
                 merged = reranker.reRank(actualQuery, merged, ragProperties.getRetrieval().getRerankTopk());
             }
 
-            var timeDecayConfig = ragProperties.getTimeDecay();
-            for (ChunkResult r : merged) {
-                double baseScore = (r.getFtsScore() > 0)
-                        ? r.getRrfScore()
-                        : r.getVectorScore();
+            // Step 4: Time decay (batch fetch documents to avoid N+1)
+            merged = applyTimeDecay(merged);
 
-                if (ragProperties.getTimeDecay().isEnabled() && r.getDocumentId() != null) {
-                    try {
-                        DocumentEntity doc = documentRepository.findById(r.getDocumentId()).orElse(null);
-                        LocalDate meetingDate = doc != null ? doc.getMeetingDate() : null;
-                        r.setFinalScore(TimeDecayScorer.apply(baseScore, meetingDate,
-                                new TimeDecayScorer.TimeDecayConfig(
-                                        true, timeDecayConfig.getRecentDays(), timeDecayConfig.getRecentWeight(),
-                                        timeDecayConfig.getNormalWeight(), timeDecayConfig.getOldWeight(), timeDecayConfig.getArchiveWeight()
-                                )));
-                    } catch (Exception e) {
-                        log.warn("Time decay calculation failed for chunk {}", r.getChunkId(), e);
-                        r.setFinalScore(baseScore);
-                    }
-                } else {
-                    r.setFinalScore(baseScore);
-                }
-            }
+            // Step 5: Deduplicate
+            merged = documentDeduplicator.deduplicate(merged, 5);
 
-            merged = MmrDeduplicator.deduplicate(merged, 5);
-
+            // Step 6: Retry if low confidence
             double topScore = merged.isEmpty() ? 0.0 : merged.get(0).getFinalScore();
             if (topScore < ragProperties.getEvidence().getThreshold()) {
-                log.info("Low confidence, triggering retry");
+                log.info("Low confidence (topScore={}), triggering retry", topScore);
                 String retryQuery = generateRetryQuery(actualQuery);
-                CompletableFuture<List<ChunkResult>> retryVectorF = CompletableFuture.supplyAsync(() ->
-                        vectorSearchService.search(retryQuery, ragProperties.getRetrieval().getVectorTopk()), taskExecutor);
-                CompletableFuture<List<ChunkResult>> retryFtsF = CompletableFuture.supplyAsync(() ->
-                        fullTextSearchService.search(retryQuery, ragProperties.getRetrieval().getFtsTopk()), taskExecutor);
-                List<ChunkResult> retryVector = retryVectorF.join();
-                List<ChunkResult> retryFts = retryFtsF.join();
-                List<ChunkResult> retryMerged = RrfMerger.merge(retryVector, retryFts, ragProperties.getRetrieval().getRrfK());
-                double retryTopScore = retryMerged.isEmpty() ? 0.0 : retryMerged.get(0).getRrfScore();
+                List<ChunkResult> retryMerged = executeSearch(retryQuery);
+                retryMerged = applyTimeDecay(retryMerged);
+                retryMerged = documentDeduplicator.deduplicate(retryMerged, 5);
+
+                double retryTopScore = retryMerged.isEmpty() ? 0.0 : retryMerged.get(0).getFinalScore();
                 if (retryTopScore > topScore) {
                     merged = retryMerged;
+                    actualQuery = retryQuery;
+                    retried = true;
                 }
-                retried = true;
-                actualQuery = retryQuery;
             }
 
+            // Step 7: Expand neighbors
             merged = expandNeighbors(merged);
 
-            EvidenceLevel evidenceLevel = EvidenceEvaluator.evaluate(merged, vectorResults.size(), ftsResults.size());
-            List<Map<String, String>> citations = CitationBuilder.build(merged);
+            // Step 8: Evaluate evidence
+            EvidenceLevel evidenceLevel = evidenceEvaluator.evaluate(merged, vectorResults.size(), ftsResults.size());
+            List<Citation> citations = citationBuilder.build(merged);
 
             log.info("Hybrid search complete: query={}, chunks={}, evidence={}",
                     actualQuery, merged.size(), evidenceLevel);
@@ -128,6 +121,46 @@ public class HybridSearchService {
         }
     }
 
+    private List<ChunkResult> executeSearch(String query) {
+        CompletableFuture<List<ChunkResult>> vectorF = CompletableFuture.supplyAsync(() ->
+                vectorSearchService.search(query, ragProperties.getRetrieval().getVectorTopk()), taskExecutor);
+        CompletableFuture<List<ChunkResult>> ftsF = CompletableFuture.supplyAsync(() ->
+                fullTextSearchService.search(query, ragProperties.getRetrieval().getFtsTopk()), taskExecutor);
+        return rrfMerger.merge(vectorF.join(), ftsF.join(), ragProperties.getRetrieval().getRrfK());
+    }
+
+    private List<ChunkResult> applyTimeDecay(List<ChunkResult> chunks) {
+        if (!ragProperties.getTimeDecay().isEnabled() || chunks.isEmpty()) {
+            for (ChunkResult r : chunks) {
+                r.setFinalScore(r.getFtsScore() > 0 ? r.getRrfScore() : r.getVectorScore());
+            }
+            return chunks;
+        }
+
+        // Batch fetch all documents to avoid N+1 queries
+        Set<Long> docIds = chunks.stream()
+                .map(ChunkResult::getDocumentId)
+                .filter(Objects::nonNull)
+                .collect(Collectors.toSet());
+        Map<Long, DocumentEntity> docMap = new HashMap<>();
+        if (!docIds.isEmpty()) {
+            documentRepository.findAllById(docIds).forEach(doc -> docMap.put(doc.getId(), doc));
+        }
+
+        var config = ragProperties.getTimeDecay();
+        for (ChunkResult r : chunks) {
+            double baseScore = r.getFtsScore() > 0 ? r.getRrfScore() : r.getVectorScore();
+            DocumentEntity doc = docMap.get(r.getDocumentId());
+            LocalDate meetingDate = doc != null ? doc.getMeetingDate() : null;
+            r.setFinalScore(timeDecayScorer.apply(baseScore, meetingDate,
+                    new TimeDecayScorer.TimeDecayConfig(
+                            true, config.getRecentDays(), config.getRecentWeight(),
+                            config.getNormalWeight(), config.getOldWeight(), config.getArchiveWeight()
+                    )));
+        }
+        return chunks;
+    }
+
     String generateRetryQuery(String originalQuery) {
         return originalQuery + " 内容 详情 决定";
     }
@@ -136,7 +169,6 @@ public class HybridSearchService {
         List<ChunkResult> expanded = new ArrayList<>();
         Set<Long> seenIds = new HashSet<>();
 
-        // Batch fetch all document chunks to avoid N+1 queries
         Map<Long, List<DocumentChunkEntity>> docChunks = new HashMap<>();
         Set<Long> docIds = results.stream()
                 .map(ChunkResult::getDocumentId)

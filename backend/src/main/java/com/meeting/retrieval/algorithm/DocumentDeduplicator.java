@@ -1,12 +1,14 @@
 package com.meeting.retrieval.algorithm;
 
 import com.meeting.retrieval.model.ChunkResult;
+import org.springframework.stereotype.Component;
 
 import java.util.*;
 
-public class MmrDeduplicator {
+@Component
+public class DocumentDeduplicator {
 
-    public static List<ChunkResult> deduplicate(List<ChunkResult> results, int topN) {
+    public List<ChunkResult> deduplicate(List<ChunkResult> results, int topN) {
         if (results.size() <= topN) return results;
 
         List<ChunkResult> selected = new ArrayList<>();
