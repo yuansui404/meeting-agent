@@ -13,7 +13,9 @@ import java.util.Map;
 @Getter
 @Setter
 @Entity
-@Table(name = "dialogue_messages")
+@Table(name = "dialogue_messages", indexes = {
+    @Index(name = "idx_dm_session_id", columnList = "dialogue_id")
+})
 public class DialogueMessageEntity {
 
     @Id

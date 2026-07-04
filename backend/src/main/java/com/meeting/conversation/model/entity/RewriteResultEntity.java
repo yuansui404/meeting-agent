@@ -11,7 +11,9 @@ import java.util.List;
 @Getter
 @Setter
 @Entity
-@Table(name = "rewrite_result")
+@Table(name = "rewrite_result", indexes = {
+    @Index(name = "idx_rr_session_id", columnList = "dialogue_id")
+})
 public class RewriteResultEntity {
 
     @Id

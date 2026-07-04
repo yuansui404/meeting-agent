@@ -9,7 +9,9 @@ import java.time.LocalDateTime;
 @Getter
 @Setter
 @Entity
-@Table(name = "rewrite_feedback")
+@Table(name = "rewrite_feedback", indexes = {
+    @Index(name = "idx_rf_rewrite_result_id", columnList = "rewrite_result_id")
+})
 public class RewriteFeedbackEntity {
 
     @Id
