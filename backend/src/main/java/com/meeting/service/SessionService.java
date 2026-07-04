@@ -34,12 +34,10 @@ public class SessionService {
         SessionEntity entity = new SessionEntity();
         entity.setTitle(title != null ? title : "新对话");
         entity.setStatus("active");
-        entity.setImported(false);
         entity.setMessageCount(0);
         entity.setCreatedAt(LocalDateTime.now());
         entity.setUpdatedAt(LocalDateTime.now());
         entity = sessionRepository.save(entity);
-        // sessionId relies on id, set it after save
         entity.setSessionId("dialogue-" + entity.getId());
         return sessionRepository.save(entity);
     }
@@ -56,7 +54,7 @@ public class SessionService {
         dialogue.put("status", entity.getStatus());
         dialogue.put("updatedAt", entity.getUpdatedAt() != null ? entity.getUpdatedAt().toString() : null);
         dialogue.put("meetingId", null);
-        dialogue.put("imported", entity.getImported() != null && entity.getImported());
+        dialogue.put("imported", entity.isImported());
 
         Map<String, Object> result = new HashMap<>();
         result.put("dialogue", dialogue);
@@ -104,7 +102,7 @@ public class SessionService {
                     m.put("status", e.getStatus());
                     m.put("updatedAt", e.getUpdatedAt() != null ? e.getUpdatedAt().toString() : null);
                     m.put("meetingId", null);
-                    m.put("imported", e.getImported() != null && e.getImported());
+                    m.put("imported", e.isImported());
                     return m;
                 })
                 .toList();

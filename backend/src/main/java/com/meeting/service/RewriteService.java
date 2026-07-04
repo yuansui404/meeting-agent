@@ -2,7 +2,7 @@ package com.meeting.service;
 
 import com.meeting.config.DeepSeekProperties;
 import com.meeting.config.FileProperties;
-import com.meeting.conversation.model.entity.RewriteResult;
+import com.meeting.conversation.model.entity.RewriteResultEntity;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import com.meeting.conversation.repository.RewriteResultRepository;
@@ -84,7 +84,7 @@ public class RewriteService {
 
                 // Save (no file IDs, no DOCX)
                 if (fullResponse.length() > 0) {
-                    RewriteResult result = saveRewriteResult(dialogueId, List.of(), List.of(), fullResponse.toString());
+                    RewriteResultEntity result = saveRewriteResult(dialogueId, List.of(), List.of(), fullResponse.toString());
                     String meta = "{\"type\":\"rewrite\",\"rewriteResultId\":" + result.getId() + "}";
                     sessionService.addMessage(dialogueId, "assistant", fullResponse.toString(), "text", meta);
                 }
@@ -170,12 +170,12 @@ public class RewriteService {
         return fullResponse.toString();
     }
 
-    private RewriteResult saveRewriteResult(Long dialogueId, List<Long> sourceFileIds,
+    private RewriteResultEntity saveRewriteResult(Long dialogueId, List<Long> sourceFileIds,
                                              List<Long> referenceIds, String content) {
-        List<RewriteResult> previous = rewriteResultRepository.findByDialogueIdOrderByVersionDesc(dialogueId);
+        List<RewriteResultEntity> previous = rewriteResultRepository.findByDialogueIdOrderByVersionDesc(dialogueId);
         int nextVersion = previous.isEmpty() ? 1 : previous.get(0).getVersion() + 1;
 
-        RewriteResult result = new RewriteResult();
+        RewriteResultEntity result = new RewriteResultEntity();
         result.setDialogueId(dialogueId);
         result.setSourceFileIds(toJsonIdList(sourceFileIds));
         result.setReferenceIds(referenceIds != null && !referenceIds.isEmpty() ? toJsonIdList(referenceIds) : null);
@@ -190,11 +190,11 @@ public class RewriteService {
                 .collect(Collectors.joining(",", "[", "]"));
     }
 
-    public List<RewriteResult> getRewriteHistory(Long dialogueId) {
+    public List<RewriteResultEntity> getRewriteHistory(Long dialogueId) {
         return rewriteResultRepository.findByDialogueIdOrderByVersionDesc(dialogueId);
     }
 
-    public Optional<RewriteResult> getRewriteResult(Long resultId) {
+    public Optional<RewriteResultEntity> getRewriteResult(Long resultId) {
         return rewriteResultRepository.findById(resultId);
     }
 

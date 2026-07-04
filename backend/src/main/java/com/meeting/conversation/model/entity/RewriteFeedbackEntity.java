@@ -9,7 +9,7 @@ import java.time.LocalDateTime;
 @Setter
 @Entity
 @Table(name = "rewrite_feedback")
-public class RewriteFeedback {
+public class RewriteFeedbackEntity {
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)

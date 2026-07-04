@@ -1,7 +1,7 @@
 package com.meeting.service;
 
-import com.meeting.conversation.model.entity.RewriteFeedback;
-import com.meeting.conversation.model.entity.RewriteResult;
+import com.meeting.conversation.model.entity.RewriteFeedbackEntity;
+import com.meeting.conversation.model.entity.RewriteResultEntity;
 import com.meeting.conversation.repository.RewriteFeedbackRepository;
 import com.meeting.conversation.repository.RewriteResultRepository;
 import lombok.RequiredArgsConstructor;
@@ -31,14 +31,14 @@ public class RewriteFeedbackService {
         }
 
         // 1. Save feedback
-        RewriteFeedback feedback = new RewriteFeedback();
+        RewriteFeedbackEntity feedback = new RewriteFeedbackEntity();
         feedback.setRewriteResultId(rewriteResultId);
         feedback.setParagraphIndex(paragraphIndex);
         feedback.setAction(action);
         feedbackRepository.save(feedback);
 
         // 2. Look up referenced source documents
-        RewriteResult result = rewriteResultRepository.findById(rewriteResultId)
+        RewriteResultEntity result = rewriteResultRepository.findById(rewriteResultId)
                 .orElseThrow(() -> new IllegalArgumentException("RewriteResult not found: " + rewriteResultId));
 
         String referenceIds = result.getReferenceIds();
