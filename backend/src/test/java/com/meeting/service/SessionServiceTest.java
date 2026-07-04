@@ -10,6 +10,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Captor;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
@@ -34,11 +35,13 @@ class SessionServiceTest {
     @Captor
     private ArgumentCaptor<SessionEntity> entityCaptor;
 
+    private final ObjectMapper objectMapper = new ObjectMapper();
+
     private SessionService sessionService;
 
     @BeforeEach
     void setUp() {
-        sessionService = new SessionService(sessionRepository, dialogueMessageRepository);
+        sessionService = new SessionService(sessionRepository, dialogueMessageRepository, objectMapper);
     }
 
     @Test
@@ -82,13 +85,13 @@ class SessionServiceTest {
 
         com.meeting.conversation.model.entity.DialogueMessageEntity msg = new com.meeting.conversation.model.entity.DialogueMessageEntity();
         msg.setId(1L);
-        msg.setDialogueId(1L);
+        entity.addMessage(msg);
         msg.setRole("user");
         msg.setContent("hello");
         msg.setMessageType("text");
 
         when(sessionRepository.findById(1L)).thenReturn(Optional.of(entity));
-        when(dialogueMessageRepository.findByDialogueIdOrderById(1L)).thenReturn(List.of(msg));
+        when(dialogueMessageRepository.findBySessionOrderById(entity)).thenReturn(List.of(msg));
 
         Map<String, Object> result = sessionService.getSessionWithMessages(1L);
 
@@ -169,9 +172,8 @@ class SessionServiceTest {
     }
 
     @Test
-    void deleteSession_ShouldDeleteMessagesAndSession() {
+    void deleteSession_ShouldDeleteSession() {
         sessionService.deleteSession(1L);
-        verify(dialogueMessageRepository).deleteByDialogueId(1L);
         verify(sessionRepository).deleteById(1L);
     }
 
@@ -207,7 +209,6 @@ class SessionServiceTest {
 
         when(sessionRepository.findById(1L)).thenReturn(Optional.of(entity));
         when(sessionRepository.save(any())).thenAnswer(i -> i.getArgument(0));
-        when(dialogueMessageRepository.save(any())).thenAnswer(i -> i.getArgument(0));
 
         sessionService.addMessage(1L, "user", "new message", "text", null);
 
@@ -215,7 +216,6 @@ class SessionServiceTest {
         SessionEntity saved = entityCaptor.getValue();
         assertNotNull(saved.getStateJson());
         assertTrue(saved.getStateJson().contains("new message"));
-        verify(dialogueMessageRepository).save(any());
     }
 
     @Test
@@ -227,7 +227,6 @@ class SessionServiceTest {
 
         when(sessionRepository.findById(1L)).thenReturn(Optional.of(entity));
         when(sessionRepository.save(any())).thenAnswer(i -> i.getArgument(0));
-        when(dialogueMessageRepository.save(any())).thenAnswer(i -> i.getArgument(0));
 
         sessionService.addMessage(1L, "assistant", "reply", "text", null);
 
@@ -235,7 +234,6 @@ class SessionServiceTest {
         SessionEntity saved = entityCaptor.getValue();
         assertNotNull(saved.getStateJson());
         assertTrue(saved.getStateJson().contains("reply"));
-        verify(dialogueMessageRepository).save(any());
     }
 
     @Test
@@ -255,7 +253,7 @@ class SessionServiceTest {
         when(sessionRepository.save(any())).thenAnswer(i -> i.getArgument(0));
 
         sessionService.importSession(1L);
-        assertTrue(entity.getImported());
+        assertTrue(entity.isImported());
     }
 
     @Test
