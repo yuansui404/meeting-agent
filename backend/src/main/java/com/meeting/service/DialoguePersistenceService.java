@@ -1,7 +1,5 @@
 package com.meeting.service;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.meeting.conversation.model.entity.DialogueMessageEntity;
 import com.meeting.conversation.model.entity.SessionEntity;
 import com.meeting.conversation.repository.SessionRepository;
@@ -24,7 +22,6 @@ import java.util.Map;
 public class DialoguePersistenceService {
 
     private final SessionRepository sessionRepository;
-    private final ObjectMapper objectMapper;
     private final TransactionTemplate txTemplate;
 
     /**
@@ -34,35 +31,28 @@ public class DialoguePersistenceService {
                         List<Map<String, Object>> messageFiles) {
         try {
             txTemplate.executeWithoutResult(status -> {
-                try {
-                    SessionEntity session = sessionRepository.findById(dialogueId)
-                            .orElseThrow(() -> new IllegalArgumentException("Session not found: " + dialogueId));
+                SessionEntity session = sessionRepository.findById(dialogueId)
+                        .orElseThrow(() -> new IllegalArgumentException("Session not found: " + dialogueId));
 
-                    String filesJson = messageFiles != null && !messageFiles.isEmpty()
-                            ? objectMapper.writeValueAsString(messageFiles) : null;
+                DialogueMessageEntity dmUser = new DialogueMessageEntity();
+                dmUser.setSession(session);
+                dmUser.setRole("user");
+                dmUser.setContent(userMessage);
+                dmUser.setMessageType("text");
+                dmUser.setFiles(messageFiles);
+                session.addMessage(dmUser);
 
-                    DialogueMessageEntity dmUser = new DialogueMessageEntity();
-                    dmUser.setSession(session);
-                    dmUser.setRole("user");
-                    dmUser.setContent(userMessage);
-                    dmUser.setMessageType("text");
-                    dmUser.setFiles(filesJson);
-                    session.addMessage(dmUser);
-
-                    if (!assistantResponse.isEmpty()) {
-                        DialogueMessageEntity asstMsg = new DialogueMessageEntity();
-                        asstMsg.setSession(session);
-                        asstMsg.setRole("assistant");
-                        asstMsg.setContent(assistantResponse);
-                        asstMsg.setMessageType("text");
-                        session.addMessage(asstMsg);
-                    }
-
-                    session.setUpdatedAt(LocalDateTime.now());
-                    sessionRepository.save(session);
-                } catch (JsonProcessingException e) {
-                    throw new RuntimeException(e);
+                if (!assistantResponse.isEmpty()) {
+                    DialogueMessageEntity asstMsg = new DialogueMessageEntity();
+                    asstMsg.setSession(session);
+                    asstMsg.setRole("assistant");
+                    asstMsg.setContent(assistantResponse);
+                    asstMsg.setMessageType("text");
+                    session.addMessage(asstMsg);
                 }
+
+                session.setUpdatedAt(LocalDateTime.now());
+                sessionRepository.save(session);
             });
         } catch (Exception e) {
             log.warn("Failed to persist dialogue_messages for dialogue {}: {}",

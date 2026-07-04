@@ -1,7 +1,5 @@
 package com.meeting.service;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.meeting.conversation.model.entity.DialogueMessageEntity;
 import com.meeting.conversation.model.entity.SessionEntity;
 import com.meeting.conversation.repository.DialogueMessageRepository;
@@ -23,8 +21,6 @@ import java.util.*;
 @Service
 @RequiredArgsConstructor
 public class SessionService {
-
-    private static final ObjectMapper objectMapper = new ObjectMapper();
 
     private final SessionRepository sessionRepository;
     private final DialogueMessageRepository dialogueMessageRepository;
@@ -62,9 +58,6 @@ public class SessionService {
         return result;
     }
 
-    /**
-     * Build messages list from dialogue_messages table.
-     */
     private List<Map<String, Object>> queryMessages(SessionEntity session) {
         List<DialogueMessageEntity> entities = dialogueMessageRepository.findBySessionOrderById(session);
         List<Map<String, Object>> messages = new ArrayList<>();
@@ -77,16 +70,8 @@ public class SessionService {
             m.put("messageType", msg.getMessageType() != null ? msg.getMessageType() : "text");
             m.put("timestamp", msg.getCreatedAt() != null ? msg.getCreatedAt().toString() : null);
             m.put("metadata", msg.getMetadata());
-            // Parse files JSON into list
-            if (msg.getFiles() != null && !msg.getFiles().isBlank() && !"{}".equals(msg.getFiles())) {
-                try {
-                    List<?> files = objectMapper.readValue(msg.getFiles(), List.class);
-                    if (!files.isEmpty()) {
-                        m.put("files", files);
-                    }
-                } catch (JsonProcessingException e) {
-                    log.warn("Failed to parse files JSON for message {}: {}", msg.getId(), e.getMessage());
-                }
+            if (msg.getFiles() != null && !msg.getFiles().isEmpty()) {
+                m.put("files", msg.getFiles());
             }
             messages.add(m);
         }
@@ -137,9 +122,6 @@ public class SessionService {
         return sessionRepository.save(entity);
     }
 
-    /**
-     * Add a message to both state_json (agent context) and dialogue_messages (rendering).
-     */
     @Transactional
     public void addMessage(Long sessionId, String role, String content, String messageType, String metadata) {
         SessionEntity entity = sessionRepository.findById(sessionId)
@@ -151,7 +133,13 @@ public class SessionService {
         dmsg.setRole(role);
         dmsg.setContent(content);
         dmsg.setMessageType(messageType);
-        dmsg.setMetadata(metadata);
+        if (metadata != null && !metadata.isBlank()) {
+            try {
+                dmsg.setMetadata(new com.fasterxml.jackson.databind.ObjectMapper().readValue(metadata, new com.fasterxml.jackson.core.type.TypeReference<Map<String, Object>>() {}));
+            } catch (Exception e) {
+                log.warn("Failed to parse metadata JSON for session {}: {}", sessionId, e.getMessage());
+            }
+        }
         entity.addMessage(dmsg);
     }
 
@@ -177,9 +165,6 @@ public class SessionService {
         return new io.agentscope.core.message.AssistantMessage(content);
     }
 
-    /**
-     * Extract all files from dialogue_messages table.
-     */
     public List<Map<String, Object>> extractFilesFromState(Long sessionId) {
         SessionEntity session = sessionRepository.findById(sessionId)
                 .orElseThrow(() -> new IllegalArgumentException("Session not found: " + sessionId));
@@ -189,14 +174,13 @@ public class SessionService {
         Set<String> seenIds = new HashSet<>();
 
         for (DialogueMessageEntity msg : msgs) {
-            List<Map<String, Object>> fileList = parseFilesJson(msg.getFiles());
+            List<Map<String, Object>> fileList = msg.getFiles();
             if (fileList == null) continue;
             for (Map<String, Object> fm : fileList) {
                 String fileId = (String) fm.get("fileId");
                 if (fileId == null || seenIds.contains(fileId)) continue;
                 seenIds.add(fileId);
 
-                // Check for sidecar transcription file
                 String filePath = (String) fm.get("filePath");
                 if (filePath != null) {
                     Path transcriptionPath = Path.of(filePath + ".transcription.md");
@@ -211,16 +195,13 @@ public class SessionService {
         return files;
     }
 
-    /**
-     * Find a file path in dialogue_messages by fileId.
-     */
     public String findFilePathInState(Long sessionId, String fileId) {
         SessionEntity session = sessionRepository.findById(sessionId)
                 .orElseThrow(() -> new IllegalArgumentException("Session not found: " + sessionId));
         List<DialogueMessageEntity> msgs = dialogueMessageRepository
                 .findBySessionAndRoleAndFilesIsNotNull(session, "user");
         for (DialogueMessageEntity msg : msgs) {
-            List<Map<String, Object>> fileList = parseFilesJson(msg.getFiles());
+            List<Map<String, Object>> fileList = msg.getFiles();
             if (fileList == null) continue;
             for (Map<String, Object> fm : fileList) {
                 if (fileId.equals(fm.get("fileId"))) {
@@ -230,16 +211,5 @@ public class SessionService {
             }
         }
         return null;
-    }
-
-    @SuppressWarnings("unchecked")
-    private List<Map<String, Object>> parseFilesJson(String filesJson) {
-        if (filesJson == null || filesJson.isBlank()) return null;
-        try {
-            return objectMapper.readValue(filesJson, List.class);
-        } catch (JsonProcessingException e) {
-            log.warn("Failed to parse files JSON: {}", e.getMessage());
-            return null;
-        }
     }
 }
