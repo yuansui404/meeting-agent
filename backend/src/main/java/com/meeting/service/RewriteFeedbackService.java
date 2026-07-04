@@ -1,5 +1,6 @@
 package com.meeting.service;
 
+import com.meeting.common.BusinessException;
 import com.meeting.conversation.model.entity.RewriteFeedbackEntity;
 import com.meeting.conversation.model.entity.RewriteResultEntity;
 import com.meeting.conversation.repository.RewriteFeedbackRepository;
@@ -27,12 +28,12 @@ public class RewriteFeedbackService {
     @Transactional
     public void submitFeedback(Long rewriteResultId, Integer paragraphIndex, String action) {
         if (!"like".equals(action) && !"dislike".equals(action)) {
-            throw new IllegalArgumentException("action must be 'like' or 'dislike'");
+            throw new BusinessException("action must be 'like' or 'dislike'");
         }
 
         // 1. Look up referenced source documents
         RewriteResultEntity result = rewriteResultRepository.findById(rewriteResultId)
-                .orElseThrow(() -> new IllegalArgumentException("RewriteResult not found: " + rewriteResultId));
+                .orElseThrow(() -> BusinessException.notFound("RewriteResult not found: " + rewriteResultId));
 
         // 2. Save feedback (linked via relationship)
         RewriteFeedbackEntity feedback = new RewriteFeedbackEntity();

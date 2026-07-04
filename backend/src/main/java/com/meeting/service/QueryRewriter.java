@@ -73,7 +73,7 @@ public class QueryRewriter {
      */
     private List<String> fallbackSplit(String query) {
         String cleaned = query
-                .replaceAll("(?:参加过哪些|有哪些|是什么|有哪些|帮我|查一下|查查|找一下|搜索)", "")
+                .replaceAll("(?:参加过哪些|有哪些|是什么|帮我|查一下|查查|找一下|搜索)", "")
                 .trim();
         if (cleaned.isBlank()) cleaned = query;
 

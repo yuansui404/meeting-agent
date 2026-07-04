@@ -34,18 +34,20 @@ public class MemoryStorageService {
         try {
             return Files.readString(memoryFile, StandardCharsets.UTF_8);
         } catch (IOException e) {
+            log.error("读取记忆文件失败: {}", memoryFile, e);
             throw BusinessException.processingFailed("读取记忆文件失败", e);
         }
     }
 
-    public void write(String content) {
+    public synchronized void write(String content) {
         if (content != null && content.length() > MAX_CONTENT_LENGTH) {
-            throw new BusinessException("内容过长，最大100KB");
+            throw new BusinessException("内容过长，最大10万字符");
         }
         try {
             Files.createDirectories(memoryFile.getParent());
             Files.writeString(memoryFile, content != null ? content : "", StandardCharsets.UTF_8);
         } catch (IOException e) {
+            log.error("保存记忆文件失败: {}", memoryFile, e);
             throw BusinessException.processingFailed("保存记忆文件失败", e);
         }
     }

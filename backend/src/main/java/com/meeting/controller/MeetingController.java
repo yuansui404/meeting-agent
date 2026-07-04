@@ -4,7 +4,7 @@ import com.meeting.common.ApiResponse;
 import com.meeting.controller.dto.request.RewriteFeedbackRequest;
 import com.meeting.controller.dto.response.HealthVO;
 import com.meeting.controller.dto.response.MeetingDetailVO;
-import com.meeting.meeting.model.entity.MeetingMinutes;
+import com.meeting.controller.dto.response.MeetingListVO;
 import com.meeting.service.MeetingService;
 import com.meeting.service.RewriteFeedbackService;
 import com.meeting.service.SessionService;
@@ -30,7 +30,7 @@ public class MeetingController {
     }
 
     @GetMapping("/meetings")
-    public ApiResponse<Page<MeetingMinutes>> listMeetings(
+    public ApiResponse<Page<MeetingListVO>> listMeetings(
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "20") int size) {
         Pageable pageable = PageRequest.of(page, size);

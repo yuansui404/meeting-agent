@@ -224,44 +224,53 @@ public class VectorizationService {
             meeting.setParticipants(participantsStr);
             meetingRepository.save(meeting);
 
-            // Read existing 与会人.md
+            // Read-modify-write 与会人.md with file lock to prevent concurrent corruption
             Path participantsFile = Path.of(fileProps.uploadDir(), "profile", "与会人.md");
-            Set<String> existingNames = new LinkedHashSet<>();
-            if (Files.exists(participantsFile)) {
-                List<String> lines = Files.readAllLines(participantsFile, StandardCharsets.UTF_8);
-                for (String line : lines) {
-                    String trimmed = line.trim();
-                    if (trimmed.startsWith("- ")) {
-                        existingNames.add(trimmed.substring(2).trim());
+            Path lockFile = Path.of(fileProps.uploadDir(), "profile", ".participants.lock");
+            Files.createDirectories(participantsFile.getParent());
+
+            int addedCount;
+            int totalCount;
+            try (java.io.RandomAccessFile raf = new java.io.RandomAccessFile(lockFile.toFile(), "rw");
+                 java.nio.channels.FileChannel lockChannel = raf.getChannel();
+                 java.nio.channels.FileLock ignored = lockChannel.lock()) {
+
+                Set<String> existingNames = new LinkedHashSet<>();
+                if (Files.exists(participantsFile)) {
+                    List<String> lines = Files.readAllLines(participantsFile, StandardCharsets.UTF_8);
+                    for (String line : lines) {
+                        String trimmed = line.trim();
+                        if (trimmed.startsWith("- ")) {
+                            existingNames.add(trimmed.substring(2).trim());
+                        }
                     }
                 }
-            }
 
-            // Merge new names
-            int addedCount = 0;
-            for (String name : newNameSet) {
-                if (!existingNames.contains(name)) {
-                    existingNames.add(name);
-                    addedCount++;
+                addedCount = 0;
+                for (String name : newNameSet) {
+                    if (!existingNames.contains(name)) {
+                        existingNames.add(name);
+                        addedCount++;
+                    }
                 }
-            }
-            if (addedCount == 0) {
-                log.info("collectParticipants: no new names to add for meeting {}", meeting.getId());
-                return;
+                if (addedCount == 0) {
+                    log.info("collectParticipants: no new names to add for meeting {}", meeting.getId());
+                    return;
+                }
+                totalCount = existingNames.size();
+
+                StringBuilder content = new StringBuilder();
+                content.append("# 公司常与会人名单\n\n");
+                content.append("以下名单从历史会议纪要中提取，用于校对时验证人名准确性。\n\n");
+                for (String name : existingNames) {
+                    content.append("- ").append(name).append("\n");
+                }
+
+                Files.writeString(participantsFile, content.toString(), StandardCharsets.UTF_8);
             }
 
-            // Write back
-            StringBuilder content = new StringBuilder();
-            content.append("# 公司常与会人名单\n\n");
-            content.append("以下名单从历史会议纪要中提取，用于校对时验证人名准确性。\n\n");
-            for (String name : existingNames) {
-                content.append("- ").append(name).append("\n");
-            }
-
-            Files.createDirectories(participantsFile.getParent());
-            Files.writeString(participantsFile, content.toString(), StandardCharsets.UTF_8);
             log.info("collectParticipants: updated 与会人.md with {} names (+{} new) from meeting {}",
-                    existingNames.size(), addedCount, meeting.getId());
+                    totalCount, addedCount, meeting.getId());
 
         } catch (Exception e) {
             log.warn("collectParticipants failed for meeting {}: {}", meeting.getId(), e.getMessage());

@@ -101,8 +101,7 @@ public class KnowledgeBaseService {
     }
 
     public List<Map<String, Object>> listStyleExemplars() {
-        return meetingRepository.findAll().stream()
-                .filter(m -> Boolean.TRUE.equals(m.getStyleExemplar()))
+        return meetingRepository.findByStyleExemplarTrue().stream()
                 .map(m -> {
                     Map<String, Object> map = new java.util.HashMap<>();
                     map.put("id", m.getId());

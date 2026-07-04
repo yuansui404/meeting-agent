@@ -1,5 +1,7 @@
 package com.meeting.service;
 
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.meeting.conversation.model.entity.DialogueMessageEntity;
 import com.meeting.conversation.model.entity.SessionEntity;
 import com.meeting.conversation.repository.DialogueMessageRepository;
@@ -24,6 +26,7 @@ public class SessionService {
 
     private final SessionRepository sessionRepository;
     private final DialogueMessageRepository dialogueMessageRepository;
+    private final ObjectMapper objectMapper;
 
     @Transactional
     public SessionEntity createSession(String title, Long meetingId) {
@@ -134,7 +137,7 @@ public class SessionService {
         dmsg.setMessageType(messageType);
         if (metadata != null && !metadata.isBlank()) {
             try {
-                dmsg.setMetadata(new com.fasterxml.jackson.databind.ObjectMapper().readValue(metadata, new com.fasterxml.jackson.core.type.TypeReference<Map<String, Object>>() {}));
+                dmsg.setMetadata(objectMapper.readValue(metadata, new TypeReference<>() {}));
             } catch (Exception e) {
                 log.warn("Failed to parse metadata JSON for session {}: {}", sessionId, e.getMessage());
             }

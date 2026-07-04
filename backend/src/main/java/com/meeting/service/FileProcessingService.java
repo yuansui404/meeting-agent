@@ -19,6 +19,7 @@ import java.util.Map;
 import java.util.HashMap;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.TimeUnit;
 
 @Slf4j
 @Service
@@ -86,6 +87,7 @@ public class FileProcessingService {
      */
     public Path extractAudio(Path videoPath) {
         Path audioPath = getAudioPath(videoPath);
+        Process process = null;
         try {
             ProcessBuilder pb = new ProcessBuilder(
                     "ffmpeg", "-i", videoPath.toString(),
@@ -94,9 +96,15 @@ public class FileProcessingService {
                     "-y", audioPath.toString()
             );
             pb.redirectErrorStream(true);
-            Process process = pb.start();
-            int exitCode = process.waitFor();
+            process = pb.start();
+            boolean finished = process.waitFor(10, TimeUnit.MINUTES);
 
+            if (!finished) {
+                log.error("FFmpeg audio extraction timed out for {}", videoPath);
+                return audioPath;
+            }
+
+            int exitCode = process.exitValue();
             if (exitCode != 0) {
                 String error = new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
                 log.error("FFmpeg audio extraction failed for {}: {}", videoPath, error);
@@ -105,6 +113,10 @@ public class FileProcessingService {
             }
         } catch (Exception e) {
             log.error("Audio extraction failed for {}: {}", videoPath, e.getMessage());
+        } finally {
+            if (process != null) {
+                process.destroyForcibly();
+            }
         }
         return audioPath;
     }

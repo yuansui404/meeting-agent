@@ -66,8 +66,8 @@ public class ChatStreamService {
             final AtomicBoolean subagentActive = new AtomicBoolean(false);
 
             agent.streamEvents(msg, ctx)
+                    .takeUntil(event -> cancelToken.isCancelled())
                     .doOnNext(event -> {
-                        if (cancelToken.isCancelled()) return;
                         if (event instanceof AgentStartEvent) {
                             subagentActive.set(true);
                         } else if (event instanceof AgentEndEvent) {

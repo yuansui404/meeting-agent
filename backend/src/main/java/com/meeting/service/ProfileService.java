@@ -1,5 +1,6 @@
 package com.meeting.service;
 
+import com.meeting.common.BusinessException;
 import com.meeting.config.FileProperties;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -58,15 +59,15 @@ public class ProfileService {
     public String readFile(String filename) {
         Path file = profileDir.resolve(filename);
         if (!file.startsWith(profileDir)) {
-            throw new IllegalArgumentException("Invalid filename: " + filename);
+            throw new BusinessException("Invalid filename: " + filename);
         }
         if (!Files.exists(file)) {
-            throw new IllegalArgumentException("Profile file not found: " + filename);
+            throw BusinessException.notFound("Profile file not found: " + filename);
         }
         try {
             return Files.readString(file, StandardCharsets.UTF_8);
         } catch (IOException e) {
-            throw new RuntimeException("Failed to read profile file: " + filename, e);
+            throw BusinessException.processingFailed("Failed to read profile file: " + filename, e);
         }
     }
 
@@ -74,14 +75,14 @@ public class ProfileService {
     public void saveFile(String filename, String content) {
         Path file = profileDir.resolve(filename);
         if (!file.startsWith(profileDir)) {
-            throw new IllegalArgumentException("Invalid filename: " + filename);
+            throw new BusinessException("Invalid filename: " + filename);
         }
         try {
             Files.createDirectories(profileDir);
             Files.writeString(file, content, StandardCharsets.UTF_8);
             log.info("Saved profile file: {}", filename);
         } catch (IOException e) {
-            throw new RuntimeException("Failed to save profile file: " + filename, e);
+            throw BusinessException.processingFailed("Failed to save profile file: " + filename, e);
         }
     }
 
@@ -89,7 +90,7 @@ public class ProfileService {
     public void appendFile(String filename, String content) {
         Path file = profileDir.resolve(filename);
         if (!file.startsWith(profileDir)) {
-            throw new IllegalArgumentException("Invalid filename: " + filename);
+            throw new BusinessException("Invalid filename: " + filename);
         }
         try {
             Files.createDirectories(profileDir);
@@ -113,7 +114,7 @@ public class ProfileService {
             }
             log.info("Appended to profile file: {}", filename);
         } catch (IOException e) {
-            throw new RuntimeException("Failed to append to profile file: " + filename, e);
+            throw BusinessException.processingFailed("Failed to append to profile file: " + filename, e);
         }
     }
 
@@ -121,10 +122,10 @@ public class ProfileService {
     public void createFile(String filename) {
         Path file = profileDir.resolve(filename);
         if (!file.startsWith(profileDir)) {
-            throw new IllegalArgumentException("Invalid filename: " + filename);
+            throw new BusinessException("Invalid filename: " + filename);
         }
         if (Files.exists(file)) {
-            throw new IllegalArgumentException("Profile file already exists: " + filename);
+            throw new BusinessException("Profile file already exists: " + filename);
         }
         saveFile(filename, "# " + filename.replace(".md", "") + "\n\n");
     }
@@ -133,13 +134,13 @@ public class ProfileService {
     public void deleteFile(String filename) {
         Path file = profileDir.resolve(filename);
         if (!Files.exists(file) || !file.startsWith(profileDir)) {
-            throw new IllegalArgumentException("Profile file not found: " + filename);
+            throw BusinessException.notFound("Profile file not found: " + filename);
         }
         try {
             Files.delete(file);
             log.info("Deleted profile file: {}", filename);
         } catch (IOException e) {
-            throw new RuntimeException("Failed to delete profile file: " + filename, e);
+            throw BusinessException.processingFailed("Failed to delete profile file: " + filename, e);
         }
     }
 

@@ -8,7 +8,6 @@ import org.springframework.web.client.RestClient;
 
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 
 /**
  * Embedding service with configurable backend.
@@ -40,8 +39,12 @@ public class EmbeddingService {
         String provider = embeddingProps.provider();
         String apiKey = embeddingProps.apiKey();
         if (!"simple".equals(provider) && apiKey != null && !apiKey.isBlank()) {
+            var factory = new org.springframework.http.client.SimpleClientHttpRequestFactory();
+            factory.setConnectTimeout(5000);
+            factory.setReadTimeout(30000);
             this.restClient = RestClient.builder()
                     .baseUrl(embeddingProps.url())
+                    .requestFactory(factory)
                     .defaultHeader("Authorization", "Bearer " + apiKey)
                     .defaultHeader("Content-Type", "application/json")
                     .build();
@@ -54,18 +57,17 @@ public class EmbeddingService {
             return generateSimpleEmbedding(text);
         }
         return switch (embeddingProps.provider()) {
-            case "openai" -> generateOpenAiEmbedding(text);
-            case "deepseek" -> generateDeepSeekEmbedding(text);
+            case "openai", "deepseek" -> callEmbeddingApi(text);
             default -> generateSimpleEmbedding(text);
         };
     }
 
     /**
-     * OpenAI-compatible embedding API (also works with many providers)
+     * Call OpenAI-compatible embedding API (works with OpenAI, DeepSeek, and other compatible providers).
      */
     @SuppressWarnings("unchecked")
-    private float[] generateOpenAiEmbedding(String text) {
-        log.debug("Generating embedding via OpenAI-compatible API: provider={}, model={}", embeddingProps.provider(), embeddingProps.model());
+    private float[] callEmbeddingApi(String text) {
+        log.debug("Generating embedding: provider={}, model={}", embeddingProps.provider(), embeddingProps.model());
         try {
             Map<String, Object> request = Map.of(
                     "model", embeddingProps.model(),
@@ -94,41 +96,9 @@ public class EmbeddingService {
             log.debug("Generated {} dim embedding for text ({} chars)", embedding.length, text.length());
             return embedding;
         } catch (Exception e) {
-            log.error("OpenAI-compatible embedding API call failed: {}", e.getMessage(), e);
+            log.error("Embedding API call failed (provider={}): {}", embeddingProps.provider(), e.getMessage(), e);
             throw e;
         }
-    }
-
-    /**
-     * DeepSeek embedding API (may not be available for all keys/tiers)
-     */
-    @SuppressWarnings("unchecked")
-    private float[] generateDeepSeekEmbedding(String text) {
-        Map<String, Object> request = Map.of(
-                "model", embeddingProps.model(),
-                "input", List.of(text)
-        );
-
-        Map<String, Object> response = restClient.post()
-                .body(request)
-                .retrieve()
-                .body(Map.class);
-
-        if (response == null) {
-            throw new RuntimeException("Embedding API returned null response");
-        }
-
-        List<Map<String, Object>> data = (List<Map<String, Object>>) response.get("data");
-        if (data == null || data.isEmpty()) {
-            throw new RuntimeException("Embedding API returned empty data");
-        }
-
-        List<Double> embeddingList = (List<Double>) data.get(0).get("embedding");
-        float[] embedding = new float[embeddingList.size()];
-        for (int i = 0; i < embeddingList.size(); i++) {
-            embedding[i] = embeddingList.get(i).floatValue();
-        }
-        return embedding;
     }
 
     /**

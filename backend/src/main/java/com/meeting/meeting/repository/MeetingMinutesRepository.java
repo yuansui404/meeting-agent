@@ -30,4 +30,6 @@ public interface MeetingMinutesRepository extends JpaRepository<MeetingMinutes, 
     List<MeetingMinutes> searchByParticipants(@Param("keyword") String keyword);
 
     MeetingMinutes findByFilePath(String filePath);
+
+    List<MeetingMinutes> findByStyleExemplarTrue();
 }
