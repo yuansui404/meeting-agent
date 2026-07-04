@@ -1,7 +1,8 @@
 package com.meeting.service;
 
+import com.meeting.config.EmbeddingProperties;
+import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestClient;
 
@@ -27,25 +28,20 @@ import java.util.Optional;
 @Service
 public class EmbeddingService {
 
-    private final String provider;
-    private final String apiKey;
-    private final String model;
-    private final String url;
-
+    private final EmbeddingProperties embeddingProps;
     private RestClient restClient;
 
-    public EmbeddingService(@Value("${embedding.provider:simple}") String provider,
-                            @Value("${embedding.api-key:}") String apiKey,
-                            @Value("${embedding.model:text-embedding-ada-002}") String model,
-                            @Value("${embedding.url:https://api.openai.com/v1/embeddings}") String url) {
-        this.provider = provider;
-        this.apiKey = apiKey;
-        this.model = model;
-        this.url = url;
+    public EmbeddingService(EmbeddingProperties embeddingProps) {
+        this.embeddingProps = embeddingProps;
+    }
 
+    @PostConstruct
+    public void init() {
+        String provider = embeddingProps.provider();
+        String apiKey = embeddingProps.apiKey();
         if (!"simple".equals(provider) && apiKey != null && !apiKey.isBlank()) {
             this.restClient = RestClient.builder()
-                    .baseUrl(url)
+                    .baseUrl(embeddingProps.url())
                     .defaultHeader("Authorization", "Bearer " + apiKey)
                     .defaultHeader("Content-Type", "application/json")
                     .build();
@@ -57,7 +53,7 @@ public class EmbeddingService {
             log.warn("Embedding API key not configured, falling back to simple embedding");
             return generateSimpleEmbedding(text);
         }
-        return switch (provider) {
+        return switch (embeddingProps.provider()) {
             case "openai" -> generateOpenAiEmbedding(text);
             case "deepseek" -> generateDeepSeekEmbedding(text);
             default -> generateSimpleEmbedding(text);
@@ -69,10 +65,10 @@ public class EmbeddingService {
      */
     @SuppressWarnings("unchecked")
     private float[] generateOpenAiEmbedding(String text) {
-        log.debug("Generating embedding via OpenAI-compatible API: provider={}, model={}", provider, model);
+        log.debug("Generating embedding via OpenAI-compatible API: provider={}, model={}", embeddingProps.provider(), embeddingProps.model());
         try {
             Map<String, Object> request = Map.of(
-                    "model", model,
+                    "model", embeddingProps.model(),
                     "input", List.of(text)
             );
 
@@ -109,7 +105,7 @@ public class EmbeddingService {
     @SuppressWarnings("unchecked")
     private float[] generateDeepSeekEmbedding(String text) {
         Map<String, Object> request = Map.of(
-                "model", model,
+                "model", embeddingProps.model(),
                 "input", List.of(text)
         );
 

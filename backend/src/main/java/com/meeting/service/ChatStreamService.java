@@ -41,11 +41,11 @@ public class ChatStreamService {
      * @param messageFiles    文件元数据（用于持久化）
      */
     public void stream(Long dialogueId, String enrichedMessage, String originalQuestion,
-                       List<Map<String, Object>> messageFiles, SseEmitter emitter) {
+                       List<Map<String, Object>> messageFiles, SseEmitter emitter,
+                       CancellationToken cancelToken) {
         StringBuilder fullResponse = new StringBuilder();
         try {
             UserMessage msg = new UserMessage(enrichedMessage);
-            // 添加 metadata 标记，供 CleanablePgAgentStateStore 清洗
             msg.getMetadata().put("_enriched", true);
             msg.getMetadata().put("_originalQuestion", originalQuestion);
             if (messageFiles != null && !messageFiles.isEmpty()) {
@@ -56,11 +56,18 @@ public class ChatStreamService {
                     .sessionId("dialogue-" + dialogueId)
                     .build();
 
+            // Register interrupt action: per-session interrupt via ReActAgent delegate
+            cancelToken.setCancelAction(() -> {
+                log.info("Interrupting agent for dialogue {}", dialogueId);
+                agent.getDelegate().interrupt(ctx);
+            });
+
             final AtomicBoolean clientDisconnected = new AtomicBoolean(false);
             final AtomicBoolean subagentActive = new AtomicBoolean(false);
 
             agent.streamEvents(msg, ctx)
                     .doOnNext(event -> {
+                        if (cancelToken.isCancelled()) return;
                         if (event instanceof AgentStartEvent) {
                             subagentActive.set(true);
                         } else if (event instanceof AgentEndEvent) {
@@ -79,11 +86,20 @@ public class ChatStreamService {
                     })
                     .blockLast();
 
-            dialoguePersistenceService.persist(dialogueId, originalQuestion,
-                    fullResponse.toString(), messageFiles);
-            completeEmitter(emitter);
+            if (!cancelToken.isCancelled()) {
+                dialoguePersistenceService.persist(dialogueId, originalQuestion,
+                        fullResponse.toString(), messageFiles);
+                completeEmitter(emitter);
+            } else {
+                log.info("Stream interrupted for dialogue {}, skipping persistence", dialogueId);
+                try { emitter.complete(); } catch (Exception ignored) {}
+            }
         } catch (Exception e) {
-            handleStreamError(emitter, e);
+            if (!cancelToken.isCancelled()) {
+                handleStreamError(emitter, e);
+            } else {
+                try { emitter.complete(); } catch (Exception ignored) {}
+            }
         }
     }
 

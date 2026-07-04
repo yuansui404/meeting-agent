@@ -15,6 +15,7 @@ import io.agentscope.harness.agent.memory.compaction.CompactionConfig;
 import io.agentscope.harness.agent.subagent.SubagentDeclaration;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
@@ -25,6 +26,7 @@ import java.util.Map;
 
 @Slf4j
 @Configuration
+@EnableConfigurationProperties({FileProperties.class, MimoProperties.class, EmbeddingProperties.class})
 public class AgentConfig {
 
     public static final String SYSTEM_PROMPT = """

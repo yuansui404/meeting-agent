@@ -1,8 +1,13 @@
 package com.meeting.controller;
 
-import com.meeting.conversation.model.entity.RewriteResult;
+import com.meeting.common.ApiResponse;
+import com.meeting.common.BusinessException;
+import com.meeting.controller.dto.request.AddMessageRequest;
+import com.meeting.controller.dto.request.CreateSessionRequest;
+import com.meeting.controller.dto.request.UpdateTitleRequest;
 import com.meeting.service.RewriteService;
 import com.meeting.service.SessionService;
+import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.core.io.FileSystemResource;
 import org.springframework.core.io.Resource;
@@ -23,72 +28,54 @@ public class SessionController {
     private final RewriteService rewriteService;
 
     @PostMapping("/dialogue")
-    public ResponseEntity<?> createSession(@RequestBody Map<String, Object> request) {
-        String title = (String) request.getOrDefault("title", "新对话");
-        Long meetingId = request.get("meetingId") != null
-                ? Long.valueOf(request.get("meetingId").toString()) : null;
-        var session = sessionService.createSession(title, meetingId);
-        return ResponseEntity.ok(Map.of("dialogueId", session.getId()));
+    public ApiResponse<Map<String, Object>> createSession(@Valid @RequestBody CreateSessionRequest request) {
+        String title = request.title() != null ? request.title() : "新对话";
+        var session = sessionService.createSession(title, request.meetingId());
+        return ApiResponse.ok(Map.of("dialogueId", session.getId()));
     }
 
     @PostMapping("/dialogue/{id}/message")
-    public ResponseEntity<?> addMessage(@PathVariable Long id, @RequestBody Map<String, String> request) {
-        try {
-            sessionService.addMessage(id, request.get("role"), request.get("content"), request.get("messageType"), null);
-            return ResponseEntity.ok(Map.of("messageId", 0, "timestamp", java.time.LocalDateTime.now().toString()));
-        } catch (IllegalArgumentException e) {
-            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
-        }
+    public ApiResponse<Map<String, Object>> addMessage(@PathVariable Long id, @Valid @RequestBody AddMessageRequest request) {
+        sessionService.addMessage(id, request.role(), request.content(), request.messageType(), null);
+        return ApiResponse.ok(Map.of("messageId", 0, "timestamp", java.time.LocalDateTime.now().toString()));
     }
 
     @GetMapping("/dialogue/{id}")
-    public ResponseEntity<?> getSession(@PathVariable Long id) {
-        try {
-            return ResponseEntity.ok(sessionService.getSessionWithMessages(id));
-        } catch (IllegalArgumentException e) {
-            return ResponseEntity.notFound().build();
-        }
+    public ApiResponse<?> getSession(@PathVariable Long id) {
+        return ApiResponse.ok(sessionService.getSessionWithMessages(id));
     }
 
     @GetMapping("/dialogues")
-    public ResponseEntity<?> listSessions() {
-        return ResponseEntity.ok(sessionService.listSessions());
+    public ApiResponse<?> listSessions() {
+        return ApiResponse.ok(sessionService.listSessions());
     }
 
     @PostMapping("/dialogue/{id}/archive")
-    public ResponseEntity<?> archiveSession(@PathVariable Long id) {
+    public ApiResponse<Void> archiveSession(@PathVariable Long id) {
         sessionService.archiveSession(id);
-        return ResponseEntity.ok(Map.of("success", true));
+        return ApiResponse.ok(null);
     }
 
     @DeleteMapping("/dialogue/{id}")
-    public ResponseEntity<?> deleteSession(@PathVariable Long id) {
+    public ApiResponse<Void> deleteSession(@PathVariable Long id) {
         sessionService.deleteSession(id);
-        return ResponseEntity.ok(Map.of("success", true));
+        return ApiResponse.ok(null);
     }
 
     @PutMapping("/dialogue/{id}/title")
-    public ResponseEntity<?> updateTitle(@PathVariable Long id, @RequestBody Map<String, String> request) {
-        try {
-            String title = request.get("title");
-            if (title == null || title.trim().isEmpty()) {
-                return ResponseEntity.badRequest().body(Map.of("error", "Title cannot be empty"));
-            }
-            sessionService.updateTitle(id, title.trim());
-            return ResponseEntity.ok(Map.of("success", true));
-        } catch (IllegalArgumentException e) {
-            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
-        }
+    public ApiResponse<Void> updateTitle(@PathVariable Long id, @Valid @RequestBody UpdateTitleRequest request) {
+        sessionService.updateTitle(id, request.title().trim());
+        return ApiResponse.ok(null);
     }
 
     @PostMapping("/dialogue/{id}/import")
-    public ResponseEntity<?> importSession(@PathVariable Long id) {
+    public ApiResponse<Void> importSession(@PathVariable Long id) {
         sessionService.importSession(id);
-        return ResponseEntity.ok(Map.of("success", true));
+        return ApiResponse.ok(null);
     }
 
     @GetMapping("/rewrite-result/{id}")
-    public ResponseEntity<?> getRewriteResult(@PathVariable Long id) {
+    public ApiResponse<?> getRewriteResult(@PathVariable Long id) {
         return rewriteService.getRewriteResult(id)
                 .map(result -> {
                     Map<String, Object> data = new java.util.HashMap<>();
@@ -100,13 +87,13 @@ public class SessionController {
                     data.put("docxPath", result.getDocxPath());
                     data.put("version", result.getVersion());
                     data.put("createdAt", result.getCreatedAt());
-                    return ResponseEntity.ok(data);
+                    return ApiResponse.ok(data);
                 })
-                .orElse(ResponseEntity.notFound().build());
+                .orElseThrow(() -> BusinessException.notFound("改写结果不存在: " + id));
     }
 
     @GetMapping("/dialogue/{id}/rewrite-history")
-    public ResponseEntity<?> getRewriteHistory(@PathVariable Long id) {
+    public ApiResponse<?> getRewriteHistory(@PathVariable Long id) {
         var results = rewriteService.getRewriteHistory(id).stream()
                 .map(r -> Map.<String, Object>of(
                         "id", r.getId(),
@@ -114,7 +101,7 @@ public class SessionController {
                         "docxPath", r.getDocxPath() != null ? r.getDocxPath() : "",
                         "createdAt", r.getCreatedAt()
                 )).toList();
-        return ResponseEntity.ok(results);
+        return ApiResponse.ok(results);
     }
 
     @GetMapping("/rewrite-result/{id}/file")
@@ -123,11 +110,11 @@ public class SessionController {
                 .map(result -> {
                     String docxPath = result.getDocxPath();
                     if (docxPath == null || docxPath.isBlank()) {
-                        return ResponseEntity.notFound().build();
+                        throw BusinessException.notFound("文件不存在");
                     }
                     Path filePath = Path.of(docxPath);
                     if (!filePath.toFile().exists()) {
-                        return ResponseEntity.notFound().build();
+                        throw BusinessException.notFound("文件不存在");
                     }
                     Resource resource = new FileSystemResource(filePath);
                     String filename = "rewrite_" + result.getDialogueId() + "_v" + result.getVersion() + ".docx";
@@ -137,6 +124,6 @@ public class SessionController {
                                     "attachment; filename*=UTF-8''" + filename)
                             .body(resource);
                 })
-                .orElse(ResponseEntity.notFound().build());
+                .orElseThrow(() -> BusinessException.notFound("改写结果不存在: " + id));
     }
 }

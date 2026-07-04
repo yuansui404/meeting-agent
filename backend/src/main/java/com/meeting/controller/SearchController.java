@@ -1,11 +1,10 @@
 package com.meeting.controller;
 
+import com.meeting.common.ApiResponse;
+import com.meeting.controller.dto.response.SearchResultVO;
 import com.meeting.retrieval.service.HybridSearchService;
 import lombok.RequiredArgsConstructor;
-import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
-
-import java.util.Map;
 
 @RestController
 @RequestMapping("/api")
@@ -15,16 +14,16 @@ public class SearchController {
     private final HybridSearchService hybridSearchService;
 
     @GetMapping("/search")
-    public ResponseEntity<?> search(
+    public ApiResponse<SearchResultVO> search(
             @RequestParam String query,
             @RequestParam(required = false) String timeRange) {
 
         var result = hybridSearchService.search(query, timeRange);
-        return ResponseEntity.ok(Map.of(
-                "query", query,
-                "evidenceLevel", result.evidenceLevel(),
-                "results", result.chunks(),
-                "citations", result.citations()
+        return ApiResponse.ok(new SearchResultVO(
+                query,
+                result.evidenceLevel(),
+                result.chunks(),
+                result.citations()
         ));
     }
 }

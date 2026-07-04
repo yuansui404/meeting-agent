@@ -1,7 +1,8 @@
 package com.meeting.service;
 
+import com.meeting.config.FileProperties;
+import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import jakarta.annotation.PostConstruct;
@@ -19,16 +20,15 @@ import java.util.stream.Stream;
 
 @Slf4j
 @Service
+@RequiredArgsConstructor
 public class ProfileService {
 
-    private final Path profileDir;
-
-    public ProfileService(@Value("${file.upload-dir:/app/data/uploads}") String uploadDir) {
-        this.profileDir = Path.of(uploadDir, "profile");
-    }
+    private final FileProperties fileProps;
+    private Path profileDir;
 
     @PostConstruct
     public void init() {
+        this.profileDir = Path.of(fileProps.uploadDir(), "profile");
         try {
             Files.createDirectories(profileDir);
             log.info("Profile directory initialized at {}", profileDir);

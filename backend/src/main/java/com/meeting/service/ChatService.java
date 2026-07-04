@@ -31,17 +31,21 @@ public class ChatService {
     @Qualifier("llmTaskExecutor") private final TaskExecutor taskExecutor;
     private final ObjectMapper objectMapper;
 
-    public void streamChat(Long dialogueId, String userMessage, String metadata, SseEmitter emitter) {
+    public CancellationToken streamChat(Long dialogueId, String userMessage, String metadata, SseEmitter emitter) {
+        CancellationToken cancelToken = new CancellationToken();
         taskExecutor.execute(() -> {
             try {
                 List<Map<String, Object>> messageFiles = parseFilesFromMetadata(metadata);
                 String fileContext = fileContextBuilder.build(messageFiles);
                 String enriched = fileContextBuilder.buildEnrichedMessage(fileContext, userMessage);
-                chatStreamService.stream(dialogueId, enriched, userMessage, messageFiles, emitter);
+                chatStreamService.stream(dialogueId, enriched, userMessage, messageFiles, emitter, cancelToken);
             } catch (Exception e) {
-                handleStreamError(emitter, e);
+                if (!cancelToken.isCancelled()) {
+                    handleStreamError(emitter, e);
+                }
             }
         });
+        return cancelToken;
     }
 
     private List<Map<String, Object>> parseFilesFromMetadata(String metadata) {

@@ -1,6 +1,7 @@
 package com.meeting.service;
 
 import com.meeting.config.DeepSeekProperties;
+import com.meeting.config.FileProperties;
 import com.meeting.conversation.model.entity.RewriteResult;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -9,12 +10,10 @@ import io.agentscope.core.formatter.openai.dto.OpenAIMessage;
 import io.agentscope.core.formatter.openai.dto.OpenAIRequest;
 import io.agentscope.core.formatter.openai.dto.OpenAIResponse;
 import io.agentscope.core.model.OpenAIClient;
-import org.springframework.beans.factory.annotation.Value;
-import org.springframework.stereotype.Service;
-import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
-
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.core.task.TaskExecutor;
+import org.springframework.stereotype.Service;
+import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -34,9 +33,10 @@ public class RewriteService {
     private final RewriteResultRepository rewriteResultRepository;
     private final SessionService sessionService;
     private final StyleLearningService styleLearningService;
-    @Qualifier("llmTaskExecutor") private final TaskExecutor taskExecutor;
+    @Qualifier("llmTaskExecutor")
+    private final TaskExecutor taskExecutor;
     private final DeepSeekProperties deepSeekProps;
-    @Value("${file.upload-dir:/app/data/uploads}") private final String uploadDir = "/app/data/uploads";
+    private final FileProperties fileProps;
     private final OpenAIClient openAIClient;
 
     /**
@@ -207,7 +207,7 @@ public class RewriteService {
     private String proofreadContent(String draftContent, String sourceContent) {
         // Read global 与会人.md
         String participantsContext = "";
-        Path participantsFile = Path.of(uploadDir, "profile", "与会人.md");
+        Path participantsFile = Path.of(fileProps.uploadDir(), "profile", "与会人.md");
         if (Files.exists(participantsFile)) {
             try {
                 participantsContext = Files.readString(participantsFile, StandardCharsets.UTF_8);

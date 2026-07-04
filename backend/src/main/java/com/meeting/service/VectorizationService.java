@@ -1,6 +1,7 @@
 package com.meeting.service;
 
 import com.meeting.config.DeepSeekProperties;
+import com.meeting.config.FileProperties;
 import com.meeting.meeting.model.entity.MeetingMinutes;
 import com.meeting.meeting.model.entity.MeetingVector;
 import com.meeting.meeting.repository.MeetingMinutesRepository;
@@ -11,7 +12,6 @@ import io.agentscope.core.formatter.openai.dto.OpenAIResponse;
 import io.agentscope.core.model.OpenAIClient;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -29,10 +29,6 @@ public class VectorizationService {
     private static final int MAX_CHUNK_SIZE = 1500;
     private static final int CHUNK_OVERLAP = 50;
 
-    /**
-     * Result of vector search with cosine similarity score.
-     * similarity ranges from 0 (completely dissimilar) to 1 (identical).
-     */
     public record ScoredVector(Long id, Long meetingId, String content, Integer chunkIndex, double similarity) {}
 
     private final MeetingMinutesRepository meetingRepository;
@@ -41,7 +37,7 @@ public class VectorizationService {
     private final JdbcTemplate jdbcTemplate;
     private final OpenAIClient openAIClient;
     private final DeepSeekProperties deepSeekProps;
-    @Value("${file.upload-dir:/app/data/uploads}") private String uploadDir;
+    private final FileProperties fileProps;
 
     /**
      * Search vectors weighted by priority_score for style example retrieval.
@@ -228,7 +224,7 @@ public class VectorizationService {
             meetingRepository.save(meeting);
 
             // Read existing 与会人.md
-            Path participantsFile = Path.of(uploadDir, "profile", "与会人.md");
+            Path participantsFile = Path.of(fileProps.uploadDir(), "profile", "与会人.md");
             Set<String> existingNames = new LinkedHashSet<>();
             if (Files.exists(participantsFile)) {
                 List<String> lines = Files.readAllLines(participantsFile, StandardCharsets.UTF_8);

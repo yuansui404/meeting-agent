@@ -6,6 +6,7 @@ import io.agentscope.core.formatter.openai.dto.OpenAIMessage;
 import io.agentscope.core.formatter.openai.dto.OpenAIRequest;
 import io.agentscope.core.formatter.openai.dto.OpenAIResponse;
 import io.agentscope.core.model.OpenAIClient;
+import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
@@ -18,22 +19,14 @@ import java.util.stream.Collectors;
 
 @Slf4j
 @Component
+@RequiredArgsConstructor
 @ConditionalOnProperty(name = "rag.retrieval.rerank-enabled", havingValue = "true")
 public class DeepSeekReranker implements Reranker {
     private static final int BATCH_SIZE = 10;
     private static final Pattern SCORE_PATTERN = Pattern.compile("(\\d+)(?:/10)?\\s*[:：]");
 
+    private final DeepSeekProperties deepSeekProps;
     private final OpenAIClient openAIClient;
-    private final String apiKey;
-    private final String apiUrl;
-    private final String model;
-
-    public DeepSeekReranker(DeepSeekProperties props) {
-        this.apiKey = props.getApiKey();
-        this.apiUrl = props.getUrl();
-        this.model = props.getModel();
-        this.openAIClient = new OpenAIClient();
-    }
 
     @Override
     public List<ChunkResult> reRank(String query, List<ChunkResult> candidates, int topN) {
@@ -91,7 +84,7 @@ public class DeepSeekReranker implements Reranker {
 
         try {
             OpenAIRequest request = OpenAIRequest.builder()
-                    .model(model)
+                    .model(deepSeekProps.getModel())
                     .messages(List.of(
                             OpenAIMessage.builder().role("system")
                                     .content("你是一个文档相关性评分专家。严格按照格式输出评分。").build(),
@@ -101,7 +94,7 @@ public class DeepSeekReranker implements Reranker {
                     .maxTokens(512)
                     .build();
 
-            OpenAIResponse response = openAIClient.call(apiKey, apiUrl, request);
+            OpenAIResponse response = openAIClient.call(deepSeekProps.getApiKey(), deepSeekProps.getUrl(), request);
             String content = response.getFirstChoice().getMessage().getContentAsString();
 
             // Parse scores: expect lines like "1: 8", "2: 3", "3: 10/10"

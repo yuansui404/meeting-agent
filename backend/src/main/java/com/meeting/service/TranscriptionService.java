@@ -1,9 +1,9 @@
 package com.meeting.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.meeting.config.MimoProperties;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 
@@ -23,9 +23,7 @@ public class TranscriptionService {
 
     private final FileProcessingService fileProcessingService;
     private final MeetingDateExtractor meetingDateExtractor;
-
-    @Value("${mimo.api-key:}") private String mimoApiKey;
-    @Value("${mimo.url:https://token-plan-cn.xiaomimimo.com}") private String mimoUrl;
+    private final MimoProperties mimoProps;
 
     /**
      * Start asynchronous transcription for a dialogue audio/video file.
@@ -110,12 +108,12 @@ public class TranscriptionService {
             )));
 
             // 4. HTTP POST to MiMo API
-            String apiUrl = mimoUrl + "/v1/chat/completions";
+            String apiUrl = mimoProps.url() + "/v1/chat/completions";
             HttpURLConnection conn = (HttpURLConnection) URI.create(apiUrl).toURL().openConnection();
             try {
                 conn.setRequestMethod("POST");
                 conn.setRequestProperty("Content-Type", "application/json");
-                conn.setRequestProperty("api-key", mimoApiKey);
+                conn.setRequestProperty("api-key", mimoProps.apiKey());
                 conn.setDoOutput(true);
                 conn.setConnectTimeout(60000);
                 conn.setReadTimeout(300000);
