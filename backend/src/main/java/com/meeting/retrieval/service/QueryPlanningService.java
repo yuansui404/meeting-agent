@@ -1,7 +1,10 @@
 package com.meeting.retrieval.service;
 
-import com.fasterxml.jackson.databind.JsonNode;
-import com.meeting.config.DeepSeekChatClient;
+import com.meeting.config.DeepSeekProperties;
+import io.agentscope.core.formatter.openai.dto.OpenAIMessage;
+import io.agentscope.core.formatter.openai.dto.OpenAIRequest;
+import io.agentscope.core.formatter.openai.dto.OpenAIResponse;
+import io.agentscope.core.model.OpenAIClient;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -14,7 +17,8 @@ import java.util.Map;
 @RequiredArgsConstructor
 public class QueryPlanningService {
 
-    private final DeepSeekChatClient deepSeekChatClient;
+    private final OpenAIClient openAIClient;
+    private final DeepSeekProperties deepSeekProps;
 
     public record QueryPlan(String strategy, String rewrittenQuery, List<String> subQueries) {
         public static QueryPlan direct(String query) {
@@ -24,20 +28,24 @@ public class QueryPlanningService {
 
     public QueryPlan plan(String originalQuery) {
         try {
-            List<Map<String, String>> messages = List.of(
-                    Map.of("role", "system", "content",
-                            "你是一个查询规划器。分析用户问题，输出 JSON 格式的规划结果。\n" +
-                            "- DIRECT: 原样检索\n" +
-                            "- REWRITE: 改写 query 使其更适合检索\n" +
-                            "- DECOMPOSE: 拆解为多个子问题分别检索\n\n" +
-                            "输出格式: {\"strategy\": \"DIRECT|REWRITE|DECOMPOSE\", " +
-                            "\"rewritten_query\": \"...\", \"sub_queries\": [\"...\"]}"),
-                    Map.of("role", "user", "content", originalQuery)
-            );
+            OpenAIRequest request = OpenAIRequest.builder()
+                    .model(deepSeekProps.getModel())
+                    .messages(List.of(
+                            OpenAIMessage.builder().role("system").content(
+                                    "你是一个查询规划器。分析用户问题，输出 JSON 格式的规划结果。\n" +
+                                    "- DIRECT: 原样检索\n" +
+                                    "- REWRITE: 改写 query 使其更适合检索\n" +
+                                    "- DECOMPOSE: 拆解为多个子问题分别检索\n\n" +
+                                    "输出格式: {\"strategy\": \"DIRECT|REWRITE|DECOMPOSE\", " +
+                                    "\"rewritten_query\": \"...\", \"sub_queries\": [\"...\"]}").build(),
+                            OpenAIMessage.builder().role("user").content(originalQuery).build()
+                    ))
+                    .temperature(0.1)
+                    .maxTokens(2048)
+                    .build();
 
-            JsonNode result = deepSeekChatClient.chat(messages, false);
-            String content = result.path("choices").get(0)
-                    .path("message").path("content").asText();
+            OpenAIResponse response = openAIClient.call(deepSeekProps.getApiKey(), deepSeekProps.getUrl(), request);
+            String content = response.getFirstChoice().getMessage().getContentAsString();
 
             if (content.contains("\"REWRITE\"")) {
                 return new QueryPlan("REWRITE", extractFromJson(content, "rewritten_query"),

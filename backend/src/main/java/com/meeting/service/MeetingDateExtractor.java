@@ -1,7 +1,10 @@
 package com.meeting.service;
 
-import com.fasterxml.jackson.databind.JsonNode;
-import com.meeting.config.DeepSeekChatClient;
+import com.meeting.config.DeepSeekProperties;
+import io.agentscope.core.formatter.openai.dto.OpenAIMessage;
+import io.agentscope.core.formatter.openai.dto.OpenAIRequest;
+import io.agentscope.core.formatter.openai.dto.OpenAIResponse;
+import io.agentscope.core.model.OpenAIClient;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
@@ -9,7 +12,6 @@ import org.springframework.stereotype.Component;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
-import java.util.Map;
 
 @Slf4j
 @Component
@@ -24,7 +26,8 @@ public class MeetingDateExtractor {
             DateTimeFormatter.ofPattern("yyyy/MM/dd"),
     };
 
-    private final DeepSeekChatClient deepSeekChatClient;
+    private final OpenAIClient openAIClient;
+    private final DeepSeekProperties deepSeekProps;
 
     /**
      * Extract meeting date from document/transcription text using LLM.
@@ -37,18 +40,23 @@ public class MeetingDateExtractor {
         String sample = text.length() > 2000 ? text.substring(0, 2000) : text;
 
         try {
-            List<Map<String, String>> messages = List.of(
-                    Map.of("role", "system", "content",
-                            "你是一个会议日期提取器。从以下会议纪要文本中提取会议日期。"
+            OpenAIRequest request = OpenAIRequest.builder()
+                    .model(deepSeekProps.getModel())
+                    .messages(List.of(
+                            OpenAIMessage.builder().role("system").content(
+                                    "你是一个会议日期提取器。从以下会议纪要文本中提取会议日期。"
                                     + "如果内容中有明确的会议日期或时间，返回ISO格式（如2026-03-05T10:00:00）。"
                                     + "如果只有日期没有时间，使用10:00:00作为默认时间。"
                                     + "如果没有任何日期信息，返回null。"
-                                    + "只返回日期字符串或null，不要其他内容。"),
-                    Map.of("role", "user", "content", sample)
-            );
+                                    + "只返回日期字符串或null，不要其他内容。").build(),
+                            OpenAIMessage.builder().role("user").content(sample).build()
+                    ))
+                    .temperature(0.0)
+                    .maxTokens(64)
+                    .build();
 
-            JsonNode response = deepSeekChatClient.chat(messages, false);
-            String content = extractContent(response);
+            OpenAIResponse response = openAIClient.call(deepSeekProps.getApiKey(), deepSeekProps.getUrl(), request);
+            String content = response.getFirstChoice().getMessage().getContentAsString();
 
             if (content == null || content.isBlank() || "null".equals(content.trim())) {
                 return null;
@@ -57,14 +65,6 @@ public class MeetingDateExtractor {
             return parseDateTime(content.trim());
         } catch (Exception e) {
             log.warn("Failed to extract meeting date: {}", e.getMessage());
-            return null;
-        }
-    }
-
-    private String extractContent(JsonNode response) {
-        try {
-            return response.get("choices").get(0).get("message").get("content").asText();
-        } catch (Exception e) {
             return null;
         }
     }

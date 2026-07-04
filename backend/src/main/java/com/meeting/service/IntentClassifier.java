@@ -1,12 +1,12 @@
 package com.meeting.service;
 
+import com.meeting.config.DeepSeekProperties;
 import io.agentscope.core.formatter.openai.dto.OpenAIMessage;
 import io.agentscope.core.formatter.openai.dto.OpenAIRequest;
 import io.agentscope.core.formatter.openai.dto.OpenAIResponse;
 import io.agentscope.core.model.OpenAIClient;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
@@ -23,9 +23,7 @@ public class IntentClassifier {
         CHAT
     }
 
-    @Value("${deepseek.api-key:}") private String apiKey;
-    @Value("${deepseek.url:https://api.deepseek.com}") private String apiUrl;
-    @Value("${deepseek.model:deepseek-chat}") private String model;
+    private final DeepSeekProperties deepSeekProps;
     private final OpenAIClient openAIClient;
 
     /**
@@ -40,7 +38,7 @@ public class IntentClassifier {
         String prompt = buildClassificationPrompt(userMessage);
         try {
             OpenAIRequest request = OpenAIRequest.builder()
-                    .model(model)
+                    .model(deepSeekProps.getModel())
                     .messages(List.of(
                             OpenAIMessage.builder().role("system").content("你是一个意图分类器，分析用户消息返回对应的意图名称。").build(),
                             OpenAIMessage.builder().role("user").content(prompt).build()
@@ -49,7 +47,7 @@ public class IntentClassifier {
                     .maxTokens(32)
                     .build();
 
-            OpenAIResponse response = openAIClient.call(apiKey, apiUrl, request);
+            OpenAIResponse response = openAIClient.call(deepSeekProps.getApiKey(), deepSeekProps.getUrl(), request);
             String content = response.getFirstChoice() != null
                     ? response.getFirstChoice().getMessage().getContentAsString()
                     : null;

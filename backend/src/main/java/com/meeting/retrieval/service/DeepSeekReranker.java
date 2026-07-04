@@ -1,12 +1,12 @@
 package com.meeting.retrieval.service;
 
+import com.meeting.config.DeepSeekProperties;
 import com.meeting.retrieval.model.ChunkResult;
 import io.agentscope.core.formatter.openai.dto.OpenAIMessage;
 import io.agentscope.core.formatter.openai.dto.OpenAIRequest;
 import io.agentscope.core.formatter.openai.dto.OpenAIResponse;
 import io.agentscope.core.model.OpenAIClient;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 
@@ -28,12 +28,10 @@ public class DeepSeekReranker implements Reranker {
     private final String apiUrl;
     private final String model;
 
-    public DeepSeekReranker(@Value("${deepseek.api-key:}") String apiKey,
-                            @Value("${deepseek.url:https://api.deepseek.com}") String apiUrl,
-                            @Value("${deepseek.model:deepseek-chat}") String model) {
-        this.apiKey = apiKey;
-        this.apiUrl = apiUrl;
-        this.model = model;
+    public DeepSeekReranker(DeepSeekProperties props) {
+        this.apiKey = props.getApiKey();
+        this.apiUrl = props.getUrl();
+        this.model = props.getModel();
         this.openAIClient = new OpenAIClient();
     }
 

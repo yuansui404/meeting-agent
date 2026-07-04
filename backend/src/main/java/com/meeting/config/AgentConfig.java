@@ -22,38 +22,21 @@ import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 
+
 @Slf4j
 @Configuration
 public class AgentConfig {
 
     public static final String SYSTEM_PROMPT = """
-            你是会议纪要智能助手。你的人格和行为规范已定义在 AGENTS.md 中，请严格遵守。
-
-            ## 子 agent
-            你可以使用 agentSpawn(agent_id, task, timeout) 创建子 agent 来委派独立任务：
-
-            - rewrite_agent — 改写成正式会议纪要
-              重要：收到改写请求时，直接调用 agentSpawn("rewrite_agent", "将以下内容改写为正式会议纪要：\n[原始内容]", 120)
-              不要自己先搜索风格，rewrite_agent 会自行搜索知识库学习风格
-            - response-checker — 回答质量检查
-              使用条件：当你调用了 search_knowledge_base / search_documents / search_meeting_titles 等检索工具后，必须调用此子 agent 校验回答
-              调用方式：agentSpawn("response-checker", "检查以下回答质量。\n检索资料：{你刚检索到的内容}\n用户问题：{原始问题}\nAI回答：{你的回答}", 60)
-            - transcription-checker — 转写文本校对
-              使用条件：当你调用 call_mimo_asr 工具获得转写文本后，应该 spawn 此子 agent 校对
-              调用方式：agentSpawn("transcription-checker", "校对以下转写文本：\n[转写文本]", 60)
-            - general-purpose — 通用子 agent，用于任何可完全委派的独立任务
-              适用场景：需要大量计算、需要独立上下文、可以并行处理的任务
-              使用方法：agentSpawn("general-purpose", "具体的任务描述...", 120)
+            你是会议纪要智能助手。你的人格、工具使用规范、子 agent 体系、行为准则已全部定义在 AGENTS.md 中，请严格遵守。
             """;
 
     @Bean
-    public OpenAIChatModel openAIChatModel(@Value("${deepseek.api-key:}") String apiKey,
-                                           @Value("${deepseek.model:deepseek-chat}") String modelName,
-                                           @Value("${deepseek.url:https://api.deepseek.com}") String apiUrl) {
+    public OpenAIChatModel openAIChatModel(DeepSeekProperties props) {
         return OpenAIChatModel.builder()
-                .apiKey(apiKey)
-                .modelName(modelName)
-                .baseUrl(apiUrl)
+                .apiKey(props.getApiKey())
+                .modelName(props.getModel())
+                .baseUrl(props.getUrl())
                 .formatter(new DeepSeekFormatter())
                 .stream(true)
                 .build();

@@ -1,11 +1,14 @@
 package com.meeting.service;
 
-import com.fasterxml.jackson.databind.JsonNode;
-import com.meeting.config.DeepSeekChatClient;
+import com.meeting.config.DeepSeekProperties;
 import com.meeting.meeting.model.entity.MeetingMinutes;
 import com.meeting.meeting.model.entity.MeetingVector;
 import com.meeting.meeting.repository.MeetingMinutesRepository;
 import com.meeting.meeting.repository.MeetingVectorRepository;
+import io.agentscope.core.formatter.openai.dto.OpenAIMessage;
+import io.agentscope.core.formatter.openai.dto.OpenAIRequest;
+import io.agentscope.core.formatter.openai.dto.OpenAIResponse;
+import io.agentscope.core.model.OpenAIClient;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -36,7 +39,8 @@ public class VectorizationService {
     private final MeetingVectorRepository vectorRepository;
     private final EmbeddingService embeddingService;
     private final JdbcTemplate jdbcTemplate;
-    private final DeepSeekChatClient deepSeekChatClient;
+    private final OpenAIClient openAIClient;
+    private final DeepSeekProperties deepSeekProps;
     @Value("${file.upload-dir:/app/data/uploads}") private String uploadDir;
 
     /**
@@ -184,16 +188,21 @@ public class VectorizationService {
         try {
             String sample = transcription.length() > 3000 ? transcription.substring(0, 3000) : transcription;
 
-            List<Map<String, String>> messages = List.of(
-                    Map.of("role", "system", "content",
-                            "你是一个会议助手。从以下会议纪要文本中提取'与会人'栏目的名单。"
+            OpenAIRequest request = OpenAIRequest.builder()
+                    .model(deepSeekProps.getModel())
+                    .messages(List.of(
+                            OpenAIMessage.builder().role("system").content(
+                                    "你是一个会议助手。从以下会议纪要文本中提取'与会人'栏目的名单。"
                                     + "返回逗号分隔的姓名列表，不要其他任何内容。"
-                                    + "如果找不到与会人列表，返回空字符串。"),
-                    Map.of("role", "user", "content", sample)
-            );
+                                    + "如果找不到与会人列表，返回空字符串。").build(),
+                            OpenAIMessage.builder().role("user").content(sample).build()
+                    ))
+                    .temperature(0.0)
+                    .maxTokens(256)
+                    .build();
 
-            JsonNode response = deepSeekChatClient.chat(messages, false);
-            String extracted = extractContentText(response);
+            OpenAIResponse response = openAIClient.call(deepSeekProps.getApiKey(), deepSeekProps.getUrl(), request);
+            String extracted = response.getFirstChoice().getMessage().getContentAsString();
             if (extracted == null || extracted.isBlank() || "null".equals(extracted.trim())) {
                 log.info("collectParticipants: no participants found for meeting {}", meeting.getId());
                 return;
@@ -302,14 +311,6 @@ public class VectorizationService {
         vectorRepository.save(mv);
 
         log.info("backfillParticipants: updated meeting {} with participants '{}'", meetingId, participants);
-    }
-
-    private String extractContentText(JsonNode response) {
-        try {
-            return response.get("choices").get(0).get("message").get("content").asText();
-        } catch (Exception e) {
-            return null;
-        }
     }
 
     /**
