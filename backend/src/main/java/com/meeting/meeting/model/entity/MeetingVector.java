@@ -27,7 +27,7 @@ public class MeetingVector {
     @Column(name = "chunk_index")
     private Integer chunkIndex;
 
-    @Column(name = "priority_score")
+    @Column(name = "priority_score", nullable = false, columnDefinition = "double precision default 0.0")
     private Double priorityScore = 0.0;
 
     @Column(name = "created_at")

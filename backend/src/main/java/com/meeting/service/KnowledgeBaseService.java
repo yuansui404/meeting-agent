@@ -1,5 +1,6 @@
 package com.meeting.service;
 
+import com.meeting.common.BusinessException;
 import com.meeting.config.FileProperties;
 import com.meeting.document.service.DocumentTextExtractor;
 import com.meeting.meeting.model.entity.MeetingMinutes;
@@ -35,12 +36,12 @@ public class KnowledgeBaseService {
     public MeetingMinutes uploadDocument(MultipartFile file) throws Exception {
         String filename = file.getOriginalFilename();
         if (filename == null || filename.isBlank()) {
-            throw new IllegalArgumentException("文件名为空");
+            throw new BusinessException("文件名不能为空");
         }
 
         String ext = FileProcessingService.getExtension(filename);
         if (!FileProcessingService.isDocument(ext)) {
-            throw new IllegalArgumentException("仅支持文档格式 (txt, md, pdf, doc, docx 等)");
+            throw new BusinessException("仅支持文档格式 (txt, md, pdf, doc, docx 等)");
         }
 
         // Save file
@@ -55,7 +56,7 @@ public class KnowledgeBaseService {
         // Read content
         String content = FileProcessingService.readFileContent(filePath, ext);
         if (content == null || content.isBlank()) {
-            throw new IllegalArgumentException("无法提取文件内容，请确认文件格式正确");
+            throw new BusinessException("无法提取文件内容，请确认文件格式正确");
         }
 
         // Create entity
@@ -91,7 +92,7 @@ public class KnowledgeBaseService {
 
     public MeetingMinutes setStyleExemplar(Long id, boolean exemplar, String styleTags) {
         MeetingMinutes meeting = meetingRepository.findById(id)
-                .orElseThrow(() -> new IllegalArgumentException("会议不存在: " + id));
+                .orElseThrow(() -> BusinessException.notFound("会议不存在: " + id));
         meeting.setStyleExemplar(exemplar);
         if (styleTags != null) {
             meeting.setStyleTags(styleTags);

@@ -6,7 +6,6 @@ import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
-import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
 
@@ -19,7 +18,6 @@ public interface MeetingVectorRepository extends JpaRepository<MeetingVector, Lo
     List<Long> findMeetingIdsByContentLike(@Param("keyword") String keyword, @Param("limit") int limit);
 
     @Modifying
-    @Transactional
     @Query(value = "DELETE FROM meeting_vectors WHERE meeting_id = :meetingId", nativeQuery = true)
     void deleteByMeetingId(@Param("meetingId") Long meetingId);
 }

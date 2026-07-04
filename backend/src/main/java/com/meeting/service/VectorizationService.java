@@ -1,5 +1,6 @@
 package com.meeting.service;
 
+import com.meeting.common.BusinessException;
 import com.meeting.config.DeepSeekProperties;
 import com.meeting.config.FileProperties;
 import com.meeting.meeting.model.entity.MeetingMinutes;
@@ -121,11 +122,11 @@ public class VectorizationService {
     @Transactional
     public void vectorizeMeeting(Long meetingId) {
         MeetingMinutes meeting = meetingRepository.findById(meetingId)
-                .orElseThrow(() -> new IllegalArgumentException("Meeting not found: " + meetingId));
+                .orElseThrow(() -> BusinessException.notFound("会议不存在: " + meetingId));
 
         String transcription = meeting.getTranscription();
         if (transcription == null || transcription.isBlank()) {
-            throw new IllegalStateException("Meeting has no transcription: " + meetingId);
+            throw new BusinessException("会议无转写内容: " + meetingId);
         }
 
         // Remove old vectors for this meeting (JdbcTemplate, since Hibernate cannot handle VECTOR columns)

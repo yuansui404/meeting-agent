@@ -47,7 +47,7 @@ public class MeetingMinutes {
     @Column(name = "meeting_date")
     private LocalDateTime meetingDate;
 
-    @Column(name = "style_exemplar")
+    @Column(name = "style_exemplar", columnDefinition = "boolean default false")
     private Boolean styleExemplar = false;
 
     @Column(name = "style_tags", length = 500)
