@@ -2,10 +2,8 @@ package com.meeting.config;
 
 import lombok.Data;
 import org.springframework.boot.context.properties.ConfigurationProperties;
-import org.springframework.stereotype.Component;
 
 @Data
-@Component
 @ConfigurationProperties(prefix = "rag")
 public class RagProperties {
     private Chunk chunk = new Chunk();

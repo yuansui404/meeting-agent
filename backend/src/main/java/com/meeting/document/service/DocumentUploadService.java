@@ -1,10 +1,12 @@
 package com.meeting.document.service;
 
 import com.meeting.common.BusinessException;
+import com.meeting.config.FileProperties;
 import com.meeting.document.model.entity.DocumentEntity;
 import com.meeting.document.repository.DocumentRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
 
@@ -16,6 +18,8 @@ import java.time.LocalDate;
 import java.util.List;
 import java.util.UUID;
 import java.util.regex.Pattern;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 
 @Slf4j
 @Service
@@ -23,7 +27,60 @@ import java.util.regex.Pattern;
 public class DocumentUploadService {
 
     private final DocumentRepository documentRepository;
-    private final Path uploadDir = Paths.get(System.getProperty("user.home"), "meeting-agent", "rag-documents");
+    private final DocumentParserService documentParserService;
+    private final ChunkService chunkService;
+    private final FileProperties fileProperties;
+
+    private Path getUploadDir() {
+        return Paths.get(fileProperties.uploadDir(), "rag-documents");
+    }
+
+    /**
+     * 上传文件并触发异步处理。立即返回文档实体（status=UPLOADED）。
+     */
+    public DocumentEntity processUpload(MultipartFile file) {
+        DocumentEntity doc = upload(file);
+        processDocumentAsync(doc.getId());
+        return doc;
+    }
+
+    /**
+     * 异步执行：解析文本 → 分块向量化
+     */
+    @Async
+    public void processDocumentAsync(Long documentId) {
+        try {
+            DocumentEntity doc = documentRepository.findById(documentId)
+                    .orElseThrow(() -> BusinessException.notFound("文档不存在"));
+            String text = documentParserService.parse(doc.getFilePath());
+            chunkService.processDocument(documentId, text);
+        } catch (Exception e) {
+            log.error("Async document processing failed for id={}", documentId, e);
+        }
+    }
+
+    public Page<DocumentEntity> listAll(Pageable pageable) {
+        return documentRepository.findAllByOrderByCreatedAtDesc(pageable);
+    }
+
+    public DocumentEntity getById(Long id) {
+        return documentRepository.findById(id)
+                .orElseThrow(() -> BusinessException.notFound("文档不存在"));
+    }
+
+    public void delete(Long id) {
+        DocumentEntity doc = documentRepository.findById(id)
+                .orElseThrow(() -> BusinessException.notFound("文档不存在"));
+        documentRepository.deleteById(id);
+        // 删除物理文件
+        if (doc.getFilePath() != null) {
+            try {
+                Files.deleteIfExists(Path.of(doc.getFilePath()));
+            } catch (IOException e) {
+                log.warn("Failed to delete physical file: {}", doc.getFilePath(), e);
+            }
+        }
+    }
 
     public DocumentEntity upload(MultipartFile file) {
         String originalName = file.getOriginalFilename();
@@ -37,9 +94,10 @@ public class DocumentUploadService {
         }
 
         try {
-            Files.createDirectories(uploadDir);
+            Path dir = getUploadDir();
+            Files.createDirectories(dir);
             String storedName = UUID.randomUUID() + "." + ext;
-            Path targetPath = uploadDir.resolve(storedName);
+            Path targetPath = dir.resolve(storedName);
             file.transferTo(targetPath.toFile());
 
             DocumentEntity entity = new DocumentEntity();

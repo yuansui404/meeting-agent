@@ -1,5 +1,6 @@
 package com.meeting.retrieval.service;
 
+import com.meeting.document.model.VectorSearchHit;
 import com.meeting.document.model.entity.DocumentEntity;
 import com.meeting.document.repository.DocumentChunkRepository;
 import com.meeting.document.repository.DocumentRepository;
@@ -13,7 +14,6 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.stream.Collectors;
 
 @Slf4j
 @Service
@@ -30,27 +30,26 @@ public class VectorSearchService {
         String embeddingStr = floatArrayToString(queryVector);
         String vectorStr = "[" + embeddingStr + "]";
 
-        List<Map<String, Object>> rawResults = chunkRepository.vectorSearch(vectorStr, topK);
+        List<VectorSearchHit> hits = chunkRepository.vectorSearch(vectorStr, topK);
 
         List<ChunkResult> results = new ArrayList<>();
         Map<Long, DocumentEntity> docCache = new ConcurrentHashMap<>();
 
-        for (int i = 0; i < rawResults.size(); i++) {
-            Map<String, Object> row = rawResults.get(i);
-            Long docId = ((Number) row.get("document_id")).longValue();
+        for (int i = 0; i < hits.size(); i++) {
+            VectorSearchHit hit = hits.get(i);
 
-            DocumentEntity doc = docCache.computeIfAbsent(docId,
+            DocumentEntity doc = docCache.computeIfAbsent(hit.documentId(),
                     id -> documentRepository.findById(id).orElse(null));
 
             results.add(ChunkResult.builder()
-                    .chunkId(((Number) row.get("id")).longValue())
-                    .documentId(docId)
-                    .content((String) row.get("content"))
-                    .chunkIndex(((Number) row.get("chunk_index")).intValue())
-                    .speaker((String) row.get("speaker"))
-                    .sectionType((String) row.get("section_type"))
+                    .chunkId(hit.id())
+                    .documentId(hit.documentId())
+                    .content(hit.content())
+                    .chunkIndex(hit.chunkIndex())
+                    .speaker(hit.speaker())
+                    .sectionType(hit.sectionType())
                     .fileName(doc != null ? doc.getTitle() : "")
-                    .vectorScore(((Number) row.get("similarity")).doubleValue())
+                    .vectorScore(hit.similarityScore())
                     .vectorRank(i + 1)
                     .build());
         }

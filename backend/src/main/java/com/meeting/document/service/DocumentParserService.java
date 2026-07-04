@@ -1,7 +1,6 @@
 package com.meeting.document.service;
 
 import com.meeting.common.BusinessException;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
@@ -10,13 +9,10 @@ import java.nio.file.Path;
 
 @Slf4j
 @Service
-@RequiredArgsConstructor
 public class DocumentParserService {
 
     /**
      * 解析文档为纯文本
-     * V1 简化实现：直接读取本地文件的文本内容
-     * PDF/Doc 格式需要后续集成 PDFBox 等库
      */
     public String parse(String filePath) {
         try {
@@ -25,17 +21,11 @@ public class DocumentParserService {
                 throw BusinessException.notFound("文件不存在: " + filePath);
             }
             String ext = getExtension(filePath);
-            if ("txt".equals(ext) || "md".equals(ext)) {
-                return Files.readString(path);
-            }
-            // PDF/Doc 等格式暂不支持解析，返回空字符串
-            log.warn("Document parsing not yet implemented for format: {}, returning raw text attempt", ext);
-            try {
-                return Files.readString(path);
-            } catch (Exception e) {
-                log.warn("Cannot read file as text: {}", filePath);
-                return "";
-            }
+            return switch (ext) {
+                case "txt", "md" -> Files.readString(path);
+                case "pdf", "docx", "doc" -> DocumentTextExtractor.extractText(path, "." + ext);
+                default -> throw new BusinessException("不支持的文件格式: " + ext);
+            };
         } catch (BusinessException e) {
             throw e;
         } catch (Exception e) {

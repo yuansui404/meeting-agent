@@ -64,9 +64,8 @@ public class StructuralChunkStrategy implements ChunkStrategy {
 
                 if (!segments.isEmpty() && config.getOverlap() > 0) {
                     String prevContent = segments.get(segments.size() - 1).getContent();
-                    String overlap = prevContent.length() > config.getOverlap()
-                            ? prevContent.substring(prevContent.length() - config.getOverlap())
-                            : prevContent;
+                    int overlapStart = findOverlapStart(prevContent, config.getOverlap());
+                    String overlap = prevContent.substring(overlapStart);
                     current.append("[overlap]").append(overlap).append("\n");
                 }
             }
@@ -107,5 +106,21 @@ public class StructuralChunkStrategy implements ChunkStrategy {
             }
         }
         return near;
+    }
+
+    /**
+     * 从期望的 overlap 起始位置向前搜索，在句子边界处截断
+     */
+    private int findOverlapStart(String text, int overlapLength) {
+        int desired = text.length() - overlapLength;
+        if (desired <= 0) return 0;
+        int start = Math.max(0, desired);
+        for (int i = start; i < Math.min(text.length(), desired + 200); i++) {
+            char c = text.charAt(i);
+            if (c == '。' || c == '！' || c == '？' || c == '\n') {
+                return i + 1;
+            }
+        }
+        return start;
     }
 }

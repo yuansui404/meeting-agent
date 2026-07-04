@@ -1,7 +1,6 @@
 package com.meeting.document.service;
 
 import org.apache.poi.hwpf.HWPFDocument;
-import org.apache.poi.ooxml.POIXMLProperties;
 import org.apache.poi.xwpf.extractor.XWPFWordExtractor;
 import org.apache.poi.xwpf.usermodel.XWPFDocument;
 import org.apache.pdfbox.Loader;
@@ -40,7 +39,6 @@ public class DocumentTextExtractor {
         try (InputStream is = Files.newInputStream(filePath);
              XWPFDocument doc = new XWPFDocument(is);
              XWPFWordExtractor extractor = new XWPFWordExtractor(doc)) {
-            POIXMLProperties.CoreProperties props = doc.getProperties().getCoreProperties();
             return extractor.getText();
         }
     }

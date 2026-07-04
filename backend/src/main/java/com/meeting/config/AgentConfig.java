@@ -26,7 +26,7 @@ import java.util.Map;
 
 @Slf4j
 @Configuration
-@EnableConfigurationProperties({FileProperties.class, MimoProperties.class, EmbeddingProperties.class})
+@EnableConfigurationProperties({FileProperties.class, MimoProperties.class, EmbeddingProperties.class, RagProperties.class})
 public class AgentConfig {
 
     public static final String SYSTEM_PROMPT = """
