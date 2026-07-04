@@ -1,5 +1,6 @@
 package com.meeting.conversation.model.entity;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import jakarta.persistence.*;
 import lombok.Getter;
 import lombok.Setter;
@@ -15,8 +16,10 @@ public class DialogueMessageEntity {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    @Column(name = "dialogue_id", nullable = false)
-    private Long dialogueId;
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "dialogue_id", nullable = false)
+    @JsonIgnore
+    private SessionEntity session;
 
     @Column(nullable = false, length = 16)
     private String role;
@@ -35,6 +38,10 @@ public class DialogueMessageEntity {
 
     @Column(name = "created_at")
     private LocalDateTime createdAt;
+
+    public Long getDialogueId() {
+        return session != null ? session.getId() : null;
+    }
 
     @PrePersist
     protected void onCreate() {

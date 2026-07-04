@@ -3,7 +3,7 @@ package com.meeting.service;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.meeting.conversation.model.entity.DialogueMessageEntity;
-import com.meeting.conversation.repository.DialogueMessageRepository;
+import com.meeting.conversation.model.entity.SessionEntity;
 import com.meeting.conversation.repository.SessionRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -23,7 +23,6 @@ import java.util.Map;
 @RequiredArgsConstructor
 public class DialoguePersistenceService {
 
-    private final DialogueMessageRepository dialogueMessageRepository;
     private final SessionRepository sessionRepository;
     private final ObjectMapper objectMapper;
     private final TransactionTemplate txTemplate;
@@ -36,30 +35,31 @@ public class DialoguePersistenceService {
         try {
             txTemplate.executeWithoutResult(status -> {
                 try {
+                    SessionEntity session = sessionRepository.findById(dialogueId)
+                            .orElseThrow(() -> new IllegalArgumentException("Session not found: " + dialogueId));
+
                     String filesJson = messageFiles != null && !messageFiles.isEmpty()
                             ? objectMapper.writeValueAsString(messageFiles) : null;
 
                     DialogueMessageEntity dmUser = new DialogueMessageEntity();
-                    dmUser.setDialogueId(dialogueId);
+                    dmUser.setSession(session);
                     dmUser.setRole("user");
                     dmUser.setContent(userMessage);
                     dmUser.setMessageType("text");
                     dmUser.setFiles(filesJson);
-                    dialogueMessageRepository.save(dmUser);
+                    session.addMessage(dmUser);
 
                     if (!assistantResponse.isEmpty()) {
                         DialogueMessageEntity asstMsg = new DialogueMessageEntity();
-                        asstMsg.setDialogueId(dialogueId);
+                        asstMsg.setSession(session);
                         asstMsg.setRole("assistant");
                         asstMsg.setContent(assistantResponse);
                         asstMsg.setMessageType("text");
-                        dialogueMessageRepository.save(asstMsg);
+                        session.addMessage(asstMsg);
                     }
 
-                    sessionRepository.findById(dialogueId).ifPresent(session -> {
-                        session.setUpdatedAt(LocalDateTime.now());
-                        sessionRepository.save(session);
-                    });
+                    session.setUpdatedAt(LocalDateTime.now());
+                    sessionRepository.save(session);
                 } catch (JsonProcessingException e) {
                     throw new RuntimeException(e);
                 }

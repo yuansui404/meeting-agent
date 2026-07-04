@@ -1,9 +1,12 @@
 package com.meeting.conversation.model.entity;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import jakarta.persistence.*;
 import lombok.Getter;
 import lombok.Setter;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.List;
 
 @Getter
 @Setter
@@ -15,8 +18,10 @@ public class RewriteResultEntity {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    @Column(name = "dialogue_id", nullable = false)
-    private Long dialogueId;
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "dialogue_id", nullable = false)
+    @JsonIgnore
+    private SessionEntity session;
 
     @Column(name = "source_file_ids", nullable = false, length = 500)
     private String sourceFileIds;
@@ -35,6 +40,13 @@ public class RewriteResultEntity {
 
     @Column(name = "created_at")
     private LocalDateTime createdAt;
+
+    @OneToMany(mappedBy = "rewriteResult", cascade = CascadeType.ALL, orphanRemoval = true)
+    private List<RewriteFeedbackEntity> feedbacks = new ArrayList<>();
+
+    public Long getDialogueId() {
+        return session != null ? session.getId() : null;
+    }
 
     @PrePersist
     protected void onCreate() {

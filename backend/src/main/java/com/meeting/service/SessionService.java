@@ -46,7 +46,7 @@ public class SessionService {
         SessionEntity entity = sessionRepository.findById(id)
                 .orElseThrow(() -> new IllegalArgumentException("Session not found: " + id));
 
-        List<Map<String, Object>> messages = queryMessages(id);
+        List<Map<String, Object>> messages = queryMessages(entity);
 
         Map<String, Object> dialogue = new HashMap<>();
         dialogue.put("id", entity.getId());
@@ -65,13 +65,13 @@ public class SessionService {
     /**
      * Build messages list from dialogue_messages table.
      */
-    private List<Map<String, Object>> queryMessages(Long dialogueId) {
-        List<DialogueMessageEntity> entities = dialogueMessageRepository.findByDialogueIdOrderById(dialogueId);
+    private List<Map<String, Object>> queryMessages(SessionEntity session) {
+        List<DialogueMessageEntity> entities = dialogueMessageRepository.findBySessionOrderById(session);
         List<Map<String, Object>> messages = new ArrayList<>();
         for (DialogueMessageEntity msg : entities) {
             Map<String, Object> m = new HashMap<>();
             m.put("id", msg.getId());
-            m.put("dialogueId", dialogueId);
+            m.put("dialogueId", session.getId());
             m.put("role", msg.getRole() != null ? msg.getRole().toLowerCase() : "unknown");
             m.put("content", msg.getContent() != null ? msg.getContent() : "");
             m.put("messageType", msg.getMessageType() != null ? msg.getMessageType() : "text");
@@ -126,7 +126,6 @@ public class SessionService {
 
     @Transactional
     public void deleteSession(Long id) {
-        dialogueMessageRepository.deleteByDialogueId(id);
         sessionRepository.deleteById(id);
     }
 
@@ -148,14 +147,12 @@ public class SessionService {
         addMessageToSession(entity, role, content, messageType, metadata);
         sessionRepository.save(entity);
 
-        // Also write to dialogue_messages
         DialogueMessageEntity dmsg = new DialogueMessageEntity();
-        dmsg.setDialogueId(sessionId);
         dmsg.setRole(role);
         dmsg.setContent(content);
         dmsg.setMessageType(messageType);
         dmsg.setMetadata(metadata);
-        dialogueMessageRepository.save(dmsg);
+        entity.addMessage(dmsg);
     }
 
     private void addMessageToSession(SessionEntity entity, String role, String content,
@@ -184,8 +181,10 @@ public class SessionService {
      * Extract all files from dialogue_messages table.
      */
     public List<Map<String, Object>> extractFilesFromState(Long sessionId) {
+        SessionEntity session = sessionRepository.findById(sessionId)
+                .orElseThrow(() -> new IllegalArgumentException("Session not found: " + sessionId));
         List<DialogueMessageEntity> msgs = dialogueMessageRepository
-                .findByDialogueIdAndRoleAndFilesIsNotNull(sessionId, "user");
+                .findBySessionAndRoleAndFilesIsNotNull(session, "user");
         List<Map<String, Object>> files = new ArrayList<>();
         Set<String> seenIds = new HashSet<>();
 
@@ -216,8 +215,10 @@ public class SessionService {
      * Find a file path in dialogue_messages by fileId.
      */
     public String findFilePathInState(Long sessionId, String fileId) {
+        SessionEntity session = sessionRepository.findById(sessionId)
+                .orElseThrow(() -> new IllegalArgumentException("Session not found: " + sessionId));
         List<DialogueMessageEntity> msgs = dialogueMessageRepository
-                .findByDialogueIdAndRoleAndFilesIsNotNull(sessionId, "user");
+                .findBySessionAndRoleAndFilesIsNotNull(session, "user");
         for (DialogueMessageEntity msg : msgs) {
             List<Map<String, Object>> fileList = parseFilesJson(msg.getFiles());
             if (fileList == null) continue;

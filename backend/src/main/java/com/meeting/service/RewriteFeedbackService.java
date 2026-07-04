@@ -30,16 +30,16 @@ public class RewriteFeedbackService {
             throw new IllegalArgumentException("action must be 'like' or 'dislike'");
         }
 
-        // 1. Save feedback
+        // 1. Look up referenced source documents
+        RewriteResultEntity result = rewriteResultRepository.findById(rewriteResultId)
+                .orElseThrow(() -> new IllegalArgumentException("RewriteResult not found: " + rewriteResultId));
+
+        // 2. Save feedback (linked via relationship)
         RewriteFeedbackEntity feedback = new RewriteFeedbackEntity();
-        feedback.setRewriteResultId(rewriteResultId);
+        feedback.setRewriteResult(result);
         feedback.setParagraphIndex(paragraphIndex);
         feedback.setAction(action);
         feedbackRepository.save(feedback);
-
-        // 2. Look up referenced source documents
-        RewriteResultEntity result = rewriteResultRepository.findById(rewriteResultId)
-                .orElseThrow(() -> new IllegalArgumentException("RewriteResult not found: " + rewriteResultId));
 
         String referenceIds = result.getReferenceIds();
         if (referenceIds == null || referenceIds.isBlank()) {

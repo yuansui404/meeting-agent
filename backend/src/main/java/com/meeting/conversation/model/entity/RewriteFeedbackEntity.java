@@ -1,5 +1,6 @@
 package com.meeting.conversation.model.entity;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import jakarta.persistence.*;
 import lombok.Getter;
 import lombok.Setter;
@@ -15,8 +16,10 @@ public class RewriteFeedbackEntity {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    @Column(name = "rewrite_result_id", nullable = false)
-    private Long rewriteResultId;
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "rewrite_result_id", nullable = false)
+    @JsonIgnore
+    private RewriteResultEntity rewriteResult;
 
     @Column(name = "paragraph_index", nullable = false)
     private Integer paragraphIndex;

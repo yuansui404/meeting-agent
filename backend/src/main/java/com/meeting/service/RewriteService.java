@@ -3,9 +3,11 @@ package com.meeting.service;
 import com.meeting.config.DeepSeekProperties;
 import com.meeting.config.FileProperties;
 import com.meeting.conversation.model.entity.RewriteResultEntity;
+import com.meeting.conversation.model.entity.SessionEntity;
+import com.meeting.conversation.repository.RewriteResultRepository;
+import com.meeting.conversation.repository.SessionRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import com.meeting.conversation.repository.RewriteResultRepository;
 import io.agentscope.core.formatter.openai.dto.OpenAIMessage;
 import io.agentscope.core.formatter.openai.dto.OpenAIRequest;
 import io.agentscope.core.formatter.openai.dto.OpenAIResponse;
@@ -31,6 +33,7 @@ public class RewriteService {
     private static final int MAX_TOKENS = 8000;
 
     private final RewriteResultRepository rewriteResultRepository;
+    private final SessionRepository sessionRepository;
     private final SessionService sessionService;
     private final StyleLearningService styleLearningService;
     @Qualifier("llmTaskExecutor")
@@ -172,11 +175,14 @@ public class RewriteService {
 
     private RewriteResultEntity saveRewriteResult(Long dialogueId, List<Long> sourceFileIds,
                                              List<Long> referenceIds, String content) {
-        List<RewriteResultEntity> previous = rewriteResultRepository.findByDialogueIdOrderByVersionDesc(dialogueId);
+        SessionEntity session = sessionRepository.findById(dialogueId)
+                .orElseThrow(() -> new IllegalArgumentException("Session not found: " + dialogueId));
+
+        List<RewriteResultEntity> previous = rewriteResultRepository.findBySessionOrderByVersionDesc(session);
         int nextVersion = previous.isEmpty() ? 1 : previous.get(0).getVersion() + 1;
 
         RewriteResultEntity result = new RewriteResultEntity();
-        result.setDialogueId(dialogueId);
+        result.setSession(session);
         result.setSourceFileIds(toJsonIdList(sourceFileIds));
         result.setReferenceIds(referenceIds != null && !referenceIds.isEmpty() ? toJsonIdList(referenceIds) : null);
         result.setContent(content);
@@ -191,7 +197,9 @@ public class RewriteService {
     }
 
     public List<RewriteResultEntity> getRewriteHistory(Long dialogueId) {
-        return rewriteResultRepository.findByDialogueIdOrderByVersionDesc(dialogueId);
+        SessionEntity session = sessionRepository.findById(dialogueId)
+                .orElseThrow(() -> new IllegalArgumentException("Session not found: " + dialogueId));
+        return rewriteResultRepository.findBySessionOrderByVersionDesc(session);
     }
 
     public Optional<RewriteResultEntity> getRewriteResult(Long resultId) {

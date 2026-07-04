@@ -4,6 +4,8 @@ import jakarta.persistence.*;
 import lombok.Getter;
 import lombok.Setter;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.List;
 
 @Getter
 @Setter
@@ -42,6 +44,12 @@ public class SessionEntity {
     @Column(name = "updated_at")
     private LocalDateTime updatedAt;
 
+    @OneToMany(mappedBy = "session", cascade = CascadeType.ALL, orphanRemoval = true)
+    private List<DialogueMessageEntity> messages = new ArrayList<>();
+
+    @OneToMany(mappedBy = "session", cascade = CascadeType.ALL, orphanRemoval = true)
+    private List<RewriteResultEntity> rewriteResults = new ArrayList<>();
+
     @PrePersist
     protected void onCreate() {
         if (title == null) title = "新对话";
@@ -54,5 +62,10 @@ public class SessionEntity {
     @PreUpdate
     protected void onUpdate() {
         updatedAt = LocalDateTime.now();
+    }
+
+    public void addMessage(DialogueMessageEntity message) {
+        messages.add(message);
+        message.setSession(this);
     }
 }

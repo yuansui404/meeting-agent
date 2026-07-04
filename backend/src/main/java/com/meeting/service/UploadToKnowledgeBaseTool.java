@@ -215,8 +215,11 @@ public class UploadToKnowledgeBaseTool implements AgentTool {
      */
     private String extractLastUserMessage(Long dialogueId) {
         try {
+            SessionEntity session = sessionRepository.findById(dialogueId)
+                    .orElse(null);
+            if (session == null) return null;
             List<DialogueMessageEntity> msgs = dialogueMessageRepository
-                    .findByDialogueIdOrderById(dialogueId);
+                    .findBySessionOrderById(session);
             for (int i = msgs.size() - 1; i >= 0; i--) {
                 if ("user".equals(msgs.get(i).getRole())) {
                     String content = msgs.get(i).getContent();
