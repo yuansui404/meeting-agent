@@ -29,9 +29,6 @@ public class SessionEntity {
     @Column(nullable = false)
     private boolean imported;
 
-    @Column(name = "message_count")
-    private Integer messageCount;
-
     @Column(name = "context_summary", columnDefinition = "TEXT")
     private String contextSummary;
 
@@ -54,7 +51,6 @@ public class SessionEntity {
     protected void onCreate() {
         if (title == null) title = "新对话";
         if (status == null) status = "active";
-        if (messageCount == null) messageCount = 0;
         if (createdAt == null) createdAt = LocalDateTime.now();
         if (updatedAt == null) updatedAt = LocalDateTime.now();
     }

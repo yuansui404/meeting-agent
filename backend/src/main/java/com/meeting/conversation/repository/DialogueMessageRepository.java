@@ -11,4 +11,6 @@ public interface DialogueMessageRepository extends JpaRepository<DialogueMessage
     List<DialogueMessageEntity> findBySessionOrderById(SessionEntity session);
 
     List<DialogueMessageEntity> findBySessionAndRoleAndFilesIsNotNull(SessionEntity session, String role);
+
+    long countBySession(SessionEntity session);
 }

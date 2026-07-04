@@ -32,8 +32,6 @@ public class PgAgentStateStore implements AgentStateStore {
                     return e;
                 });
         entity.setStateJson(json);
-        entity.setMessageCount(state instanceof AgentState as
-                ? as.getContext().size() : 0);
         entity.setUpdatedAt(java.time.LocalDateTime.now());
         sessionRepository.save(entity);
     }

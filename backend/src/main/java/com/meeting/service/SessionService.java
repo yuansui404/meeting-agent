@@ -30,7 +30,6 @@ public class SessionService {
         SessionEntity entity = new SessionEntity();
         entity.setTitle(title != null ? title : "新对话");
         entity.setStatus("active");
-        entity.setMessageCount(0);
         entity.setCreatedAt(LocalDateTime.now());
         entity.setUpdatedAt(LocalDateTime.now());
         entity = sessionRepository.save(entity);
@@ -152,7 +151,6 @@ public class SessionService {
                     : AgentState.builder().sessionId(entity.getSessionId()).build();
             state.contextMutable().add(buildMsg(role, content, messageType, metadata));
             entity.setStateJson(state.toJson());
-            entity.setMessageCount(state.getContext().size());
         } catch (Exception e) {
             log.warn("Failed to add message to AgentState for session {}: {}", entity.getId(), e.getMessage());
         }
