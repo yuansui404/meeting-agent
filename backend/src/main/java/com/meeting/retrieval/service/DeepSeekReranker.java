@@ -111,18 +111,18 @@ public class DeepSeekReranker implements Reranker {
             // If parsing failed or wrong count, default to 5
             if (scores.isEmpty()) {
                 log.warn("DeepSeekReranker: could not parse scores from response: {}", content);
-                return batch.stream().map(c -> 5).collect(Collectors.toList());
+                return batch.stream().map(c -> 0).collect(Collectors.toList());
             }
 
-            // If fewer scores than batch, pad with 5
+            // If fewer scores than batch, pad with 0
             while (scores.size() < batch.size()) {
-                scores.add(5);
+                scores.add(0);
             }
 
             return scores.subList(0, batch.size());
         } catch (Exception e) {
             log.warn("DeepSeekReranker batch scoring failed: {}", e.getMessage());
-            return batch.stream().map(c -> 5).collect(Collectors.toList());
+            return batch.stream().map(c -> 0).collect(Collectors.toList());
         }
     }
 }

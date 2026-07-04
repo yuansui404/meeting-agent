@@ -14,6 +14,8 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 @Slf4j
 @Service
@@ -32,14 +34,17 @@ public class VectorSearchService {
 
         List<VectorSearchHit> hits = chunkRepository.vectorSearch(vectorStr, topK);
 
-        List<ChunkResult> results = new ArrayList<>();
+        // Batch fetch all documents to avoid N+1 queries
+        Set<Long> docIds = hits.stream().map(VectorSearchHit::documentId).collect(Collectors.toSet());
         Map<Long, DocumentEntity> docCache = new HashMap<>();
+        if (!docIds.isEmpty()) {
+            documentRepository.findAllById(docIds).forEach(doc -> docCache.put(doc.getId(), doc));
+        }
 
+        List<ChunkResult> results = new ArrayList<>();
         for (int i = 0; i < hits.size(); i++) {
             VectorSearchHit hit = hits.get(i);
-
-            DocumentEntity doc = docCache.computeIfAbsent(hit.documentId(),
-                    id -> documentRepository.findById(id).orElse(null));
+            DocumentEntity doc = docCache.get(hit.documentId());
 
             results.add(ChunkResult.builder()
                     .chunkId(hit.id())

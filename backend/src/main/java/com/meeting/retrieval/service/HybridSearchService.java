@@ -62,17 +62,19 @@ public class HybridSearchService {
             boolean retried = false;
             String actualQuery = plan.rewrittenQuery();
 
-            // Step 1: Execute searches (supports DECOMPOSE with multiple sub-queries)
+            // Step 1: Execute searches (all sub-queries in parallel)
+            List<CompletableFuture<List<ChunkResult>>> vectorFutures = new ArrayList<>();
+            List<CompletableFuture<List<ChunkResult>>> ftsFutures = new ArrayList<>();
+            for (String subQuery : plan.subQueries()) {
+                vectorFutures.add(CompletableFuture.supplyAsync(() ->
+                        vectorSearchService.search(subQuery, ragProperties.getRetrieval().getVectorTopk()), taskExecutor));
+                ftsFutures.add(CompletableFuture.supplyAsync(() ->
+                        fullTextSearchService.search(subQuery, ragProperties.getRetrieval().getFtsTopk()), taskExecutor));
+            }
             List<ChunkResult> vectorResults = new ArrayList<>();
             List<ChunkResult> ftsResults = new ArrayList<>();
-            for (String subQuery : plan.subQueries()) {
-                CompletableFuture<List<ChunkResult>> vectorF = CompletableFuture.supplyAsync(() ->
-                        vectorSearchService.search(subQuery, ragProperties.getRetrieval().getVectorTopk()), taskExecutor);
-                CompletableFuture<List<ChunkResult>> ftsF = CompletableFuture.supplyAsync(() ->
-                        fullTextSearchService.search(subQuery, ragProperties.getRetrieval().getFtsTopk()), taskExecutor);
-                vectorResults.addAll(vectorF.join());
-                ftsResults.addAll(ftsF.join());
-            }
+            for (CompletableFuture<List<ChunkResult>> f : vectorFutures) vectorResults.addAll(f.join());
+            for (CompletableFuture<List<ChunkResult>> f : ftsFutures) ftsResults.addAll(f.join());
 
             // Step 2: RRF merge
             List<ChunkResult> merged = rrfMerger.merge(vectorResults, ftsResults, ragProperties.getRetrieval().getRrfK());
@@ -130,9 +132,11 @@ public class HybridSearchService {
     }
 
     private List<ChunkResult> applyTimeDecay(List<ChunkResult> chunks) {
-        if (!ragProperties.getTimeDecay().isEnabled() || chunks.isEmpty()) {
+        if (chunks.isEmpty()) return chunks;
+
+        if (!ragProperties.getTimeDecay().isEnabled()) {
             for (ChunkResult r : chunks) {
-                r.setFinalScore(r.getFtsScore() > 0 ? r.getRrfScore() : r.getVectorScore());
+                r.setFinalScore(r.getRrfScore());
             }
             return chunks;
         }
@@ -149,10 +153,9 @@ public class HybridSearchService {
 
         var config = ragProperties.getTimeDecay();
         for (ChunkResult r : chunks) {
-            double baseScore = r.getFtsScore() > 0 ? r.getRrfScore() : r.getVectorScore();
             DocumentEntity doc = docMap.get(r.getDocumentId());
             LocalDate meetingDate = doc != null ? doc.getMeetingDate() : null;
-            r.setFinalScore(timeDecayScorer.apply(baseScore, meetingDate,
+            r.setFinalScore(timeDecayScorer.apply(r.getRrfScore(), meetingDate,
                     new TimeDecayScorer.TimeDecayConfig(
                             true, config.getRecentDays(), config.getRecentWeight(),
                             config.getNormalWeight(), config.getOldWeight(), config.getArchiveWeight()
