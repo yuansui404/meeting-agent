@@ -53,18 +53,18 @@ public class ListMeetingsTool implements AgentTool {
 
     @Override
     public Mono<ToolResultBlock> callAsync(ToolCallParam param) {
-        Map<String, Object> input = param.getInput();
+        return Mono.fromCallable(() -> {
+            Map<String, Object> input = param.getInput();
 
-        int page = 0;
-        if (input.get("page") instanceof Number n) {
-            page = Math.max(0, n.intValue());
-        }
-        int size = 10;
-        if (input.get("size") instanceof Number n) {
-            size = Math.max(1, Math.min(50, n.intValue()));
-        }
+            int page = 0;
+            if (input.get("page") instanceof Number n) {
+                page = Math.max(0, n.intValue());
+            }
+            int size = 10;
+            if (input.get("size") instanceof Number n) {
+                size = Math.max(1, Math.min(50, n.intValue()));
+            }
 
-        try {
             Page<MeetingMinutes> meetingPage = meetingRepository.findAllByOrderByCreatedAtDesc(PageRequest.of(page, size));
             List<MeetingMinutes> meetings = meetingPage.getContent();
 
@@ -84,11 +84,8 @@ public class ListMeetingsTool implements AgentTool {
             result.put("page", meetingPage.getNumber());
             result.put("items", items);
 
-            return Mono.just(ToolResultBlock.text(JsonUtil.toJson(result)));
-        } catch (Exception e) {
-            log.warn("List meetings failed", e);
-            return Mono.just(ToolResultBlock.error("获取会议列表异常，请稍后重试"));
-        }
+            return ToolResultBlock.text(JsonUtil.toJson(result));
+        });
     }
 
 }

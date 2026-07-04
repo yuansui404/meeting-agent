@@ -8,9 +8,12 @@ import com.meeting.document.repository.DocumentRepository;
 import com.meeting.retrieval.algorithm.*;
 import com.meeting.retrieval.model.ChunkResult;
 import com.meeting.retrieval.model.EvidenceLevel;
+import com.meeting.common.TtlMdcAdapter;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.slf4j.MDC;
+import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.core.task.TaskExecutor;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDate;
@@ -30,6 +33,8 @@ public class HybridSearchService {
     private final RagProperties ragProperties;
     private final DocumentChunkRepository chunkRepository;
     private final DocumentRepository documentRepository;
+    @Qualifier("llmTaskExecutor")
+    private final TaskExecutor taskExecutor;
 
     public record SearchResult(
             List<ChunkResult> chunks,
@@ -40,86 +45,87 @@ public class HybridSearchService {
     ) {}
 
     public SearchResult search(String query, String timeRange) {
-        MDC.put("layer", "RETRIEVAL");
+        TtlMdcAdapter.setLayer("RETRIEVAL");
+        try {
+            QueryPlanningService.QueryPlan plan = queryPlanningService.plan(query);
+            log.info("Query plan: strategy={}, rewritten={}", plan.strategy(), plan.rewrittenQuery());
 
-        QueryPlanningService.QueryPlan plan = queryPlanningService.plan(query);
-        log.info("Query plan: strategy={}, rewritten={}", plan.strategy(), plan.rewrittenQuery());
+            String actualQuery = plan.rewrittenQuery();
+            String searchQuery = actualQuery;
+            int vectorTopK = ragProperties.getRetrieval().getVectorTopk();
+            int ftsTopK = ragProperties.getRetrieval().getFtsTopk();
+            boolean retried = false;
 
-        String actualQuery = plan.rewrittenQuery();
-        String searchQuery = actualQuery;
-        int vectorTopK = ragProperties.getRetrieval().getVectorTopk();
-        int ftsTopK = ragProperties.getRetrieval().getFtsTopk();
-        boolean retried = false;
+            CompletableFuture<List<ChunkResult>> vectorFuture = CompletableFuture.supplyAsync(() ->
+                    vectorSearchService.search(searchQuery, vectorTopK), taskExecutor);
+            CompletableFuture<List<ChunkResult>> ftsFuture = CompletableFuture.supplyAsync(() ->
+                    fullTextSearchService.search(searchQuery, ftsTopK), taskExecutor);
+            List<ChunkResult> vectorResults = vectorFuture.join();
+            List<ChunkResult> ftsResults = ftsFuture.join();
 
-        CompletableFuture<List<ChunkResult>> vectorFuture = CompletableFuture.supplyAsync(() ->
-                vectorSearchService.search(searchQuery, vectorTopK));
-        CompletableFuture<List<ChunkResult>> ftsFuture = CompletableFuture.supplyAsync(() ->
-                fullTextSearchService.search(searchQuery, ftsTopK));
-        List<ChunkResult> vectorResults = vectorFuture.join();
-        List<ChunkResult> ftsResults = ftsFuture.join();
+            List<ChunkResult> merged = RrfMerger.merge(vectorResults, ftsResults, ragProperties.getRetrieval().getRrfK());
 
-        List<ChunkResult> merged = RrfMerger.merge(vectorResults, ftsResults, ragProperties.getRetrieval().getRrfK());
+            if (ragProperties.getRetrieval().isRerankEnabled()) {
+                merged = reranker.reRank(actualQuery, merged, ragProperties.getRetrieval().getRerankTopk());
+            }
 
-        if (ragProperties.getRetrieval().isRerankEnabled()) {
-            merged = reranker.reRank(actualQuery, merged, ragProperties.getRetrieval().getRerankTopk());
-        }
+            var timeDecayConfig = ragProperties.getTimeDecay();
+            for (ChunkResult r : merged) {
+                double baseScore = (r.getFtsScore() > 0)
+                        ? r.getRrfScore()
+                        : r.getVectorScore();
 
-        var timeDecayConfig = ragProperties.getTimeDecay();
-        for (ChunkResult r : merged) {
-            // When FTS doesn't contribute, use vector score directly (meaningful similarity)
-            // When FTS contributes, use combined RRF score
-            double baseScore = (r.getFtsScore() > 0)
-                    ? r.getRrfScore()
-                    : r.getVectorScore();
-
-            if (ragProperties.getTimeDecay().isEnabled() && r.getDocumentId() != null) {
-                try {
-                    DocumentEntity doc = documentRepository.findById(r.getDocumentId()).orElse(null);
-                    LocalDate meetingDate = doc != null ? doc.getMeetingDate() : null;
-                    r.setFinalScore(TimeDecayScorer.apply(baseScore, meetingDate,
-                            new TimeDecayScorer.TimeDecayConfig(
-                                    true, timeDecayConfig.getRecentDays(), timeDecayConfig.getRecentWeight(),
-                                    timeDecayConfig.getNormalWeight(), timeDecayConfig.getOldWeight(), timeDecayConfig.getArchiveWeight()
-                            )));
-                } catch (Exception e) {
-                    log.warn("Time decay calculation failed for chunk {}", r.getChunkId(), e);
+                if (ragProperties.getTimeDecay().isEnabled() && r.getDocumentId() != null) {
+                    try {
+                        DocumentEntity doc = documentRepository.findById(r.getDocumentId()).orElse(null);
+                        LocalDate meetingDate = doc != null ? doc.getMeetingDate() : null;
+                        r.setFinalScore(TimeDecayScorer.apply(baseScore, meetingDate,
+                                new TimeDecayScorer.TimeDecayConfig(
+                                        true, timeDecayConfig.getRecentDays(), timeDecayConfig.getRecentWeight(),
+                                        timeDecayConfig.getNormalWeight(), timeDecayConfig.getOldWeight(), timeDecayConfig.getArchiveWeight()
+                                )));
+                    } catch (Exception e) {
+                        log.warn("Time decay calculation failed for chunk {}", r.getChunkId(), e);
+                        r.setFinalScore(baseScore);
+                    }
+                } else {
                     r.setFinalScore(baseScore);
                 }
-            } else {
-                r.setFinalScore(baseScore);
             }
-        }
 
-        merged = MmrDeduplicator.deduplicate(merged, 5);
+            merged = MmrDeduplicator.deduplicate(merged, 5);
 
-        double topScore = merged.isEmpty() ? 0.0 : merged.get(0).getFinalScore();
-        if (topScore < ragProperties.getEvidence().getThreshold()) {
-            log.info("Low confidence, triggering retry");
-            String retryQuery = generateRetryQuery(actualQuery);
-            CompletableFuture<List<ChunkResult>> retryVectorF = CompletableFuture.supplyAsync(() ->
-                    vectorSearchService.search(retryQuery, ragProperties.getRetrieval().getVectorTopk()));
-            CompletableFuture<List<ChunkResult>> retryFtsF = CompletableFuture.supplyAsync(() ->
-                    fullTextSearchService.search(retryQuery, ragProperties.getRetrieval().getFtsTopk()));
-            List<ChunkResult> retryVector = retryVectorF.join();
-            List<ChunkResult> retryFts = retryFtsF.join();
-            List<ChunkResult> retryMerged = RrfMerger.merge(retryVector, retryFts, ragProperties.getRetrieval().getRrfK());
-            double retryTopScore = retryMerged.isEmpty() ? 0.0 : retryMerged.get(0).getRrfScore();
-            if (retryTopScore > topScore) {
-                merged = retryMerged;
+            double topScore = merged.isEmpty() ? 0.0 : merged.get(0).getFinalScore();
+            if (topScore < ragProperties.getEvidence().getThreshold()) {
+                log.info("Low confidence, triggering retry");
+                String retryQuery = generateRetryQuery(actualQuery);
+                CompletableFuture<List<ChunkResult>> retryVectorF = CompletableFuture.supplyAsync(() ->
+                        vectorSearchService.search(retryQuery, ragProperties.getRetrieval().getVectorTopk()), taskExecutor);
+                CompletableFuture<List<ChunkResult>> retryFtsF = CompletableFuture.supplyAsync(() ->
+                        fullTextSearchService.search(retryQuery, ragProperties.getRetrieval().getFtsTopk()), taskExecutor);
+                List<ChunkResult> retryVector = retryVectorF.join();
+                List<ChunkResult> retryFts = retryFtsF.join();
+                List<ChunkResult> retryMerged = RrfMerger.merge(retryVector, retryFts, ragProperties.getRetrieval().getRrfK());
+                double retryTopScore = retryMerged.isEmpty() ? 0.0 : retryMerged.get(0).getRrfScore();
+                if (retryTopScore > topScore) {
+                    merged = retryMerged;
+                }
+                retried = true;
+                actualQuery = retryQuery;
             }
-            retried = true;
-            actualQuery = retryQuery;
+
+            merged = expandNeighbors(merged);
+
+            EvidenceLevel evidenceLevel = EvidenceEvaluator.evaluate(merged, vectorResults.size(), ftsResults.size());
+            List<Map<String, String>> citations = CitationBuilder.build(merged);
+
+            log.info("Hybrid search complete: query={}, chunks={}, evidence={}",
+                    actualQuery, merged.size(), evidenceLevel);
+
+            return new SearchResult(merged, evidenceLevel.name(), citations, actualQuery, retried);
+        } finally {
+            TtlMdcAdapter.remove("layer");
         }
-
-        merged = expandNeighbors(merged);
-
-        EvidenceLevel evidenceLevel = EvidenceEvaluator.evaluate(merged, vectorResults.size(), ftsResults.size());
-        List<Map<String, String>> citations = CitationBuilder.build(merged);
-
-        log.info("Hybrid search complete: query={}, chunks={}, evidence={}",
-                actualQuery, merged.size(), evidenceLevel);
-
-        return new SearchResult(merged, evidenceLevel.name(), citations, actualQuery, retried);
     }
 
     String generateRetryQuery(String originalQuery) {

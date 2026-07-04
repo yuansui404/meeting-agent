@@ -1,6 +1,6 @@
 package com.meeting.controller;
 
-import com.meeting.service.SearchService;
+import com.meeting.retrieval.service.HybridSearchService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -12,17 +12,19 @@ import java.util.Map;
 @RequiredArgsConstructor
 public class SearchController {
 
-    private final SearchService searchService;
+    private final HybridSearchService hybridSearchService;
 
     @GetMapping("/search")
     public ResponseEntity<?> search(
             @RequestParam String query,
-            @RequestParam(defaultValue = "false") boolean kbOnly) {
+            @RequestParam(required = false) String timeRange) {
 
-        var results = searchService.search(query, 20, kbOnly);
+        var result = hybridSearchService.search(query, timeRange);
         return ResponseEntity.ok(Map.of(
                 "query", query,
-                "results", results
+                "evidenceLevel", result.evidenceLevel(),
+                "results", result.chunks(),
+                "citations", result.citations()
         ));
     }
 }

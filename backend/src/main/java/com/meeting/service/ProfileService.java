@@ -6,9 +6,13 @@ import org.springframework.stereotype.Service;
 
 import jakarta.annotation.PostConstruct;
 import java.io.IOException;
+import java.nio.ByteBuffer;
+import java.nio.channels.FileChannel;
+import java.nio.channels.FileLock;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
 import java.util.List;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
@@ -78,6 +82,38 @@ public class ProfileService {
             log.info("Saved profile file: {}", filename);
         } catch (IOException e) {
             throw new RuntimeException("Failed to save profile file: " + filename, e);
+        }
+    }
+
+    /** Append content to an existing file, or create it if absent. File-lock protected. */
+    public void appendFile(String filename, String content) {
+        Path file = profileDir.resolve(filename);
+        if (!file.startsWith(profileDir)) {
+            throw new IllegalArgumentException("Invalid filename: " + filename);
+        }
+        try {
+            Files.createDirectories(profileDir);
+            try (FileChannel ch = FileChannel.open(file,
+                    StandardOpenOption.READ, StandardOpenOption.WRITE, StandardOpenOption.CREATE);
+                 FileLock lock = ch.lock()) {
+                String existing = "";
+                long size = ch.size();
+                if (size > 0) {
+                    ByteBuffer buf = ByteBuffer.allocate((int) size);
+                    ch.read(buf);
+                    buf.flip();
+                    existing = StandardCharsets.UTF_8.decode(buf).toString();
+                }
+                String updated = existing.isBlank()
+                        ? content.trim()
+                        : existing.trim() + "\n\n" + content.trim();
+                ch.truncate(0);
+                ch.position(0);
+                ch.write(StandardCharsets.UTF_8.encode(updated));
+            }
+            log.info("Appended to profile file: {}", filename);
+        } catch (IOException e) {
+            throw new RuntimeException("Failed to append to profile file: " + filename, e);
         }
     }
 

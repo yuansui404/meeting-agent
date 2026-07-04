@@ -72,7 +72,7 @@ public class DeepSeekChatClient {
                 throw BusinessException.timeout("处理超时，请重新发送");
             }
             log.error("DeepSeek API call failed", e);
-            throw new BusinessException("AI 服务调用失败");
+            throw BusinessException.externalError("AI 服务调用失败", e);
         }
     }
 }

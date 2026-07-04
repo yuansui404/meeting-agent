@@ -41,10 +41,10 @@ public class ReadProfileTool implements AgentTool {
 
     @Override
     public Mono<ToolResultBlock> callAsync(ToolCallParam param) {
-        try {
+        return Mono.fromCallable(() -> {
             List<String> files = profileService.listFiles();
             if (files.isEmpty()) {
-                return Mono.just(ToolResultBlock.text("用户画像为空，没有已记录的信息。"));
+                return ToolResultBlock.text("用户画像为空，没有已记录的信息。");
             }
 
             StringBuilder sb = new StringBuilder();
@@ -60,10 +60,7 @@ public class ReadProfileTool implements AgentTool {
                 }
             }
 
-            return Mono.just(ToolResultBlock.text(sb.toString()));
-        } catch (Exception e) {
-            log.warn("Read profile failed", e);
-            return Mono.just(ToolResultBlock.error("读取用户画像异常，请稍后重试"));
-        }
+            return ToolResultBlock.text(sb.toString());
+        });
     }
 }

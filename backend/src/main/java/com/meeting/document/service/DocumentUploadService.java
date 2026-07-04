@@ -55,7 +55,7 @@ public class DocumentUploadService {
             return entity;
         } catch (IOException e) {
             log.error("File upload failed", e);
-            throw new BusinessException("文件上传失败");
+            throw BusinessException.processingFailed("文件上传失败", e);
         }
     }
 

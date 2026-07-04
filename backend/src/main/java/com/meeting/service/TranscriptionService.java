@@ -24,8 +24,8 @@ public class TranscriptionService {
     private final FileProcessingService fileProcessingService;
     private final MeetingDateExtractor meetingDateExtractor;
 
-    @Value("${mimo.api-key:}") private final String mimoApiKey = "";
-    @Value("${mimo.url:https://token-plan-cn.xiaomimimo.com}") private final String mimoUrl = "https://token-plan-cn.xiaomimimo.com";
+    @Value("${mimo.api-key:}") private String mimoApiKey;
+    @Value("${mimo.url:https://token-plan-cn.xiaomimimo.com}") private String mimoUrl;
 
     /**
      * Start asynchronous transcription for a dialogue audio/video file.
@@ -81,15 +81,18 @@ public class TranscriptionService {
         }
 
         try {
-            // 1. Check file size before reading into memory (warn at 200MB)
+            // 1. Check file size before reading into memory (hard limit at 200MB)
             long fileSize = Files.size(path);
             if (fileSize > 200 * 1024 * 1024) {
-                log.warn("Audio file too large ({}MB), may cause memory issues: {}", fileSize / 1024 / 1024, audioPath);
+                return "转写失败: 文件过大 (" + (fileSize / 1024 / 1024) + "MB)，最大支持 200MB";
             }
 
-            // 2. Read audio file and base64 encode
-            byte[] audioBytes = Files.readAllBytes(path);
-            String base64Audio = Base64.getEncoder().encodeToString(audioBytes);
+            // 2. Read audio file and base64 encode (try-with-resources to ensure stream closure)
+            String base64Audio;
+            try (InputStream fis = Files.newInputStream(path)) {
+                byte[] audioBytes = fis.readAllBytes();
+                base64Audio = Base64.getEncoder().encodeToString(audioBytes);
+            }
             String ext = audioPath.toLowerCase().endsWith(".wav") ? "wav" : "mp3";
 
             // 3. Build OpenAI-compatible request
@@ -125,15 +128,20 @@ public class TranscriptionService {
                 // 5. Parse response
                 int responseCode = conn.getResponseCode();
                 if (responseCode != 200) {
-                    InputStream errStream = conn.getErrorStream();
-                    String errorBody = errStream != null
-                            ? new String(errStream.readAllBytes(), StandardCharsets.UTF_8)
-                            : "(no error body)";
+                    String errorBody = "(no error body)";
+                    try (InputStream errStream = conn.getErrorStream()) {
+                        if (errStream != null) {
+                            errorBody = new String(errStream.readAllBytes(), StandardCharsets.UTF_8);
+                        }
+                    }
                     log.warn("MiMo ASR HTTP {}: {}", responseCode, errorBody);
                     return "转写失败: MiMo API 返回 " + responseCode;
                 }
 
-                String responseBody = new String(conn.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+                String responseBody;
+                try (InputStream is = conn.getInputStream()) {
+                    responseBody = new String(is.readAllBytes(), StandardCharsets.UTF_8);
+                }
                 log.info("MiMo ASR raw response length={}", responseBody.length());
 
                 // 6. Parse response using ObjectMapper instead of fragile string matching

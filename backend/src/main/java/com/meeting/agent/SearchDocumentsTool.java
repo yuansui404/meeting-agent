@@ -50,29 +50,29 @@ public class SearchDocumentsTool implements AgentTool {
 
     @Override
     public Mono<ToolResultBlock> callAsync(ToolCallParam param) {
-        Map<String, Object> input = param.getInput();
-        String query = input.getOrDefault("query", "").toString();
-        if (query.isBlank()) {
-            return Mono.just(ToolResultBlock.text("{\"evidenceLevel\":\"NONE\",\"results\":[],\"citations\":[],\"queryUsed\":\"\",\"retried\":false}"));
-        }
+        return Mono.fromCallable(() -> {
+            Map<String, Object> input = param.getInput();
+            String query = input.getOrDefault("query", "").toString();
+            if (query.isBlank()) {
+                return ToolResultBlock.text("{\"evidenceLevel\":\"NONE\",\"results\":[],\"citations\":[],\"queryUsed\":\"\",\"retried\":false}");
+            }
 
-        String timeRange = null;
-        Object timeRangeObj = input.get("timeRange");
-        if (timeRangeObj instanceof String s && !s.isBlank()) {
-            timeRange = s;
-        }
+            String timeRange = null;
+            Object timeRangeObj = input.get("timeRange");
+            if (timeRangeObj instanceof String s && !s.isBlank()) {
+                timeRange = s;
+            }
 
-        try {
             HybridSearchService.SearchResult result = hybridSearchService.search(query, timeRange);
 
             if (result.chunks().isEmpty()) {
-                return Mono.just(ToolResultBlock.text(JsonUtil.toJson(Map.of(
+                return ToolResultBlock.text(JsonUtil.toJson(Map.of(
                         "evidenceLevel", result.evidenceLevel(),
                         "results", List.of(),
                         "citations", result.citations(),
                         "queryUsed", result.queryUsed(),
                         "retried", result.retried()
-                ))));
+                )));
             }
 
             List<Map<String, Object>> items = new ArrayList<>();
@@ -93,11 +93,8 @@ public class SearchDocumentsTool implements AgentTool {
             toolResult.put("queryUsed", result.queryUsed());
             toolResult.put("retried", result.retried());
 
-            return Mono.just(ToolResultBlock.text(JsonUtil.toJson(toolResult)));
-        } catch (Exception e) {
-            log.warn("Document search failed", e);
-            return Mono.just(ToolResultBlock.error("{\"evidenceLevel\":\"NONE\",\"results\":[],\"citations\":[],\"error\":\"搜索异常，请稍后重试\"}"));
-        }
+            return ToolResultBlock.text(JsonUtil.toJson(toolResult));
+        });
     }
 
 }

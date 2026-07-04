@@ -50,39 +50,20 @@ public class UpdateProfileTool implements AgentTool {
 
     @Override
     public Mono<ToolResultBlock> callAsync(ToolCallParam param) {
-        Map<String, Object> input = param.getInput();
-        String filename = input.getOrDefault("filename", "").toString();
-        String content = input.getOrDefault("content", "").toString();
+        return Mono.fromCallable(() -> {
+            Map<String, Object> input = param.getInput();
+            String filename = input.getOrDefault("filename", "").toString();
+            String content = input.getOrDefault("content", "").toString();
 
-        if (filename.isBlank() || !filename.endsWith(".md")) {
-            return Mono.just(ToolResultBlock.text("文件名必须以 .md 结尾"));
-        }
-        if (content.isBlank()) {
-            return Mono.just(ToolResultBlock.text("内容不能为空"));
-        }
-
-        try {
-            // Read once to avoid TOCTOU race condition
-            String existing = null;
-            try {
-                existing = profileService.readFile(filename);
-            } catch (IllegalArgumentException e) {
-                // file does not exist
+            if (filename.isBlank() || !filename.endsWith(".md")) {
+                return ToolResultBlock.text("文件名必须以 .md 结尾");
+            }
+            if (content.isBlank()) {
+                return ToolResultBlock.text("内容不能为空");
             }
 
-            if (existing != null) {
-                String updated = existing.trim() + "\n\n" + content.trim();
-                profileService.saveFile(filename, updated);
-                log.info("Updated profile file: {}", filename);
-            } else {
-                profileService.saveFile(filename, content);
-                log.info("Created profile file: {}", filename);
-            }
-
-            return Mono.just(ToolResultBlock.text("已成功更新「" + filename.replace(".md", "") + "」信息。"));
-        } catch (Exception e) {
-            log.warn("Update profile failed: {}", e.getMessage());
-            return Mono.just(ToolResultBlock.error("更新用户画像异常，请稍后重试"));
-        }
+            profileService.appendFile(filename, content);
+            return ToolResultBlock.text("已成功更新「" + filename.replace(".md", "") + "」信息。");
+        });
     }
 }

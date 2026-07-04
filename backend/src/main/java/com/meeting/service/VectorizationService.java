@@ -37,7 +37,7 @@ public class VectorizationService {
     private final EmbeddingService embeddingService;
     private final JdbcTemplate jdbcTemplate;
     private final DeepSeekChatClient deepSeekChatClient;
-    @Value("${file.upload-dir:/app/data/uploads}") private final String uploadDir = "/app/data/uploads";
+    @Value("${file.upload-dir:/app/data/uploads}") private String uploadDir;
 
     /**
      * Search vectors weighted by priority_score for style example retrieval.

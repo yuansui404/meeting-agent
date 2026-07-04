@@ -15,6 +15,12 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 import reactor.core.publisher.Mono;
 
+import javax.imageio.ImageIO;
+import java.awt.Graphics2D;
+import java.awt.Image;
+import java.awt.RenderingHints;
+import java.awt.image.BufferedImage;
+import java.io.ByteArrayOutputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.*;
@@ -73,10 +79,39 @@ public class UnderstandImageTool implements AgentTool {
             }
 
             try {
-                byte[] imageBytes = Files.readAllBytes(path);
-                String base64 = Base64.getEncoder().encodeToString(imageBytes);
+                long fileSize = Files.size(path);
+                if (fileSize > 20 * 1024 * 1024) {
+                    return ToolResultBlock.error("图片文件过大 (" + (fileSize / 1024 / 1024) + "MB)，最大支持 20MB");
+                }
+
                 String ext = filePath.toLowerCase();
                 String mediaType = getMimeType(ext);
+
+                BufferedImage image = ImageIO.read(path.toFile());
+                if (image == null) {
+                    return ToolResultBlock.error("不支持的图片格式: " + filePath);
+                }
+
+                // Resize if longest edge exceeds 2048px
+                int maxDim = 2048;
+                int w = image.getWidth(), h = image.getHeight();
+                if (w > maxDim || h > maxDim) {
+                    double scale = Math.min((double) maxDim / w, (double) maxDim / h);
+                    int nw = (int) (w * scale);
+                    int nh = (int) (h * scale);
+                    BufferedImage resized = new BufferedImage(nw, nh, image.getType());
+                    Graphics2D g = resized.createGraphics();
+                    g.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BILINEAR);
+                    g.drawImage(image.getScaledInstance(nw, nh, Image.SCALE_SMOOTH), 0, 0, null);
+                    g.dispose();
+                    image = resized;
+                    log.info("Resized image from {}x{} to {}x{}", w, h, nw, nh);
+                }
+
+                String format = mediaType.equals("image/png") ? "png" : "jpg";
+                ByteArrayOutputStream baos = new ByteArrayOutputStream();
+                ImageIO.write(image, format, baos);
+                String base64 = Base64.getEncoder().encodeToString(baos.toByteArray());
 
                 // Build multimodal content parts
                 List<Object> contentParts = new ArrayList<>();

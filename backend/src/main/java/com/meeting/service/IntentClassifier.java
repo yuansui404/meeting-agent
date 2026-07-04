@@ -23,9 +23,9 @@ public class IntentClassifier {
         CHAT
     }
 
-    @Value("${deepseek.api-key:}") private final String apiKey = "";
-    @Value("${deepseek.url:https://api.deepseek.com}") private final String apiUrl = "https://api.deepseek.com";
-    @Value("${deepseek.model:deepseek-chat}") private final String model = "deepseek-chat";
+    @Value("${deepseek.api-key:}") private String apiKey;
+    @Value("${deepseek.url:https://api.deepseek.com}") private String apiUrl;
+    @Value("${deepseek.model:deepseek-chat}") private String model;
     private final OpenAIClient openAIClient;
 
     /**

@@ -1,8 +1,9 @@
 package com.meeting.common.filter;
 
+import com.meeting.common.TtlMdcAdapter;
 import jakarta.servlet.*;
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
-import org.slf4j.MDC;
 import org.springframework.core.annotation.Order;
 import org.springframework.stereotype.Component;
 
@@ -17,9 +18,13 @@ public class TraceIdFilter implements Filter {
     public void doFilter(ServletRequest request, ServletResponse response, FilterChain chain)
             throws IOException, ServletException {
 
-        String traceId = UUID.randomUUID().toString().replace("-", "").substring(0, 16);
-        MDC.put("traceId", traceId);
-        MDC.put("layer", "API");
+        String traceId = (request instanceof HttpServletRequest httpRequest)
+                ? httpRequest.getHeader("X-Trace-Id") : null;
+        if (traceId == null || traceId.isBlank()) {
+            traceId = UUID.randomUUID().toString().replace("-", "").substring(0, 16);
+        }
+        TtlMdcAdapter.setTraceId(traceId);
+        TtlMdcAdapter.setLayer("API");
 
         if (response instanceof HttpServletResponse httpResponse) {
             httpResponse.setHeader("X-Trace-Id", traceId);
@@ -28,7 +33,7 @@ public class TraceIdFilter implements Filter {
         try {
             chain.doFilter(request, response);
         } finally {
-            MDC.clear();
+            TtlMdcAdapter.clear();
         }
     }
 }

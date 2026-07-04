@@ -137,12 +137,7 @@ class PgAgentStateStoreTest {
 
     @Test
     void listSessionIds_ShouldReturnAllIds() {
-        SessionEntity e1 = new SessionEntity();
-        e1.setSessionId("dialogue-1");
-        SessionEntity e2 = new SessionEntity();
-        e2.setSessionId("dialogue-2");
-
-        when(sessionRepository.findAll()).thenReturn(List.of(e1, e2));
+        when(sessionRepository.findAllSessionIds()).thenReturn(List.of("dialogue-1", "dialogue-2"));
 
         Set<String> ids = store.listSessionIds("default");
         assertEquals(Set.of("dialogue-1", "dialogue-2"), ids);
@@ -150,7 +145,7 @@ class PgAgentStateStoreTest {
 
     @Test
     void listSessionIds_ShouldReturnEmptyWhenNoSessions() {
-        when(sessionRepository.findAll()).thenReturn(List.of());
+        when(sessionRepository.findAllSessionIds()).thenReturn(List.of());
         Set<String> ids = store.listSessionIds("default");
         assertTrue(ids.isEmpty());
     }

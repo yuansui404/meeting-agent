@@ -26,11 +26,14 @@ public class DeepSeekReranker implements Reranker {
     private final OpenAIClient openAIClient;
     private final String apiKey;
     private final String apiUrl;
+    private final String model;
 
     public DeepSeekReranker(@Value("${deepseek.api-key:}") String apiKey,
-                            @Value("${deepseek.url:https://api.deepseek.com}") String apiUrl) {
+                            @Value("${deepseek.url:https://api.deepseek.com}") String apiUrl,
+                            @Value("${deepseek.model:deepseek-chat}") String model) {
         this.apiKey = apiKey;
         this.apiUrl = apiUrl;
+        this.model = model;
         this.openAIClient = new OpenAIClient();
     }
 
@@ -90,7 +93,7 @@ public class DeepSeekReranker implements Reranker {
 
         try {
             OpenAIRequest request = OpenAIRequest.builder()
-                    .model("deepseek-chat")
+                    .model(model)
                     .messages(List.of(
                             OpenAIMessage.builder().role("system")
                                     .content("你是一个文档相关性评分专家。严格按照格式输出评分。").build(),

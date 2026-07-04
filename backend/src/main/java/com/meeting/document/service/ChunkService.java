@@ -69,7 +69,7 @@ public class ChunkService {
             log.error("Document {} ETL failed", documentId, e);
             doc.setStatus("FAILED");
             documentRepository.save(doc);
-            throw new BusinessException("文档处理失败: " + e.getMessage());
+            throw BusinessException.processingFailed("文档处理失败: " + e.getMessage(), e);
         }
     }
 }

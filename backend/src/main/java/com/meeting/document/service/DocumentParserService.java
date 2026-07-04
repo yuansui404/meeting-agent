@@ -40,7 +40,7 @@ public class DocumentParserService {
             throw e;
         } catch (Exception e) {
             log.error("Document parse failed", e);
-            throw new BusinessException("文档解析失败");
+            throw BusinessException.processingFailed("文档解析失败", e);
         }
     }
 
