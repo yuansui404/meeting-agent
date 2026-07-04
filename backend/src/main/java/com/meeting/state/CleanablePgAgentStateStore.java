@@ -1,5 +1,6 @@
 package com.meeting.state;
 
+import com.meeting.common.EnrichedMessageConstants;
 import com.meeting.conversation.repository.SessionRepository;
 import io.agentscope.core.message.Msg;
 import io.agentscope.core.message.MsgRole;
@@ -10,9 +11,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 
 /**
  * 继承 PgAgentStateStore，在 save() 时自动清洗 enriched UserMessage。
@@ -21,9 +20,6 @@ import java.util.Map;
 @Slf4j
 @Component
 public class CleanablePgAgentStateStore extends PgAgentStateStore {
-
-    private static final String ENRICHED_PREFIX = "请参考以下资料来回答问题。";
-    private static final String QUESTION_DELIMITER = "\n\n问题：";
 
     public CleanablePgAgentStateStore(SessionRepository sessionRepository) {
         super(sessionRepository);
@@ -39,13 +35,16 @@ public class CleanablePgAgentStateStore extends PgAgentStateStore {
     }
 
     private void cleanEnrichedMessages(AgentState state) {
-        List<Msg> context = state.contextMutable();
-        for (int i = 0; i < context.size(); i++) {
-            Msg msg = context.get(i);
-            if (msg.getRole() != MsgRole.USER) continue;
-            if (!Boolean.TRUE.equals(msg.getMetadata().get("_enriched"))) continue;
+        List<Msg> original = state.contextMutable();
+        List<Msg> copy = new ArrayList<>(original);
 
-            String originalQuestion = (String) msg.getMetadata().get("_originalQuestion");
+        for (int i = 0; i < copy.size(); i++) {
+            Msg msg = copy.get(i);
+            if (msg.getRole() != MsgRole.USER) continue;
+            Map<String, Object> meta = msg.getMetadata();
+            if (meta == null || !Boolean.TRUE.equals(meta.get("_enriched"))) continue;
+
+            String originalQuestion = (String) meta.get("_originalQuestion");
             if (originalQuestion == null) {
                 originalQuestion = extractQuestionFromEnrichedText(msg.getTextContent());
             }
@@ -56,22 +55,25 @@ public class CleanablePgAgentStateStore extends PgAgentStateStore {
 
             UserMessage.Builder builder = UserMessage.builder().textContent(originalQuestion);
             Map<String, Object> cleanMeta = new HashMap<>();
-            Object fileIds = msg.getMetadata().get("fileIds");
-            Object files = msg.getMetadata().get("files");
+            Object fileIds = meta.get("fileIds");
+            Object files = meta.get("files");
             if (fileIds != null) cleanMeta.put("fileIds", fileIds);
             if (files != null) cleanMeta.put("files", files);
             if (!cleanMeta.isEmpty()) builder.metadata(cleanMeta);
-            context.set(i, builder.build());
+            copy.set(i, builder.build());
 
             log.debug("Cleaned enriched message at index {}, question length={}", i, originalQuestion.length());
         }
+
+        original.clear();
+        original.addAll(copy);
     }
 
     private String extractQuestionFromEnrichedText(String text) {
-        if (text == null || !text.startsWith(ENRICHED_PREFIX)) return null;
-        int idx = text.lastIndexOf(QUESTION_DELIMITER);
+        if (text == null || !text.startsWith(EnrichedMessageConstants.PREFIX)) return null;
+        int idx = text.lastIndexOf(EnrichedMessageConstants.QUESTION_DELIMITER);
         if (idx >= 0) {
-            return text.substring(idx + QUESTION_DELIMITER.length());
+            return text.substring(idx + EnrichedMessageConstants.QUESTION_DELIMITER.length());
         }
         return null;
     }

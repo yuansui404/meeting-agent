@@ -1,5 +1,6 @@
 package com.meeting.service;
 
+import com.meeting.common.EnrichedMessageConstants;
 import com.meeting.document.service.DocumentTextExtractor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
@@ -63,13 +64,13 @@ public class FileContextBuilder {
             return userMessage;
         }
         StringBuilder sb = new StringBuilder();
-        sb.append("请参考以下资料来回答问题。\n");
+        sb.append(EnrichedMessageConstants.PREFIX).append("\n");
         sb.append("要求：\n");
         sb.append("1. 答案必须直接引用资料中的原文，不得添加资料中没有的信息\n");
         sb.append("2. 「本次提交的文件」是用户当前关注的重点，优先参考\n");
         sb.append("3. 「对话历史中的文件」仅在用户提及相关内容时参考\n");
         sb.append("\n资料内容：\n").append(fileContext);
-        sb.append("\n\n问题：").append(userMessage);
+        sb.append(EnrichedMessageConstants.QUESTION_DELIMITER).append(userMessage);
         return sb.toString();
     }
 

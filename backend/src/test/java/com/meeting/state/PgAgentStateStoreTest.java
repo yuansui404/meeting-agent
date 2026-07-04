@@ -34,7 +34,7 @@ class PgAgentStateStoreTest {
 
     @BeforeEach
     void setUp() {
-        store = new PgAgentStateStore(sessionRepository);
+        store = new CleanablePgAgentStateStore(sessionRepository);
     }
 
     @Test
@@ -52,7 +52,6 @@ class PgAgentStateStoreTest {
 
         assertNotNull(saved.getStateJson());
         assertTrue(saved.getStateJson().contains("hello"));
-        assertEquals(1, saved.getMessageCount());
         assertEquals("dialogue-1", saved.getSessionId());
     }
 
@@ -73,7 +72,6 @@ class PgAgentStateStoreTest {
         entity.setId(1L);
         entity.setSessionId("dialogue-1");
         entity.setStateJson(json);
-        entity.setMessageCount(1);
 
         when(sessionRepository.findBySessionId("dialogue-1")).thenReturn(Optional.of(entity));
 

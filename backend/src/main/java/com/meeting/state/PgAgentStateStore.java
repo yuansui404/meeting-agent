@@ -13,7 +13,7 @@ import java.util.*;
 
 @Slf4j
 @RequiredArgsConstructor
-public class PgAgentStateStore implements AgentStateStore {
+public abstract class PgAgentStateStore implements AgentStateStore {
 
     private static final String AGENT_STATE_KEY = "agent_state";
 
@@ -24,7 +24,12 @@ public class PgAgentStateStore implements AgentStateStore {
     public void save(String userId, String sessionId, String key, State state) {
         if (!AGENT_STATE_KEY.equals(key)) return; // only persist agent_state
 
-        String json = state instanceof AgentState as ? as.toJson() : "";
+        if (!(state instanceof AgentState as)) {
+            log.warn("Attempted to save non-AgentState (type={}) for session {}, skipping",
+                    state != null ? state.getClass().getSimpleName() : "null", sessionId);
+            return;
+        }
+        String json = as.toJson();
         SessionEntity entity = sessionRepository.findBySessionId(sessionId)
                 .orElseGet(() -> {
                     SessionEntity e = new SessionEntity();
@@ -55,7 +60,7 @@ public class PgAgentStateStore implements AgentStateStore {
                         T state = (T) AgentState.fromJsonString(e.getStateJson());
                         return state;
                     } catch (Exception ex) {
-                        log.warn("Failed to deserialize AgentState for session {}: {}", sessionId, ex.getMessage());
+                        log.error("Failed to deserialize AgentState for session {}", sessionId, ex);
                         return null;
                     }
                 });
