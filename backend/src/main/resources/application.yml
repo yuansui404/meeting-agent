@@ -1,9 +1,23 @@
 server:
   port: 8080
+  tomcat:
+    async-request-timeout: 300000
+
+# API 配置由 Nacos 管理（http://localhost:8848/nacos）
+# 修改后在 Nacos 发布配置后，执行 POST /actuator/refresh 热加载
+management:
+  endpoints:
+    web:
+      exposure:
+        include: refresh,health
 
 spring:
-  config:
-    import: optional:nacos:meeting-agent.yaml
+  servlet:
+    multipart:
+      max-file-size: 500MB
+      max-request-size: 500MB
+  application:
+    name: meeting-agent
   cloud:
     nacos:
       config:
@@ -11,36 +25,22 @@ spring:
         group: DEFAULT_GROUP
         file-extension: yaml
         refresh-enabled: true
+  config:
+    import: optional:nacos:meeting-agent.yaml
   datasource:
     url: jdbc:postgresql://localhost:5432/meeting_agent
-    username: user
-    password: password
+    username: ${DB_USERNAME:user}
+    password: ${DB_PASSWORD:password}
     driver-class-name: org.postgresql.Driver
   jpa:
     hibernate:
       ddl-auto: update
-    show-sql: true
+    show-sql: false
     properties:
       hibernate:
         dialect: org.hibernate.dialect.PostgreSQLDialect
 
-embedding:
-  provider: ${EMBEDDING_PROVIDER:simple}
-  api-key: ${EMBEDDING_API_KEY:}
-  model: ${EMBEDDING_MODEL:text-embedding-ada-002}
-  url: ${EMBEDDING_URL:https://api.openai.com/v1/embeddings}
-
-deepseek:
-  api-key: ${DEEPSEEK_API_KEY:}
-  model: deepseek-chat
-  url: https://api.deepseek.com
-
-# 智谱多模态模型（用于图片分析）
-zhipu:
-  api-key: ${ZHIPU_API_KEY:bd986bb8c1da40ce9d58c3e0c069020c.Be4WaBn3AoAwoVg0}
-  model: glm-4v
-  url: https://open.bigmodel.cn/api/paas/v4
-
+# API 配置由 Nacos 管理（http://localhost:8848/nacos）
 rag:
   chunk:
     strategy: structural
@@ -69,11 +69,9 @@ rag:
     max-visible-messages: 10
     max-context-tokens: 32000
 
-funasr:
-  url: http://localhost:10095
-
 file:
   upload-dir: ${user.home}/meeting-agent/uploads
+
 
 ---
 spring:
@@ -90,9 +88,11 @@ spring:
         refresh-enabled: true
   datasource:
     url: jdbc:postgresql://postgres:5432/meeting_agent
-    username: user
-    password: password
+    username: ${DB_USERNAME:user}
+    password: ${DB_PASSWORD:password}
   jpa:
+    hibernate:
+      ddl-auto: none
     show-sql: false
 rag:
   chunk:
@@ -121,17 +121,18 @@ rag:
     summary-trigger: 3000
     max-visible-messages: 10
     max-context-tokens: 32000
-funasr:
-  url: http://funasr-service:10095
+mimo:
+  api-key: ${MIMO_API_KEY:}
+  url: https://token-plan-cn.xiaomimimo.com
 file:
   upload-dir: /app/data/uploads
 zhipu:
-  api-key: ${ZHIPU_API_KEY:bd986bb8c1da40ce9d58c3e0c069020c.Be4WaBn3AoAwoVg0}
+  api-key: ${ZHIPU_API_KEY:}
   model: glm-4v
   url: https://open.bigmodel.cn/api/paas/v4
 embedding:
   provider: openai
-  api-key: ${ZHIPU_API_KEY:bd986bb8c1da40ce9d58c3e0c069020c.Be4WaBn3AoAwoVg0}
+  api-key: ${ZHIPU_API_KEY:}
   model: embedding-2
   url: https://open.bigmodel.cn/api/paas/v4/embeddings
 deepseek:

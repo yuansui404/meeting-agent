@@ -1,18 +1,18 @@
 package com.meeting.service;
 
-import com.meeting.entity.MeetingMinutes;
-import com.meeting.repository.MeetingMinutesRepository;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import com.meeting.meeting.model.entity.MeetingMinutes;
+import com.meeting.meeting.repository.MeetingMinutesRepository;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
 import java.util.stream.Collectors;
 
+@Slf4j
 @Service
+@RequiredArgsConstructor
 public class StyleLearningService {
-
-    private static final Logger log = LoggerFactory.getLogger(StyleLearningService.class);
     private static final int MAX_EXAMPLES = 5;
     private static final double SIMILARITY_THRESHOLD = 0.3;
     private static final int MAX_DOCUMENT_PREVIEW = 4000;
@@ -23,12 +23,6 @@ public class StyleLearningService {
 
     private final VectorizationService vectorizationService;
     private final MeetingMinutesRepository meetingRepository;
-
-    public StyleLearningService(VectorizationService vectorizationService,
-                                MeetingMinutesRepository meetingRepository) {
-        this.vectorizationService = vectorizationService;
-        this.meetingRepository = meetingRepository;
-    }
 
     /**
      * Retrieve style examples from knowledge base, weighted by priority_score.
@@ -194,13 +188,25 @@ public class StyleLearningService {
                                     return java.nio.file.Files.readString(filePath, java.nio.charset.StandardCharsets.UTF_8);
                                 }
                                 if (DOC_EXTENSIONS.contains(ext)) {
-                                    return com.meeting.common.DocumentTextExtractor.extractText(filePath, ext);
+                                    return com.meeting.document.service.DocumentTextExtractor.extractText(filePath, ext);
                                 }
                             } catch (Exception e) {
                                 log.warn("Failed to read file for meeting {}: {}", meetingId, e.getMessage());
                             }
                         }
                     }
+                    // Check sidecar transcription file for audio/video
+                    if (FileProcessingService.isTranscribable(ext)) {
+                        java.nio.file.Path transcriptionPath = java.nio.file.Path.of(meeting.getFilePath() + ".transcription.md");
+                        if (java.nio.file.Files.exists(transcriptionPath)) {
+                            try {
+                                return java.nio.file.Files.readString(transcriptionPath, java.nio.charset.StandardCharsets.UTF_8);
+                            } catch (Exception e) {
+                                log.warn("Failed to read sidecar transcription for meeting {}: {}", meetingId, e.getMessage());
+                            }
+                        }
+                    }
+
                     // Fallback to transcription
                     String transcription = meeting.getTranscription();
                     if (transcription != null && !transcription.isBlank() && !"{}".equals(transcription.trim())) {

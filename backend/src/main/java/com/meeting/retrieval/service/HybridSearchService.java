@@ -1,6 +1,7 @@
 package com.meeting.retrieval.service;
 
 import com.meeting.config.RagProperties;
+import com.meeting.document.model.entity.DocumentChunkEntity;
 import com.meeting.document.model.entity.DocumentEntity;
 import com.meeting.document.repository.DocumentChunkRepository;
 import com.meeting.document.repository.DocumentRepository;
@@ -14,6 +15,7 @@ import org.springframework.stereotype.Service;
 
 import java.time.LocalDate;
 import java.util.*;
+import java.util.concurrent.CompletableFuture;
 import java.util.stream.Collectors;
 
 @Slf4j
@@ -44,10 +46,17 @@ public class HybridSearchService {
         log.info("Query plan: strategy={}, rewritten={}", plan.strategy(), plan.rewrittenQuery());
 
         String actualQuery = plan.rewrittenQuery();
+        String searchQuery = actualQuery;
+        int vectorTopK = ragProperties.getRetrieval().getVectorTopk();
+        int ftsTopK = ragProperties.getRetrieval().getFtsTopk();
         boolean retried = false;
 
-        List<ChunkResult> vectorResults = vectorSearchService.search(actualQuery, ragProperties.getRetrieval().getVectorTopk());
-        List<ChunkResult> ftsResults = fullTextSearchService.search(actualQuery, ragProperties.getRetrieval().getFtsTopk());
+        CompletableFuture<List<ChunkResult>> vectorFuture = CompletableFuture.supplyAsync(() ->
+                vectorSearchService.search(searchQuery, vectorTopK));
+        CompletableFuture<List<ChunkResult>> ftsFuture = CompletableFuture.supplyAsync(() ->
+                fullTextSearchService.search(searchQuery, ftsTopK));
+        List<ChunkResult> vectorResults = vectorFuture.join();
+        List<ChunkResult> ftsResults = ftsFuture.join();
 
         List<ChunkResult> merged = RrfMerger.merge(vectorResults, ftsResults, ragProperties.getRetrieval().getRrfK());
 
@@ -87,8 +96,12 @@ public class HybridSearchService {
         if (topScore < ragProperties.getEvidence().getThreshold()) {
             log.info("Low confidence, triggering retry");
             String retryQuery = generateRetryQuery(actualQuery);
-            List<ChunkResult> retryVector = vectorSearchService.search(retryQuery, ragProperties.getRetrieval().getVectorTopk());
-            List<ChunkResult> retryFts = fullTextSearchService.search(retryQuery, ragProperties.getRetrieval().getFtsTopk());
+            CompletableFuture<List<ChunkResult>> retryVectorF = CompletableFuture.supplyAsync(() ->
+                    vectorSearchService.search(retryQuery, ragProperties.getRetrieval().getVectorTopk()));
+            CompletableFuture<List<ChunkResult>> retryFtsF = CompletableFuture.supplyAsync(() ->
+                    fullTextSearchService.search(retryQuery, ragProperties.getRetrieval().getFtsTopk()));
+            List<ChunkResult> retryVector = retryVectorF.join();
+            List<ChunkResult> retryFts = retryFtsF.join();
             List<ChunkResult> retryMerged = RrfMerger.merge(retryVector, retryFts, ragProperties.getRetrieval().getRrfK());
             double retryTopScore = retryMerged.isEmpty() ? 0.0 : retryMerged.get(0).getRrfScore();
             if (retryTopScore > topScore) {
@@ -116,28 +129,43 @@ public class HybridSearchService {
     List<ChunkResult> expandNeighbors(List<ChunkResult> results) {
         List<ChunkResult> expanded = new ArrayList<>();
         Set<Long> seenIds = new HashSet<>();
+
+        // Batch fetch all document chunks to avoid N+1 queries
+        Map<Long, List<DocumentChunkEntity>> docChunks = new HashMap<>();
+        Set<Long> docIds = results.stream()
+                .map(ChunkResult::getDocumentId)
+                .filter(Objects::nonNull)
+                .collect(Collectors.toSet());
+        if (!docIds.isEmpty()) {
+            try {
+                List<DocumentChunkEntity> allChunks = chunkRepository.findByDocumentIdInOrderByChunkIndex(new ArrayList<>(docIds));
+                docChunks = allChunks.stream().collect(Collectors.groupingBy(DocumentChunkEntity::getDocumentId));
+            } catch (Exception e) {
+                log.warn("Batch neighbor fetch failed, falling back to individual queries", e);
+            }
+        }
+
         for (ChunkResult r : results) {
             expanded.add(r);
             seenIds.add(r.getChunkId());
             if (r.getDocumentId() == null) continue;
-            try {
-                var neighbors = chunkRepository.findByDocumentIdOrderByChunkIndex(r.getDocumentId());
-                for (var n : neighbors) {
-                    if (Math.abs(n.getChunkIndex() - r.getChunkIndex()) <= 1
-                            && !seenIds.contains(n.getId())) {
-                        seenIds.add(n.getId());
-                        expanded.add(ChunkResult.builder()
-                                .chunkId(n.getId())
-                                .documentId(n.getDocumentId())
-                                .content(n.getContent())
-                                .chunkIndex(n.getChunkIndex())
-                                .speaker(n.getSpeaker())
-                                .sectionType(n.getSectionType())
-                                .build());
-                    }
+
+            List<DocumentChunkEntity> neighbors = docChunks.get(r.getDocumentId());
+            if (neighbors == null) continue;
+
+            for (var n : neighbors) {
+                if (Math.abs(n.getChunkIndex() - r.getChunkIndex()) <= 1
+                        && !seenIds.contains(n.getId())) {
+                    seenIds.add(n.getId());
+                    expanded.add(ChunkResult.builder()
+                            .chunkId(n.getId())
+                            .documentId(n.getDocumentId())
+                            .content(n.getContent())
+                            .chunkIndex(n.getChunkIndex())
+                            .speaker(n.getSpeaker())
+                            .sectionType(n.getSectionType())
+                            .build());
                 }
-            } catch (Exception e) {
-                log.warn("Neighbor expansion failed for chunk {}", r.getChunkId(), e);
             }
         }
         return expanded;

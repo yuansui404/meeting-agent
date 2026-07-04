@@ -31,5 +31,11 @@ Thumbs.db
 .env
 *.local.*
 
+# AgentScope (只忽略运行时文件，workspace 配置需要追踪)
+.agentscope/workspace/memory/
+.agentscope/workspace/sessions/
+
 # Models
 models/
+
+.nacos

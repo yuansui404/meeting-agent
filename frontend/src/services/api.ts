@@ -13,7 +13,6 @@ export interface Meeting {
   status: string;
   createdAt: string;
   updatedAt?: string;
-  knowledgeBase?: boolean;
   filePath?: string;
   dialogueId?: number | null;
   mdFilePath?: string | null;
@@ -38,6 +37,7 @@ export interface DialogueMessage {
   messageType: string;
   timestamp: string;
   metadata?: string;
+  files?: any[];
 }
 
 export interface SearchResult {
@@ -112,7 +112,7 @@ export const searchMeetings = (query: string, dialogueId?: number) =>
 export const vectorizeMeeting = (id: number) =>
   api.post(`/meeting/${id}/vectorize`);
 
-// 切换知识库状态
+// 切换知识库状态（已废弃，会议上传后自动向量化）
 export const toggleKnowledgeBase = (id: number) =>
   api.post<{ success: boolean; knowledgeBase: boolean }>(`/meeting/${id}/knowledge-base`);
 
@@ -145,17 +145,28 @@ export const deleteMeeting = (id: number) =>
 export const getFileUrl = (id: number) =>
   `${api.defaults.baseURL || 'http://localhost:8080/api'}/meeting/${id}/file`;
 
+// 获取对话文件URL（state_json 存储的文件）
+export const getDialogueFileUrl = (dialogueId: number, fileId: string) =>
+  `${api.defaults.baseURL || 'http://localhost:8080/api'}/dialogue/${dialogueId}/file/${fileId}`;
+
+// 获取对话文件文本内容（state_json 存储的文件）
+export const getDialogueFileTextContent = (dialogueId: number, fileId: string) =>
+  api.get<{ content: string }>(`/dialogue/${dialogueId}/file/${fileId}/text-content`);
+
 export interface UploadedFile {
   id: number;
+  fileId?: string;
   title: string;
   fileSize: number | null;
   status: string;
   createdAt: string;
   knowledgeBase?: boolean;
+  /** @deprecated 新代码不应使用 — 对话文件已存入 state_json */
   dialogueId?: number;
   ext: string;
   hasMd?: boolean;
   mdFilePath?: string;
+  filePath?: string;
 }
 
 // ============================================================
@@ -280,7 +291,12 @@ export const streamChat = (
   onToken: (token: string) => void,
   onDone: () => void,
   onError: (err: Error) => void,
-  fileIds?: number[]
+  fileIds?: number[],
+  files?: any[],
+  onThinking?: (delta: string) => void,
+  onToolCall?: (data: any) => void,
+  onToolResult?: (data: any) => void,
+  onCorrected?: (text: string) => void,
 ): AbortController => {
   const controller = new AbortController();
   const baseUrl = api.defaults.baseURL || 'http://localhost:8080/api';
@@ -290,6 +306,9 @@ export const streamChat = (
       const body: any = { message };
       if (fileIds && fileIds.length > 0) {
         body.fileIds = fileIds;
+      }
+      if (files && files.length > 0) {
+        body.files = files;
       }
       const response = await fetch(`${baseUrl}/dialogue/${dialogueId}/chat`, {
         method: 'POST',
@@ -318,8 +337,10 @@ export const streamChat = (
 
         for (const line of lines) {
           const trimmed = line.trim();
-          if (trimmed.startsWith('event: ')) {
-            currentEvent = trimmed.slice(7).trim();
+          if (!trimmed) {
+            currentEvent = '';  // SSE event boundary — reset so unnamed data: events are treated as tokens
+          } else if (trimmed.startsWith('event:')) {
+            currentEvent = trimmed.slice(6).trim();
           } else if (trimmed.startsWith('data:')) {
             const data = trimmed.slice(5).trim();
             if (currentEvent === 'done') {
@@ -329,6 +350,22 @@ export const streamChat = (
             if (currentEvent === 'error') {
               onError(new Error(data));
               return;
+            }
+            if (currentEvent === 'thinking') {
+              onThinking?.(data);
+              continue;
+            }
+            if (currentEvent === 'tool_call') {
+              try { onToolCall?.(JSON.parse(data)); } catch { /* ignore */ }
+              continue;
+            }
+            if (currentEvent === 'tool_result') {
+              try { onToolResult?.(JSON.parse(data)); } catch { /* ignore */ }
+              continue;
+            }
+            if (currentEvent === 'corrected') {
+              onCorrected?.(data);
+              continue;
             }
             if (data && data !== '[DONE]') {
               onToken(data);
@@ -346,5 +383,15 @@ export const streamChat = (
 
   return controller;
 };
+
+// ============================================================
+// Agent Memory API
+// ============================================================
+
+export const getMemory = () =>
+  api.get<{ success: boolean; data: { content: string } }>('/memory');
+
+export const saveMemory = (content: string) =>
+  api.put('/memory', { content });
 
 export default api;

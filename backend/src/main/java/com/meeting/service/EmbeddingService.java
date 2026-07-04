@@ -1,7 +1,6 @@
 package com.meeting.service;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestClient;
@@ -24,10 +23,9 @@ import java.util.Optional;
  *     model: text-embedding-ada-002
  *     url: https://api.openai.com/v1/embeddings
  */
+@Slf4j
 @Service
 public class EmbeddingService {
-
-    private static final Logger log = LoggerFactory.getLogger(EmbeddingService.class);
 
     private final String provider;
     private final String apiKey;
@@ -55,6 +53,10 @@ public class EmbeddingService {
     }
 
     public float[] generateEmbedding(String text) {
+        if (restClient == null) {
+            log.warn("Embedding API key not configured, falling back to simple embedding");
+            return generateSimpleEmbedding(text);
+        }
         return switch (provider) {
             case "openai" -> generateOpenAiEmbedding(text);
             case "deepseek" -> generateDeepSeekEmbedding(text);

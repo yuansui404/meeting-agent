@@ -1,9 +1,9 @@
 package com.meeting.service;
 
-import com.meeting.entity.MeetingMinutes;
-import com.meeting.entity.MeetingVector;
-import com.meeting.repository.MeetingMinutesRepository;
-import com.meeting.repository.MeetingVectorRepository;
+import com.meeting.meeting.model.entity.MeetingMinutes;
+import com.meeting.meeting.model.entity.MeetingVector;
+import com.meeting.meeting.repository.MeetingMinutesRepository;
+import com.meeting.meeting.repository.MeetingVectorRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;

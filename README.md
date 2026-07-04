@@ -5,7 +5,7 @@
 ## 技术架构
 
 - **前端**: React + Ant Design
-- **后端**: Java + FunASR（语音识别）
+- **后端**: Java + MiMo-V2.5-ASR（语音识别）
 - **数据库**: PostgreSQL + pgvector
 - **部署**: Docker Compose
 
@@ -17,7 +17,7 @@ docker compose up -d
 
 # 前端 http://localhost:3000
 # 后端 http://localhost:8080
-# FunASR http://localhost:8501
+# MiMo ASR（云端 API）
 ```
 
 ## 项目结构

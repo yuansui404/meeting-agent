@@ -15,7 +15,7 @@ import {
   StarOutlined,
   StarFilled,
 } from '@ant-design/icons';
-import { Meeting, listKnowledgeBase, deleteMeeting, uploadKnowledgeBaseFile, getFileUrl, getMeeting, getMeetingTextContent, setStyleExemplar } from '../services/api';
+import { Meeting, listMeetings, deleteMeeting, uploadKnowledgeBaseFile, getFileUrl, getMeeting, getMeetingTextContent, setStyleExemplar } from '../services/api';
 import ReactMarkdown from 'react-markdown';
 
 const { Text } = Typography;
@@ -48,7 +48,7 @@ const KnowledgeBase: React.FC<Props> = ({ visible, onClose }) => {
   const loadMeetings = async () => {
     setLoading(true);
     try {
-      const res = await listKnowledgeBase();
+      const res = await listMeetings();
       setMeetings(res.data || []);
     } catch {
       setMeetings([]);

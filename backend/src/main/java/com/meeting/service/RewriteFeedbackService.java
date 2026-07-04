@@ -1,21 +1,21 @@
 package com.meeting.service;
 
-import com.meeting.entity.RewriteFeedback;
-import com.meeting.entity.RewriteResult;
-import com.meeting.repository.RewriteFeedbackRepository;
-import com.meeting.repository.RewriteResultRepository;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import com.meeting.conversation.model.entity.RewriteFeedback;
+import com.meeting.conversation.model.entity.RewriteResult;
+import com.meeting.conversation.repository.RewriteFeedbackRepository;
+import com.meeting.conversation.repository.RewriteResultRepository;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
 
+@Slf4j
 @Service
+@RequiredArgsConstructor
 public class RewriteFeedbackService {
-
-    private static final Logger log = LoggerFactory.getLogger(RewriteFeedbackService.class);
     private static final double PRIORITY_DELTA = 0.5;
     private static final double PRIORITY_MIN = -5.0;
     private static final double PRIORITY_MAX = 5.0;
@@ -23,14 +23,6 @@ public class RewriteFeedbackService {
     private final RewriteFeedbackRepository feedbackRepository;
     private final RewriteResultRepository rewriteResultRepository;
     private final JdbcTemplate jdbcTemplate;
-
-    public RewriteFeedbackService(RewriteFeedbackRepository feedbackRepository,
-                                  RewriteResultRepository rewriteResultRepository,
-                                  JdbcTemplate jdbcTemplate) {
-        this.feedbackRepository = feedbackRepository;
-        this.rewriteResultRepository = rewriteResultRepository;
-        this.jdbcTemplate = jdbcTemplate;
-    }
 
     @Transactional
     public void submitFeedback(Long rewriteResultId, Integer paragraphIndex, String action) {

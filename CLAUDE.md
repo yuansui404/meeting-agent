@@ -5,13 +5,13 @@
 
 ## 技术架构
 - **前端**: React + Ant Design（极简界面）
-- **后端**: Java + FunASR（语音识别）
+- **后端**: Java + MiMo-V2.5-ASR（语音识别）
 - **数据库**: PostgreSQL + pgvector（单表 + 向量存储）
 - **部署**: Docker Compose
 
 ## 核心功能
 1. **文件处理**: MP4视频上传、音频提取
-2. **语音转文字**: FunASR语音识别、生成会议纪要
+2. **语音转文字**: MiMo-V2.5-ASR语音识别、生成会议纪要
 3. **智能搜索**: RAG技术实现历史会议内容语义搜索
 
 ## 项目目录
@@ -20,7 +20,7 @@ meeting_agent/
 ├── prd/                 # 产品需求文档
 ├── docs/                # 项目文档
 │   └── superpowers/     # 设计文档
-├── backend/             # Java后端（FunASR）
+├── backend/             # Java后端（MiMo ASR）
 ├── frontend/            # React前端
 ├── docker/              # Docker配置
 └── CLAUDE.md           # 本文件
@@ -33,7 +33,7 @@ meeting_agent/
 
 ## 开发指南
 - 使用Docker Compose运行所有服务
-- 后端使用Java + FunASR进行语音识别
+- 后端使用Java + MiMo-V2.5-ASR进行语音识别
 - 使用Sentence-BERT生成文本向量
 - 搜索功能结合全文检索和向量检索
 

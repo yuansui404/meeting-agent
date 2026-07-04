@@ -38,6 +38,8 @@ import {
   deleteMeeting,
   getFileUrl,
   getMeeting,
+  getDialogueFileUrl,
+  getDialogueFileTextContent,
   api,
   submitRewriteFeedback,
   getRewriteResult,
@@ -60,6 +62,20 @@ interface StreamingState {
   active: boolean;
 }
 
+interface ToolCallEvent {
+  action: string;
+  id: string;
+  name?: string;
+  delta?: string;
+}
+
+interface ToolCallDisplay {
+  id: string;
+  name: string;
+  result: string;
+  completed: boolean;
+}
+
 const suggestions = [
   { icon: <BulbOutlined />, text: '帮我总结最近的会议内容' },
   { icon: <FileTextOutlined />, text: '搜索关于项目的讨论' },
@@ -73,6 +89,8 @@ interface DisplayMessage extends DialogueMessage {
 
 interface PendingFileCard {
   id: number;
+  fileId?: string;
+  filePath?: string;
   name: string;
   ext: string;
   fileSize: number | null;
@@ -85,6 +103,8 @@ const DialoguePanel: React.FC<Props> = ({ activeDialogue, onDialogueUpdated, onS
   const [input, setInput] = useState('');
   const [sending, setSending] = useState(false);
   const [streaming, setStreaming] = useState<StreamingState>({ content: '', active: false });
+  const [thinkingText, setThinkingText] = useState('');
+  const [toolCalls, setToolCalls] = useState<ToolCallDisplay[]>([]);
   const [searchVisible, setSearchVisible] = useState(false);
   const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
@@ -103,7 +123,8 @@ const DialoguePanel: React.FC<Props> = ({ activeDialogue, onDialogueUpdated, onS
 
   useEffect(() => {
     if (activeDialogue) {
-      loadFiles(activeDialogue.id).then(files => loadMessages(activeDialogue.id, files));
+      loadFiles(activeDialogue.id);
+      loadMessages(activeDialogue.id);
     } else {
       setMessages([]);
       setStreaming({ content: '', active: false });
@@ -121,45 +142,41 @@ const DialoguePanel: React.FC<Props> = ({ activeDialogue, onDialogueUpdated, onS
     }, 50);
   };
 
-  const loadMessages = async (id: number, files?: UploadedFile[]) => {
-    const fileList = files || uploadedFiles;
+  const loadMessages = async (id: number) => {
     try {
       const res = await getDialogue(id);
-      const msgs: DisplayMessage[] = (res.data.messages || []).map((m: DialogueMessage) => {
-        let fileIds: number[] = [];
-        if (m.metadata) {
-          try {
-            const parsed = JSON.parse(m.metadata);
-            fileIds = parsed.fileIds || [];
-          } catch { /* ignore invalid metadata */ }
-        }
-        const matchedFiles = fileIds
-          .map(fid => fileList.find(uf => uf.id === fid))
-          .filter(Boolean) as UploadedFile[];
-        return { ...m, files: matchedFiles };
-      });
+      const msgs: DisplayMessage[] = (res.data.messages || []).map((m: DialogueMessage) => ({
+        ...m,
+        files: (m.files || []).map((f: any) => ({
+          ...f,
+          title: f.title || f.fileName || f.name || '未知文件',
+        })),
+      }));
       setMessages(msgs);
     } catch {
       setMessages([]);
     }
   };
 
-  const loadFiles = async (id: number): Promise<UploadedFile[]> => {
+  const loadFiles = async (id: number) => {
     try {
       const res = await listDialogueMeetings(id);
-      const files = res.data || [];
-      setUploadedFiles(files);
-      return files;
+      setUploadedFiles(res.data || []);
     } catch {
       setUploadedFiles([]);
-      return [];
     }
   };
 
-  const handleDeleteFile = async (id: number) => {
+  const handleDeleteFile = async (file: UploadedFile) => {
     try {
-      await deleteMeeting(id);
-      if (activeDialogue) loadFiles(activeDialogue.id);
+      if ((file as any).fileId) {
+        // New-style files are in state_json — just refresh the list
+        // (disk cleanup can be async)
+        if (activeDialogue) loadFiles(activeDialogue.id);
+      } else {
+        await deleteMeeting(file.id);
+        if (activeDialogue) loadFiles(activeDialogue.id);
+      }
     } catch {
       antMsg.error('删除失败');
     }
@@ -168,12 +185,14 @@ const DialoguePanel: React.FC<Props> = ({ activeDialogue, onDialogueUpdated, onS
   const handleRemovePendingFileCard = async (id: number) => {
     const card = pendingFileCards.find(c => c.id === id);
     setPendingFileCards(prev => prev.filter(c => c.id !== id));
-    if (id > 0) {
+    if (id > 0 && !card?.fileId) {
+      // Old-style file in meeting_minutes — delete the DB record
       try {
         await deleteMeeting(id);
       } catch { /* ignore */ }
       if (activeDialogue) loadFiles(activeDialogue.id);
     }
+    // New-style pending files (fileId exists) have no DB record — just remove the card
   };
 
   const sendMessage = useCallback(async (content: string, dialogueId: number) => {
@@ -196,9 +215,21 @@ const DialoguePanel: React.FC<Props> = ({ activeDialogue, onDialogueUpdated, onS
     };
     setMessages(prev => [...prev, userMsg]);
     setStreaming({ content: '', active: true });
+    setThinkingText('');
+    setToolCalls([]);
 
     try {
       const fileIds = filesForDisplay.map(f => f.id).filter(id => id > 0);
+      // Build file metadata for new-style files (state_json backed)
+      const filesMeta = pendingFileCards
+        .filter(f => !f.uploading && f.fileId)
+        .map(f => ({
+          fileId: f.fileId,
+          fileName: f.name,
+          filePath: f.filePath,
+          fileSize: f.fileSize,
+          ext: f.ext,
+        }));
       abortRef.current = streamChat(
         dialogueId,
         content,
@@ -208,6 +239,7 @@ const DialoguePanel: React.FC<Props> = ({ activeDialogue, onDialogueUpdated, onS
         () => {
           setStreaming({ content: '', active: false });
           setSending(false);
+          setThinkingText(prev => prev ? prev + '\n\n---\n' : '');
           loadMessages(dialogueId);
           onDialogueUpdated();
         },
@@ -216,7 +248,26 @@ const DialoguePanel: React.FC<Props> = ({ activeDialogue, onDialogueUpdated, onS
           setSending(false);
           antMsg.error('对话出错: ' + err.message);
         },
-        fileIds
+        fileIds,
+        filesMeta && filesMeta.length > 0 ? filesMeta : undefined,
+        (delta) => {
+          setThinkingText(prev => prev + delta);
+        },
+        (data) => {
+          if (data.action === 'start') {
+            setToolCalls(prev => [...prev, { id: data.id, name: data.name || '', result: '', completed: false }]);
+          } else if (data.action === 'end') {
+            setToolCalls(prev => prev.map(tc => tc.id === data.id ? { ...tc, completed: true } : tc));
+          }
+        },
+        (data) => {
+          if (data.action === 'delta' && data.delta) {
+            setToolCalls(prev => prev.map(tc => tc.id === data.id ? { ...tc, result: tc.result + data.delta } : tc));
+          }
+        },
+        (text) => {
+          setStreaming({ content: text, active: false });
+        }
       );
     } catch (err: any) {
       setStreaming({ content: '', active: false });
@@ -276,10 +327,18 @@ const DialoguePanel: React.FC<Props> = ({ activeDialogue, onDialogueUpdated, onS
     }]);
     try {
       const res = await uploadFile(file, dialogue.id);
-      if (res.data.meetingId) {
+      // Support both new-style (fileId string) and old-style (meetingId number)
+      if (res.data.fileId || res.data.meetingId) {
         setPendingFileCards(prev => prev.map(c =>
           c.name === file.name && c.uploading
-            ? { ...c, id: res.data.meetingId, uploading: false, status: res.data.status || 'completed' }
+            ? {
+                ...c,
+                id: res.data.meetingId || c.id,
+                fileId: res.data.fileId,
+                filePath: res.data.filePath,
+                uploading: false,
+                status: res.data.status || 'completed',
+              }
             : c
         ));
         if (activeDialogue) loadFiles(activeDialogue.id);
@@ -339,14 +398,20 @@ const DialoguePanel: React.FC<Props> = ({ activeDialogue, onDialogueUpdated, onS
     try {
       if (isImage) {
         // Images are rendered directly in the drawer JSX
-      } else {
-        // Try transcription first (audio/video STT results)
+      } else if ((file as any).fileId && activeDialogue) {
+        // New-style file: stored in state_json, use dialogue file endpoints
+        const fileId = (file as any).fileId;
+        const resp = await getDialogueFileTextContent(activeDialogue.id, fileId);
+        if (resp.data?.content) {
+          setPreviewContent(resp.data.content);
+        }
+      } else if (file.id > 0) {
+        // Old-style file: stored in meeting_minutes, use meeting endpoints
         const res = await getMeeting(file.id);
         const meeting = res.data as Meeting;
-        if (meeting.transcription) {
+        if (meeting.transcription && meeting.transcription !== '{}' && meeting.transcription.length > 10) {
           setPreviewContent(meeting.transcription);
         } else {
-          // Try the dedicated text-content endpoint
           try {
             const textResp = await api.get(`/meeting/${file.id}/text-content`);
             if (textResp.data?.content) {
@@ -354,21 +419,23 @@ const DialoguePanel: React.FC<Props> = ({ activeDialogue, onDialogueUpdated, onS
             }
           } catch { /* unsupported format or fetch error */ }
         }
+      } else {
+        setPreviewContent(null);
       }
     } catch {
       setPreviewContent(null);
     } finally {
       setPreviewLoading(false);
     }
-  }, []);
+  }, [activeDialogue]);
 
   return (
-    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', height: '100%', background: '#f5f5f5' }}>
+    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', height: '100%', background: 'var(--content-bg)' }}>
       {/* Model selector */}
       <div style={{
         padding: '6px 20px',
-        borderBottom: '1px solid #e8e8e8',
-        background: '#fff',
+        borderBottom: '1px solid var(--border-color)',
+        background: 'var(--app-bg)',
         display: 'flex',
         alignItems: 'center',
         gap: 8,
@@ -386,16 +453,15 @@ const DialoguePanel: React.FC<Props> = ({ activeDialogue, onDialogueUpdated, onS
             {messages.map((msg) => (
               <MessageBubble key={msg.id} message={msg} onFilePreview={handleFilePreview} />
             ))}
+            {(thinkingText || toolCalls.length > 0) && (
+              <ThoughtProcess
+                thinkingText={thinkingText}
+                toolCalls={toolCalls}
+                isStreaming={streaming.active}
+              />
+            )}
             {streaming.active && streaming.content && (
               <StreamingBubble content={streaming.content} />
-            )}
-            {streaming.active && !streaming.content && (
-              <div style={{ display: 'flex', padding: '12px 24px', alignItems: 'center' }}>
-                <div style={{ maxWidth: 800, margin: '0 auto', width: '100%', paddingLeft: 52 }}>
-                  <Spin size="small" />
-                  <Text type="secondary" style={{ marginLeft: 8, fontSize: 13 }}>AI 思考中...</Text>
-                </div>
-              </div>
             )}
             <div ref={messagesEndRef} />
           </div>
@@ -403,7 +469,7 @@ const DialoguePanel: React.FC<Props> = ({ activeDialogue, onDialogueUpdated, onS
           <div style={{
             display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
             height: '100%', padding: 40, position: 'relative', overflow: 'hidden',
-            background: 'linear-gradient(135deg, #f0f5ff 0%, #e6f7ff 50%, #f0f0ff 100%)',
+            background: 'var(--welcome-bg)',
           }}>
             {/* Decorative circles */}
             <div style={{
@@ -443,14 +509,14 @@ const DialoguePanel: React.FC<Props> = ({ activeDialogue, onDialogueUpdated, onS
                 <div key={i} style={{
                   display: 'flex', alignItems: 'center', gap: 10,
                   padding: '12px 16px', borderRadius: 10,
-                  background: 'rgba(255,255,255,0.7)', backdropFilter: 'blur(8px)',
-                  border: '1px solid rgba(255,255,255,0.8)',
+                  background: 'var(--welcome-card-bg)', backdropFilter: 'blur(8px)',
+                  border: '1px solid var(--welcome-card-border)',
                   minWidth: 140,
                 }}>
                   <div style={{
                     width: 36, height: 36, borderRadius: 10,
-                    background: '#f0f5ff', display: 'flex', alignItems: 'center', justifyContent: 'center',
-                    color: '#1677ff', fontSize: 18, flexShrink: 0,
+                    background: 'var(--feature-icon-bg)', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    color: 'var(--primary-color)', fontSize: 18, flexShrink: 0,
                   }}>{f.icon}</div>
                   <div>
                     <Text style={{ fontSize: 13, fontWeight: 600, display: 'block' }}>{f.title}</Text>
@@ -469,8 +535,8 @@ const DialoguePanel: React.FC<Props> = ({ activeDialogue, onDialogueUpdated, onS
                   size="large"
                   style={{
                     borderRadius: 10, padding: '18px 20px', height: 'auto',
-                    borderColor: 'rgba(0,0,0,0.06)',
-                    background: 'rgba(255,255,255,0.8)', backdropFilter: 'blur(8px)',
+                    borderColor: 'var(--border-color)',
+                    background: 'var(--welcome-card-bg)', backdropFilter: 'blur(8px)',
                     boxShadow: '0 1px 4px rgba(0,0,0,0.04)',
                     fontSize: 14, fontWeight: 500,
                   }}
@@ -492,14 +558,14 @@ const DialoguePanel: React.FC<Props> = ({ activeDialogue, onDialogueUpdated, onS
 
       {/* Input area */}
       <div style={{
-        borderTop: '1px solid #e8e8e8',
-        background: '#fff',
+        borderTop: '1px solid var(--border-color)',
+        background: 'var(--app-bg)',
         padding: '8px 24px 16px',
       }}>
         <div style={{ maxWidth: 800, margin: '0 auto' }}>
           {/* Integrated input container */}
           <div style={{
-            background: '#f5f5f5',
+            background: 'var(--content-bg)',
             borderRadius: 12,
             padding: pendingFileCards.length > 0 ? '8px 8px 4px 12px' : '4px 4px 4px 16px',
           }}>
@@ -512,14 +578,14 @@ const DialoguePanel: React.FC<Props> = ({ activeDialogue, onDialogueUpdated, onS
                     style={{
                       display: 'inline-flex', alignItems: 'center', gap: 6,
                       padding: '5px 6px 5px 10px', marginRight: 6, marginBottom: 4,
-                      borderRadius: 8, background: '#e8e8e8',
+                      borderRadius: 8, background: 'var(--card-bg)',
                       height: 36, maxWidth: 280,
                     }}
                   >
                     {card.uploading ? (
                       <Spin size="small" style={{ flexShrink: 0 }} />
                     ) : (
-                      <FileTextOutlined style={{ fontSize: 14, color: '#1677ff', flexShrink: 0 }} />
+                      <FileTextOutlined style={{ fontSize: 14, color: 'var(--primary-color)', flexShrink: 0 }} />
                     )}
                     <Text style={{ fontSize: 12, lineHeight: '20px' }} ellipsis={{ tooltip: card.name }}>
                       {card.name}
@@ -537,7 +603,7 @@ const DialoguePanel: React.FC<Props> = ({ activeDialogue, onDialogueUpdated, onS
                       style={{
                         width: 18, height: 18, minWidth: 18,
                         display: 'flex', alignItems: 'center', justifyContent: 'center',
-                        color: '#999', flexShrink: 0,
+                        color: 'var(--text-secondary)', flexShrink: 0,
                       }}
                     />
                   </div>
@@ -559,8 +625,9 @@ const DialoguePanel: React.FC<Props> = ({ activeDialogue, onDialogueUpdated, onS
                         border: '1px solid rgba(22,119,255,0.12)',
                       }}
                       onClick={() => {
-                        setInput(text + ' ->');
-                        setTimeout(() => textareaRef.current?.focus(), 0);
+                        if (activeDialogue) {
+                          sendMessage(text + ' ->', activeDialogue.id);
+                        }
                       }}
                     >
                       {text} -&gt;
@@ -648,7 +715,7 @@ const DialoguePanel: React.FC<Props> = ({ activeDialogue, onDialogueUpdated, onS
                 type="text"
                 icon={<UploadOutlined />}
                 size="small"
-                style={{ color: '#666', fontSize: 13 }}
+                style={{ color: 'var(--text-tertiary)', fontSize: 13 }}
                 loading={uploadingFiles.length > 0}
               >
                 上传文件
@@ -658,7 +725,7 @@ const DialoguePanel: React.FC<Props> = ({ activeDialogue, onDialogueUpdated, onS
               type="text"
               icon={<BulbOutlined />}
               size="small"
-              style={{ color: '#666', fontSize: 13 }}
+              style={{ color: 'var(--text-tertiary)', fontSize: 13 }}
             >
               思考
             </Button>
@@ -687,10 +754,10 @@ const DialoguePanel: React.FC<Props> = ({ activeDialogue, onDialogueUpdated, onS
             {/* Metadata */}
             <div style={{
               display: 'flex', alignItems: 'center', gap: 10,
-              padding: '12px 0', borderBottom: '1px solid #f0f0f0',
+              padding: '12px 0', borderBottom: '1px solid var(--sider-border)',
               marginBottom: 16,
             }}>
-              <FileTextOutlined style={{ fontSize: 24, color: '#1677ff' }} />
+              <FileTextOutlined style={{ fontSize: 24, color: 'var(--primary-color)' }} />
               <div>
                 <Text strong style={{ fontSize: 14 }}>{previewFile.title}</Text>
                 <Text type="secondary" style={{ fontSize: 12, display: 'block', marginTop: 2 }}>
@@ -702,7 +769,9 @@ const DialoguePanel: React.FC<Props> = ({ activeDialogue, onDialogueUpdated, onS
             {['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp', '.svg'].includes(previewFile.ext?.toLowerCase() || '') ? (
               <div style={{ textAlign: 'center' }}>
                 <img
-                  src={getFileUrl(previewFile.id)}
+                  src={(previewFile as any).fileId && activeDialogue
+                    ? getDialogueFileUrl(activeDialogue.id, (previewFile as any).fileId)
+                    : getFileUrl(previewFile.id)}
                   alt={previewFile.title}
                   style={{ maxWidth: '100%', borderRadius: 8, boxShadow: '0 2px 8px rgba(0,0,0,0.1)' }}
                 />
@@ -710,7 +779,7 @@ const DialoguePanel: React.FC<Props> = ({ activeDialogue, onDialogueUpdated, onS
             ) : previewContent ? (
               /* Text content */
               <div style={{
-                background: '#fafafa',
+                background: 'var(--preview-bg)',
                 borderRadius: 8,
                 padding: 16,
                 maxHeight: 'calc(100vh - 220px)',
@@ -725,14 +794,17 @@ const DialoguePanel: React.FC<Props> = ({ activeDialogue, onDialogueUpdated, onS
             ) : (
               /* Empty state */
               <div style={{ textAlign: 'center', padding: 60 }}>
-                <FileTextOutlined style={{ fontSize: 48, color: '#d9d9d9' }} />
+                <FileTextOutlined style={{ fontSize: 48, color: 'var(--empty-icon)' }} />
                 <Text type="secondary" style={{ display: 'block', marginTop: 16 }}>
                   暂无内容预览
                 </Text>
                 <Button
                   type="link"
                   icon={<PictureOutlined />}
-                  onClick={() => window.open(getFileUrl(previewFile.id), '_blank')}
+                  onClick={() => window.open(
+                    (previewFile as any).fileId && activeDialogue
+                      ? getDialogueFileUrl(activeDialogue.id, (previewFile as any).fileId)
+                      : getFileUrl(previewFile.id), '_blank')}
                   style={{ marginTop: 8 }}
                 >
                   查看原始文件
@@ -768,7 +840,7 @@ const DialoguePanel: React.FC<Props> = ({ activeDialogue, onDialogueUpdated, onS
                     {item.type === 'vector' ? '语义匹配' : '关键词匹配'}
                   </Text>
                 </Text>
-                <div style={{ fontSize: 13, color: '#666', marginTop: 4, whiteSpace: 'pre-wrap' }}>
+                <div style={{ fontSize: 13, color: 'var(--text-tertiary)', marginTop: 4, whiteSpace: 'pre-wrap' }}>
                   {item.matchedContent
                     ? highlight(item.matchedContent.substring(0, 200), searchQuery)
                     : (item.transcription?.substring(0, 200) || '')}
@@ -812,16 +884,16 @@ const MessageBubble: React.FC<{ message: DisplayMessage; onFilePreview?: (file: 
         <div style={{
           width: 36, height: 36, borderRadius: 8,
           display: 'flex', alignItems: 'center', justifyContent: 'center',
-          flexShrink: 0, background: isUser ? '#1677ff' : '#f0f0f0',
-          color: isUser ? '#fff' : '#666', fontSize: 16,
+          flexShrink: 0, background: isUser ? 'var(--primary-color)' : 'var(--hover-bg)',
+          color: isUser ? '#fff' : 'var(--text-tertiary)', fontSize: 16,
         }}>
           {isUser ? <UserOutlined /> : <RobotOutlined />}
         </div>
         <div style={{
           padding: '10px 16px', borderRadius: 12,
-          background: isUser ? '#1677ff' : '#fff',
-          color: isUser ? '#fff' : '#333',
-          border: isUser ? 'none' : '1px solid #e8e8e8',
+          background: isUser ? 'var(--primary-color)' : 'var(--msg-agent-bg)',
+          color: isUser ? '#fff' : 'var(--text-color)',
+          border: isUser ? 'none' : '1px solid var(--border-color)',
           fontSize: 14, lineHeight: 1.6, wordBreak: 'break-word',
           maxWidth: 'calc(100% - 48px)',
         }}>
@@ -871,13 +943,13 @@ const StreamingBubble: React.FC<{ content: string }> = ({ content }) => {
         <div style={{
           width: 36, height: 36, borderRadius: 8,
           display: 'flex', alignItems: 'center', justifyContent: 'center',
-          flexShrink: 0, background: '#f0f0f0', color: '#666', fontSize: 16,
+          flexShrink: 0, background: 'var(--hover-bg)', color: 'var(--text-tertiary)', fontSize: 16,
         }}>
           <RobotOutlined />
         </div>
         <div style={{
           padding: '10px 16px', borderRadius: 12,
-          background: '#fff', border: '1px solid #e8e8e8',
+          background: 'var(--msg-agent-bg)', border: '1px solid var(--border-color)',
           fontSize: 14, lineHeight: 1.6, wordBreak: 'break-word',
           maxWidth: 'calc(100% - 48px)',
         }}>
@@ -922,25 +994,25 @@ const RewriteBubble: React.FC<{ message: DisplayMessage; rewriteResultId: number
           <div style={{
             width: 36, height: 36, borderRadius: 8,
             display: 'flex', alignItems: 'center', justifyContent: 'center',
-            flexShrink: 0, background: '#f0f0f0', color: '#666', fontSize: 16,
+            flexShrink: 0, background: 'var(--hover-bg)', color: 'var(--text-tertiary)', fontSize: 16,
           }}>
             <EditOutlined />
           </div>
           <div style={{ flex: 1 }}>
             {/* Header */}
             <div style={{
-              padding: '8px 16px', background: '#fff',
+              padding: '8px 16px', background: 'var(--app-bg)',
               borderRadius: '12px 12px 0 0',
-              border: '1px solid #e8e8e8', borderBottom: 'none',
-              fontSize: 13, fontWeight: 600, color: '#1677ff',
+              border: '1px solid var(--border-color)', borderBottom: 'none',
+              fontSize: 13, fontWeight: 600, color: 'var(--primary-color)',
             }}>
               <FileTextOutlined style={{ marginRight: 6 }} />
               改写结果
             </div>
             {/* Content */}
             <div style={{
-              background: '#fff',
-              border: '1px solid #e8e8e8', borderTop: 'none',
+              background: 'var(--app-bg)',
+              border: '1px solid var(--border-color)', borderTop: 'none',
               padding: '12px 16px',
               fontSize: 14, lineHeight: 1.7, whiteSpace: 'pre-wrap',
               wordBreak: 'break-word',
@@ -949,9 +1021,9 @@ const RewriteBubble: React.FC<{ message: DisplayMessage; rewriteResultId: number
             </div>
             {/* Footer with preview, download, feedback */}
             <div style={{
-              padding: '8px 16px', background: '#fafafa',
+              padding: '8px 16px', background: 'var(--sider-bg)',
               borderRadius: '0 0 12px 12px',
-              border: '1px solid #e8e8e8', borderTop: 'none',
+              border: '1px solid var(--border-color)', borderTop: 'none',
               display: 'flex', justifyContent: 'space-between', alignItems: 'center',
             }}>
               <div style={{ display: 'flex', gap: 4 }}>
@@ -983,7 +1055,7 @@ const RewriteBubble: React.FC<{ message: DisplayMessage; rewriteResultId: number
                   icon={<LikeOutlined />}
                   onClick={() => handleFeedback('like')}
                   style={{
-                    fontSize: 12, color: docFeedback === 'like' ? '#1677ff' : '#999',
+                    fontSize: 12, color: docFeedback === 'like' ? 'var(--primary-color)' : 'var(--text-secondary)',
                   }}
                 />
                 <Button
@@ -992,7 +1064,7 @@ const RewriteBubble: React.FC<{ message: DisplayMessage; rewriteResultId: number
                   icon={<DislikeOutlined />}
                   onClick={() => handleFeedback('dislike')}
                   style={{
-                    fontSize: 12, color: docFeedback === 'dislike' ? '#ff4d4f' : '#999',
+                    fontSize: 12, color: docFeedback === 'dislike' ? '#ff4d4f' : 'var(--text-secondary)',
                   }}
                 />
               </div>
@@ -1027,6 +1099,147 @@ const RewriteBubble: React.FC<{ message: DisplayMessage; rewriteResultId: number
         </div>
       </Drawer>
     </>
+  );
+};
+
+// Thought process — Qwen-style unified collapsible block for thinking + tool calls
+const ThoughtProcess: React.FC<{
+  thinkingText: string;
+  toolCalls: ToolCallDisplay[];
+  isStreaming: boolean;
+}> = ({ thinkingText, toolCalls, isStreaming }) => {
+  const [expanded, setExpanded] = useState(true);
+
+  // Auto-collapse when streaming finishes
+  useEffect(() => {
+    if (!isStreaming) {
+      // Delay collapse slightly so user sees the final state
+      const timer = setTimeout(() => setExpanded(false), 500);
+      return () => clearTimeout(timer);
+    }
+  }, [isStreaming]);
+
+  const hasContent = thinkingText.length > 0 || toolCalls.length > 0;
+
+  if (!hasContent) return null;
+
+  return (
+    <div style={{ display: 'flex', padding: '8px 24px 2px 24px', justifyContent: 'flex-start' }}>
+      <div style={{ maxWidth: '75%', marginLeft: 48, width: '100%' }}>
+        <div
+          onClick={() => setExpanded(!expanded)}
+          style={{
+            display: 'flex', alignItems: 'center', gap: 8,
+            padding: '6px 12px',
+            background: 'var(--toolcall-bg)',
+            borderRadius: 8,
+            border: '1px solid var(--border-color)',
+            cursor: 'pointer', userSelect: 'none',
+            fontSize: 12,
+            color: 'var(--text-secondary)',
+          }}
+        >
+          <BulbOutlined style={{ fontSize: 13, color: '#faad14' }} />
+          <span style={{ fontWeight: 500, flex: 1 }}>
+            {isStreaming ? 'AI 思考中...' : 'AI 的思考过程'}
+          </span>
+          {isStreaming && <Spin size="small" style={{ fontSize: 10 }} />}
+          {expanded ? '▾' : '▸'}
+        </div>
+        {expanded && (
+          <div style={{
+            marginTop: 4,
+            padding: '8px 12px',
+            background: 'var(--thinking-bg)',
+            borderRadius: 8,
+            border: '1px solid var(--border-color)',
+            fontSize: 13, lineHeight: 1.6,
+            color: 'var(--text-tertiary)',
+          }}>
+            {/* Tool calls */}
+            {toolCalls.map(tc => (
+              <ToolCallItem key={tc.id} toolCall={tc} />
+            ))}
+            {/* Thinking text */}
+            {thinkingText && (
+              <div style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                {thinkingText}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
+
+// Tool call item inside the thought process block
+const TOOL_INFO: Record<string, { icon: string; label: string }> = {
+  search_knowledge_base: { icon: '📚', label: '搜索知识库' },
+  search_meeting_titles: { icon: '🔍', label: '搜索会议标题' },
+  memory_search: { icon: '🧠', label: '查询记忆' },
+  memory_get: { icon: '🧠', label: '读取记忆' },
+  read_profile: { icon: '👤', label: '读取用户信息' },
+  update_profile: { icon: '✏️', label: '更新用户信息' },
+  upload_to_knowledge_base: { icon: '📤', label: '上传到知识库' },
+  list_meetings: { icon: '📋', label: '获取会议列表' },
+};
+
+function summarizeResult(toolName: string, resultText: string): string {
+  if (!resultText) return '';
+  try {
+    const data = JSON.parse(resultText);
+    if (toolName === 'search_knowledge_base' && Array.isArray(data)) {
+      const names = data
+        .filter((r: any) => r.source)
+        .map((r: any) => r.source.replace(/\.(docx|doc|pdf|txt|md)$/i, ''))
+        .filter(Boolean);
+      if (names.length > 0) return `找到 ${names.length} 条相关记录：${names.join('、')}`;
+      if (data.length > 0) return `找到 ${data.length} 条结果`;
+    }
+    if (toolName === 'memory_search') {
+      return '已查询个人记忆数据';
+    }
+  } catch {}
+  return '';
+}
+
+const ToolCallItem: React.FC<{ toolCall: ToolCallDisplay }> = ({ toolCall }) => {
+  const info = TOOL_INFO[toolCall.name] || { icon: '🔧', label: toolCall.name };
+  const summary = summarizeResult(toolCall.name, toolCall.result);
+  const hasRawResult = toolCall.result.length > 0 && !summary;
+  const [showRaw, setShowRaw] = useState(false);
+
+  return (
+    <div style={{ marginBottom: 6, fontSize: 13, lineHeight: 1.6 }}>
+      <span>
+        {info.icon}
+        {' '}{info.label}
+        {' '}{toolCall.completed ? '✓' : '...'}
+      </span>
+      {summary && (
+        <div style={{ marginLeft: 20, color: 'var(--text-secondary)', fontSize: 12 }}>
+          {summary}
+        </div>
+      )}
+      {hasRawResult && (
+        <div
+          onClick={() => setShowRaw(!showRaw)}
+          style={{ marginLeft: 20, fontSize: 12, color: 'var(--text-secondary)', cursor: 'pointer' }}
+        >
+          {showRaw ? '▾ 查看返回数据' : '▸ 查看返回数据'}
+          {showRaw && (
+            <pre style={{
+              marginTop: 2, padding: 4, fontSize: 11, lineHeight: 1.4,
+              background: 'var(--toolcall-expanded-bg)', borderRadius: 4,
+              maxHeight: 120, overflow: 'auto', whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+            }}>
+              {toolCall.result}
+            </pre>
+          )}
+        </div>
+      )}
+    </div>
   );
 };
 
@@ -1067,51 +1280,6 @@ const getStatusLabel = (status: string): string => {
     case 'error': return '失败';
     default: return status;
   }
-};
-
-// File item in the file list
-const FileItem: React.FC<{ file: UploadedFile; onDelete: (id: number) => void }> = ({ file, onDelete }) => {
-  const { icon, color } = getFileTypeInfo(file.ext);
-  const isImage = ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp', '.svg'].includes(file.ext.toLowerCase());
-  const fileUrl = getFileUrl(file.id);
-
-  return (
-    <div style={{
-      display: 'flex', alignItems: 'center', gap: 8,
-      padding: '4px 0', borderBottom: '1px solid #f5f5f5',
-    }}>
-      {isImage ? (
-        <img
-          src={fileUrl}
-          alt={file.title}
-          style={{ width: 32, height: 32, borderRadius: 4, objectFit: 'cover', flexShrink: 0 }}
-          onError={(e) => {
-            (e.target as HTMLImageElement).style.display = 'none';
-            (e.target as HTMLImageElement).nextElementSibling?.classList.remove('hidden');
-          }}
-        />
-      ) : (
-        <div style={{ color, fontSize: 16, flexShrink: 0 }}>{icon}</div>
-      )}
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <Text style={{ fontSize: 12, display: 'block' }} ellipsis={{ tooltip: file.title }}>
-          {file.title}
-        </Text>
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 11, color: '#999' }}>
-          <span>{formatFileSize(file.fileSize)}</span>
-          <span style={{ color: getStatusColor(file.status) }}>{getStatusLabel(file.status)}</span>
-        </div>
-      </div>
-      <Button
-        type="text"
-        size="small"
-        danger
-        icon={<DeleteOutlined />}
-        onClick={() => onDelete(file.id)}
-        style={{ flexShrink: 0 }}
-      />
-    </div>
-  );
 };
 
 export default DialoguePanel;
