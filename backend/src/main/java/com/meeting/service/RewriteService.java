@@ -24,7 +24,6 @@ import java.nio.file.Path;
 import java.time.LocalDateTime;
 import java.util.*;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.stream.Collectors;
 
 @Slf4j
 @Service
@@ -183,17 +182,12 @@ public class RewriteService {
 
         RewriteResultEntity result = new RewriteResultEntity();
         result.setSession(session);
-        result.setSourceFileIds(toJsonIdList(sourceFileIds));
-        result.setReferenceIds(referenceIds != null && !referenceIds.isEmpty() ? toJsonIdList(referenceIds) : null);
+        result.setSourceFileIds(sourceFileIds != null ? sourceFileIds : new ArrayList<>());
+        result.setReferenceIds(referenceIds != null ? referenceIds : new ArrayList<>());
         result.setContent(content);
         result.setVersion(nextVersion);
         result.setCreatedAt(LocalDateTime.now());
         return rewriteResultRepository.save(result);
-    }
-
-    private String toJsonIdList(List<Long> ids) {
-        return ids.stream().map(String::valueOf)
-                .collect(Collectors.joining(",", "[", "]"));
     }
 
     public List<RewriteResultEntity> getRewriteHistory(Long dialogueId) {

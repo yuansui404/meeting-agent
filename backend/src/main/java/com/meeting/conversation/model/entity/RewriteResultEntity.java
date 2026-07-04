@@ -23,11 +23,15 @@ public class RewriteResultEntity {
     @JsonIgnore
     private SessionEntity session;
 
-    @Column(name = "source_file_ids", nullable = false, length = 500)
-    private String sourceFileIds;
+    @ElementCollection
+    @CollectionTable(name = "rewrite_result_source_files", joinColumns = @JoinColumn(name = "rewrite_result_id"))
+    @Column(name = "file_id")
+    private List<Long> sourceFileIds = new ArrayList<>();
 
-    @Column(name = "reference_ids", length = 500)
-    private String referenceIds;
+    @ElementCollection
+    @CollectionTable(name = "rewrite_result_references", joinColumns = @JoinColumn(name = "rewrite_result_id"))
+    @Column(name = "meeting_id")
+    private List<Long> referenceIds = new ArrayList<>();
 
     @Column(nullable = false, columnDefinition = "TEXT")
     private String content;

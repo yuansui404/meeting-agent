@@ -41,8 +41,8 @@ public class RewriteFeedbackService {
         feedback.setAction(action);
         feedbackRepository.save(feedback);
 
-        String referenceIds = result.getReferenceIds();
-        if (referenceIds == null || referenceIds.isBlank()) {
+        List<Long> docIds = result.getReferenceIds();
+        if (docIds == null || docIds.isEmpty()) {
             log.info("No reference documents to update priority for rewriteResult {}", rewriteResultId);
             return;
         }
@@ -50,26 +50,11 @@ public class RewriteFeedbackService {
         // 3. Update priority_score for all vector chunks of the referenced documents
         double delta = "like".equals(action) ? PRIORITY_DELTA : -PRIORITY_DELTA;
 
-        List<Long> docIds = parseIdList(referenceIds);
         for (Long docId : docIds) {
             int updated = jdbcTemplate.update(
                     "UPDATE meeting_vectors SET priority_score = GREATEST(?, LEAST(?, COALESCE(priority_score, 0) + ?)) WHERE meeting_id = ?",
                     PRIORITY_MIN, PRIORITY_MAX, delta, docId);
             log.info("Updated priority_score by {} for document {} ({} vectors affected)", delta, docId, updated);
         }
-    }
-
-    private List<Long> parseIdList(String json) {
-        String trimmed = json.trim();
-        if (trimmed.isBlank() || "{}".equals(trimmed) || "[]".equals(trimmed)) return List.of();
-        if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
-            trimmed = trimmed.substring(1, trimmed.length() - 1);
-        }
-        if (trimmed.isBlank()) return List.of();
-        return java.util.Arrays.stream(trimmed.split(","))
-                .map(String::trim)
-                .filter(s -> !s.isEmpty())
-                .map(Long::parseLong)
-                .toList();
     }
 }
