@@ -12,9 +12,11 @@ import java.util.List;
 @Repository
 public interface DocumentChunkRepository extends JpaRepository<DocumentChunkEntity, Long> {
 
-    List<DocumentChunkEntity> findByDocumentIdOrderByChunkIndex(Long documentId);
+    @Query("SELECT c FROM DocumentChunkEntity c WHERE c.document.id = :documentId ORDER BY c.chunkIndex")
+    List<DocumentChunkEntity> findByDocumentIdOrderByChunkIndex(@Param("documentId") Long documentId);
 
-    List<DocumentChunkEntity> findByDocumentIdInOrderByChunkIndex(List<Long> documentIds);
+    @Query("SELECT c FROM DocumentChunkEntity c WHERE c.document.id IN :documentIds ORDER BY c.chunkIndex")
+    List<DocumentChunkEntity> findByDocumentIdInOrderByChunkIndex(@Param("documentIds") List<Long> documentIds);
 
     @Query(name = "DocumentChunkEntity.vectorSearch", nativeQuery = true)
     List<VectorSearchHit> vectorSearch(@Param("embedding") String embedding, @Param("topK") int topK);

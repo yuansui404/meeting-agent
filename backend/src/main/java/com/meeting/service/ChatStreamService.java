@@ -4,8 +4,10 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.meeting.service.SseEventTypes.SseEventType;
 import com.meeting.service.SseEventTypes.SseToolEvent;
 import com.meeting.service.SseEventTypes.SseToolResultEvent;
+import io.agentscope.core.agent.Event;
+import io.agentscope.core.agent.EventType;
 import io.agentscope.core.agent.RuntimeContext;
-import io.agentscope.core.event.*;
+import io.agentscope.core.message.Msg;
 import io.agentscope.core.message.UserMessage;
 import io.agentscope.harness.agent.HarnessAgent;
 import lombok.RequiredArgsConstructor;
@@ -15,13 +17,13 @@ import org.springframework.stereotype.Service;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.io.IOException;
+import java.util.EnumMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
- * SSE 流式输出控制。负责 agent.streamEvents() 的事件分发和 SSE 发送。
- * 从 ChatService 中抽取。
+ * SSE 流式输出控制。负责 agent.stream() 的事件分发和 SSE 发送。
  */
 @Slf4j
 @Service
@@ -32,13 +34,20 @@ public class ChatStreamService {
     private final ObjectMapper objectMapper;
     private final DialoguePersistenceService dialoguePersistenceService;
 
+    // ========== 事件分发：按 EventType 路由 ==========
+    @FunctionalInterface
+    private interface EventHandler {
+        void handle(Event event, SseEmitter emitter, StringBuilder fullResponse) throws IOException;
+    }
+
+    private final Map<EventType, EventHandler> handlers = new EnumMap<>(EventType.class) {{
+        put(EventType.REASONING,    ChatStreamService.this::collectText);
+        put(EventType.AGENT_RESULT, ChatStreamService.this::streamAndPersist);
+        put(EventType.TOOL_RESULT,  ChatStreamService.this::forwardToolResult);
+    }};
+
     /**
-     * 执行流式对话：构建 UserMessage → agent.streamEvents() → SSE 事件转发 → 持久化。
-     *
-     * @param dialogueId      对话 ID
-     * @param enrichedMessage 带文件上下文的完整 prompt（已由 FileContextBuilder 构建）
-     * @param originalQuestion 用户原始问题（用于持久化）
-     * @param messageFiles    文件元数据（用于持久化）
+     * 执行流式对话：构建 UserMessage → agent.stream() → SSE 事件转发 → 持久化。
      */
     public void stream(Long dialogueId, String enrichedMessage, String originalQuestion,
                        List<Map<String, Object>> messageFiles, SseEmitter emitter,
@@ -56,26 +65,19 @@ public class ChatStreamService {
                     .sessionId("dialogue-" + dialogueId)
                     .build();
 
-            // Register interrupt action: per-session interrupt via ReActAgent delegate
             cancelToken.setCancelAction(() -> {
                 log.info("Interrupting agent for dialogue {}", dialogueId);
                 agent.getDelegate().interrupt(ctx);
             });
 
             final AtomicBoolean clientDisconnected = new AtomicBoolean(false);
-            final AtomicBoolean subagentActive = new AtomicBoolean(false);
 
-            agent.streamEvents(msg, ctx)
+            agent.stream(msg, ctx)
                     .takeUntil(event -> cancelToken.isCancelled())
                     .doOnNext(event -> {
-                        if (event instanceof AgentStartEvent) {
-                            subagentActive.set(true);
-                        } else if (event instanceof AgentEndEvent) {
-                            subagentActive.set(false);
-                        }
                         if (!clientDisconnected.get()) {
                             try {
-                                forwardEvent(emitter, event, fullResponse, subagentActive, clientDisconnected);
+                                forwardEvent(event, emitter, fullResponse, clientDisconnected);
                             } catch (IOException | IllegalStateException ex) {
                                 clientDisconnected.set(true);
                                 log.info("Client disconnected during stream: {}", ex.getMessage());
@@ -103,58 +105,61 @@ public class ChatStreamService {
         }
     }
 
-    private void forwardEvent(SseEmitter emitter, Object event,
-                              StringBuilder fullResponse, AtomicBoolean subagentActive,
-                              AtomicBoolean clientDisconnected) throws IOException {
-        if (event instanceof TextBlockDeltaEvent e) {
-            if (subagentActive.get()) return;
-            String delta = e.getDelta();
-            fullResponse.append(delta);
-            emitter.send(SseEmitter.event()
-                    .name(SseEventType.TEXT_DELTA.name()).data(delta));
-
-        } else if (event instanceof ThinkingBlockDeltaEvent e) {
-            if (subagentActive.get()) return;
-            String delta = e.getDelta();
-            if (delta != null) {
-                delta = delta.replaceAll("(?i)exit\\s*code:?\\s*\\d+", "").trim();
-                if (!delta.isEmpty()) {
-                    emitter.send(SseEmitter.event()
-                            .name(SseEventType.THINKING_DELTA.name()).data(delta));
-                }
-            }
-
-        } else if (event instanceof ToolCallStartEvent e) {
-            emitter.send(SseEmitter.event()
-                    .name(SseEventType.TOOL_CALL.name())
-                    .data(objectMapper.writeValueAsString(
-                            new SseToolEvent("start", e.getToolCallId(), e.getToolCallName()))));
-
-        } else if (event instanceof ToolCallEndEvent e) {
-            emitter.send(SseEmitter.event()
-                    .name(SseEventType.TOOL_CALL.name())
-                    .data(objectMapper.writeValueAsString(
-                            new SseToolEvent("end", e.getToolCallId(), e.getToolCallName()))));
-
-        } else if (event instanceof ToolResultStartEvent e) {
-            emitter.send(SseEmitter.event()
-                    .name(SseEventType.TOOL_RESULT.name())
-                    .data(objectMapper.writeValueAsString(
-                            new SseToolResultEvent("start", e.getToolCallId(), e.getToolCallName(), null))));
-
-        } else if (event instanceof ToolResultTextDeltaEvent e) {
-            emitter.send(SseEmitter.event()
-                    .name(SseEventType.TOOL_RESULT.name())
-                    .data(objectMapper.writeValueAsString(
-                            new SseToolResultEvent("delta", e.getToolCallId(), e.getToolCallName(), e.getDelta()))));
-
-        } else if (event instanceof ToolResultEndEvent e) {
-            emitter.send(SseEmitter.event()
-                    .name(SseEventType.TOOL_RESULT.name())
-                    .data(objectMapper.writeValueAsString(
-                            new SseToolResultEvent("end", e.getToolCallId(), e.getToolCallName(), null))));
+    private void forwardEvent(Event event, SseEmitter emitter,
+                              StringBuilder fullResponse, AtomicBoolean clientDisconnected) throws IOException {
+        log.debug("SSE event: type={}", event.getType());
+        EventHandler handler = handlers.get(event.getType());
+        if (handler != null) {
+            handler.handle(event, emitter, fullResponse);
         }
     }
+
+    // ========== 各事件处理器 ==========
+
+    /**
+     * 收集推理文本：记录到 fullResponse（用于持久化），不发送 SSE。
+     */
+    private void collectText(Event event, SseEmitter emitter,
+                             StringBuilder fullResponse) {
+        Msg message = event.getMessage();
+        if (message == null) return;
+        String text = message.getTextContent();
+        if (text != null && !text.isEmpty()) {
+            fullResponse.append(text);
+        }
+    }
+
+    /**
+     * 最终结果：发送 SSE + 覆盖 fullResponse（用于持久化）。
+     */
+    private void streamAndPersist(Event event, SseEmitter emitter,
+                                  StringBuilder fullResponse) throws IOException {
+        Msg message = event.getMessage();
+        if (message == null) return;
+        String text = message.getTextContent();
+        if (text == null || text.isEmpty()) return;
+        fullResponse.setLength(0);
+        fullResponse.append(text);
+        emitter.send(SseEmitter.event()
+                .name(SseEventType.TEXT_DELTA.name()).data(text));
+    }
+
+    /**
+     * 工具结果转发：从 Event.message 中提取文本，发送 SSE TOOL_RESULT 事件。
+     */
+    private void forwardToolResult(Event event, SseEmitter emitter,
+                                   StringBuilder fullResponse) throws IOException {
+        Msg message = event.getMessage();
+        if (message == null) return;
+        String text = message.getTextContent();
+        if (text == null || text.isEmpty()) return;
+        emitter.send(SseEmitter.event()
+                .name(SseEventType.TOOL_RESULT.name())
+                .data(objectMapper.writeValueAsString(
+                        new SseToolResultEvent("delta", null, null, text))));
+    }
+
+    // ========== 辅助方法 ==========
 
     private void handleStreamError(SseEmitter emitter, Exception e) {
         try {
