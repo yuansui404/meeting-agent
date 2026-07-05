@@ -1,6 +1,6 @@
 package com.meeting.agent;
 
-import com.meeting.service.ProfileService;
+import com.meeting.user.service.ProfileService;
 import io.agentscope.core.message.ToolResultBlock;
 import io.agentscope.core.tool.AgentTool;
 import io.agentscope.core.tool.ToolCallParam;

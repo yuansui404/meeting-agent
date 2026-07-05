@@ -4,8 +4,8 @@ import com.meeting.common.ApiResponse;
 import com.meeting.controller.dto.request.StyleExemplarRequest;
 import com.meeting.controller.dto.response.KBUploadVO;
 import com.meeting.meeting.model.entity.MeetingMinutes;
-import com.meeting.service.KnowledgeBaseService;
-import com.meeting.service.VectorizationService;
+import com.meeting.knowledgebase.service.KnowledgeBaseService;
+import com.meeting.llm.service.VectorizationService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -25,6 +25,9 @@ public class KnowledgeBaseController {
 
     @PostMapping("/meetings/knowledge-base/upload")
     public ApiResponse<KBUploadVO> uploadToKnowledgeBase(@RequestParam("file") MultipartFile file) throws Exception {
+        if (file.getSize() > 10L * 1024 * 1024) {
+            throw com.meeting.common.BusinessException.badRequest("文件大小超过 10MB 限制");
+        }
         MeetingMinutes meeting = knowledgeBaseService.uploadDocument(file);
         return ApiResponse.ok(new KBUploadVO(meeting.getId(), meeting.getTitle()));
     }

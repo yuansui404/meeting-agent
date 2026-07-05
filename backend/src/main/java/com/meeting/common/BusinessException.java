@@ -26,6 +26,10 @@ public class BusinessException extends RuntimeException {
 
     // --- 客户端错误 1xxxxx ---
 
+    public static BusinessException badRequest(String msg) {
+        return new BusinessException(100000, msg);
+    }
+
     public static BusinessException notFound(String msg) {
         return new BusinessException(100002, msg);
     }

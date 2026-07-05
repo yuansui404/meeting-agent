@@ -3,7 +3,7 @@ package com.meeting.controller;
 import com.meeting.common.ApiResponse;
 import com.meeting.controller.dto.request.SaveMemoryRequest;
 import com.meeting.controller.dto.response.TextContentVO;
-import com.meeting.service.MemoryStorageService;
+import com.meeting.user.service.MemoryStorageService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.*;

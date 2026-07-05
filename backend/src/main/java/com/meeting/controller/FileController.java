@@ -2,13 +2,14 @@ package com.meeting.controller;
 
 import com.meeting.common.ApiResponse;
 import com.meeting.common.BusinessException;
+import com.meeting.common.FileMetadata;
 import com.meeting.config.FileProperties;
 import com.meeting.controller.dto.response.FileUploadVO;
 import com.meeting.controller.dto.response.TextContentVO;
 import com.meeting.meeting.repository.MeetingMinutesRepository;
-import com.meeting.service.FileProcessingService;
-import com.meeting.service.SessionService;
-import com.meeting.service.TranscriptionService;
+import com.meeting.transcription.service.FileProcessingService;
+import com.meeting.conversation.service.SessionService;
+import com.meeting.transcription.service.TranscriptionService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.core.io.FileSystemResource;
@@ -20,7 +21,6 @@ import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.nio.file.Path;
-import java.util.Map;
 
 @Slf4j
 @RestController
@@ -34,25 +34,28 @@ public class FileController {
     private final MeetingMinutesRepository meetingRepository;
     private final SessionService sessionService;
 
+    private static final long MAX_FILE_SIZE = 10L * 1024 * 1024;       // 10MB per file
+    private static final long MAX_TOTAL_SIZE = 100L * 1024 * 1024;     // 100MB total
+    private static final int MAX_FILE_COUNT = 10;
+
     @PostMapping("/upload")
     public ApiResponse<FileUploadVO> uploadFile(
             @RequestParam MultipartFile file,
             @RequestParam Long dialogueId) throws Exception {
+        validateUpload(file, dialogueId);
+
         String ext = FileProcessingService.getExtension(file.getOriginalFilename());
-        Map<String, Object> fileMeta = fileProcessingService.saveDialogueFile(file, dialogueId);
+        FileMetadata fileMeta = fileProcessingService.saveDialogueFile(file, dialogueId);
 
         if (FileProcessingService.isTranscribable(ext)) {
-            transcriptionService.startTranscription(
-                    (String) fileMeta.get("filePath"),
-                    (String) fileMeta.get("fileName"),
-                    dialogueId);
+            transcriptionService.startTranscription(fileMeta.filePath(), fileMeta.fileName(), dialogueId);
         }
 
         return ApiResponse.ok(new FileUploadVO(
-                (String) fileMeta.get("fileId"),
-                (String) fileMeta.get("fileName"),
-                (String) fileMeta.get("filePath"),
-                (Long) fileMeta.get("fileSize"),
+                fileMeta.fileId(),
+                fileMeta.fileName(),
+                fileMeta.filePath(),
+                fileMeta.fileSize(),
                 dialogueId
         ));
     }
@@ -107,6 +110,24 @@ public class FileController {
         String ext = FileProcessingService.getExtension(path.getFileName().toString()).toLowerCase();
         String content = FileProcessingService.readFileContentWithSidecar(path, ext);
         return ApiResponse.ok(new TextContentVO(content != null ? content : ""));
+    }
+
+    private void validateUpload(MultipartFile file, Long dialogueId) {
+        if (file.getSize() > MAX_FILE_SIZE) {
+            throw BusinessException.badRequest("文件大小超过 10MB 限制");
+        }
+
+        java.util.List<FileMetadata> existingFiles = sessionService.extractFilesFromState(dialogueId);
+        if (existingFiles.size() >= MAX_FILE_COUNT) {
+            throw BusinessException.badRequest("最多上传 " + MAX_FILE_COUNT + " 个文件");
+        }
+
+        long totalSize = existingFiles.stream()
+                .mapToLong(f -> f.fileSize() != null ? f.fileSize() : 0)
+                .sum();
+        if (totalSize + file.getSize() > MAX_TOTAL_SIZE) {
+            throw BusinessException.badRequest("文件总大小超过 100MB 限制");
+        }
     }
 
     private ResponseEntity<Resource> buildFileResponse(Path filePath) {

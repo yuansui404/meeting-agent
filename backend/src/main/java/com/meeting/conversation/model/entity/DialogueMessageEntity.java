@@ -1,6 +1,7 @@
 package com.meeting.conversation.model.entity;
 
 import com.fasterxml.jackson.annotation.JsonIgnore;
+import com.meeting.common.FileMetadata;
 import com.meeting.conversation.converter.JsonListConverter;
 import com.meeting.conversation.converter.JsonMapConverter;
 import jakarta.persistence.*;
@@ -35,7 +36,7 @@ public class DialogueMessageEntity {
 
     @Column(columnDefinition = "TEXT")
     @Convert(converter = JsonListConverter.class)
-    private List<Map<String, Object>> files;
+    private List<FileMetadata> files;
 
     @Column(name = "message_type", length = 32)
     private String messageType;

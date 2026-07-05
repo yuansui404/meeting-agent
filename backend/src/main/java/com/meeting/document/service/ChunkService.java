@@ -8,7 +8,7 @@ import com.meeting.document.model.entity.DocumentChunkEntity;
 import com.meeting.document.model.entity.DocumentEntity;
 import com.meeting.document.repository.DocumentChunkRepository;
 import com.meeting.document.repository.DocumentRepository;
-import com.meeting.service.EmbeddingService;
+import com.meeting.llm.service.EmbeddingService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;

@@ -1,7 +1,7 @@
 package com.meeting.config;
 
 import com.meeting.agent.*;
-import com.meeting.service.UploadToKnowledgeBaseTool;
+import com.meeting.knowledgebase.tool.UploadToKnowledgeBaseTool;
 import com.meeting.state.PgAgentStateStore;
 import io.agentscope.core.formatter.openai.DeepSeekFormatter;
 import io.agentscope.core.model.OpenAIChatModel;

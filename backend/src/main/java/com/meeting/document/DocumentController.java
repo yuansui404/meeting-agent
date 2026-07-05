@@ -19,6 +19,9 @@ public class DocumentController {
 
     @PostMapping("/upload")
     public ApiResponse<DocumentEntity> upload(@RequestParam("file") MultipartFile file) {
+        if (file.getSize() > 10L * 1024 * 1024) {
+            throw com.meeting.common.BusinessException.badRequest("文件大小超过 10MB 限制");
+        }
         DocumentEntity doc = documentService.processUpload(file);
         return ApiResponse.ok(doc);
     }

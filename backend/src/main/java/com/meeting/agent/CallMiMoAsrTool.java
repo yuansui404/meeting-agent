@@ -1,6 +1,6 @@
 package com.meeting.agent;
 
-import com.meeting.service.TranscriptionService;
+import com.meeting.transcription.service.TranscriptionService;
 import io.agentscope.core.message.ToolResultBlock;
 import io.agentscope.core.tool.AgentTool;
 import io.agentscope.core.tool.ToolCallParam;

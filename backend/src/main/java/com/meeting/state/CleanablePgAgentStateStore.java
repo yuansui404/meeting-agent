@@ -55,9 +55,7 @@ public class CleanablePgAgentStateStore extends PgAgentStateStore {
 
             UserMessage.Builder builder = UserMessage.builder().textContent(originalQuestion);
             Map<String, Object> cleanMeta = new HashMap<>();
-            Object fileIds = meta.get("fileIds");
             Object files = meta.get("files");
-            if (fileIds != null) cleanMeta.put("fileIds", fileIds);
             if (files != null) cleanMeta.put("files", files);
             if (!cleanMeta.isEmpty()) builder.metadata(cleanMeta);
             copy.set(i, builder.build());

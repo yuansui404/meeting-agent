@@ -219,7 +219,6 @@ const DialoguePanel: React.FC<Props> = ({ activeDialogue, onDialogueUpdated, onS
     setToolCalls([]);
 
     try {
-      const fileIds = filesForDisplay.map(f => f.id).filter(id => id > 0);
       // Build file metadata for new-style files (state_json backed)
       const filesMeta = pendingFileCards
         .filter(f => !f.uploading && f.fileId)
@@ -248,7 +247,6 @@ const DialoguePanel: React.FC<Props> = ({ activeDialogue, onDialogueUpdated, onS
           setSending(false);
           antMsg.error('对话出错: ' + err.message);
         },
-        fileIds,
         filesMeta && filesMeta.length > 0 ? filesMeta : undefined,
         (delta) => {
           setThinkingText(prev => prev + delta);
@@ -315,6 +313,28 @@ const DialoguePanel: React.FC<Props> = ({ activeDialogue, onDialogueUpdated, onS
   };
 
   const handleFileUpload = async (file: File) => {
+    const MAX_FILE_SIZE = 10 * 1024 * 1024;       // 10MB per file
+    const MAX_TOTAL_SIZE = 100 * 1024 * 1024;      // 100MB total
+    const MAX_FILE_COUNT = 10;
+
+    if (file.size > MAX_FILE_SIZE) {
+      antMsg.warning(`文件 ${file.name} 超过 10MB 限制`);
+      return;
+    }
+
+    const existingCount = uploadedFiles.length + pendingFileCards.length;
+    if (existingCount >= MAX_FILE_COUNT) {
+      antMsg.warning(`最多上传 ${MAX_FILE_COUNT} 个文件`);
+      return;
+    }
+
+    const existingTotalSize = uploadedFiles.reduce((sum, f) => sum + (f.fileSize || 0), 0)
+      + pendingFileCards.reduce((sum, f) => sum + (f.fileSize || 0), 0);
+    if (existingTotalSize + file.size > MAX_TOTAL_SIZE) {
+      antMsg.warning('文件总大小超过 100MB 限制');
+      return;
+    }
+
     let dialogue = activeDialogue;
     if (!dialogue) {
       dialogue = await onCreateDialogue();

@@ -291,7 +291,6 @@ export const streamChat = (
   onToken: (token: string) => void,
   onDone: () => void,
   onError: (err: Error) => void,
-  fileIds?: number[],
   files?: any[],
   onThinking?: (delta: string) => void,
   onToolCall?: (data: any) => void,
@@ -304,9 +303,6 @@ export const streamChat = (
   (async () => {
     try {
       const body: any = { message };
-      if (fileIds && fileIds.length > 0) {
-        body.fileIds = fileIds;
-      }
       if (files && files.length > 0) {
         body.files = files;
       }

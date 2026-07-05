@@ -12,10 +12,13 @@ management:
         include: refresh,health
 
 spring:
+  threads:
+    virtual:
+      enabled: true
   servlet:
     multipart:
-      max-file-size: 500MB
-      max-request-size: 500MB
+      max-file-size: 10MB
+      max-request-size: 10MB
   application:
     name: meeting-agent
   cloud:

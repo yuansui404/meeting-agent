@@ -3,22 +3,22 @@ package com.meeting.conversation.converter;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.meeting.common.FileMetadata;
 import jakarta.persistence.AttributeConverter;
 import jakarta.persistence.Converter;
 import lombok.extern.slf4j.Slf4j;
 
 import java.util.List;
-import java.util.Map;
 
 @Slf4j
 @Converter(autoApply = false)
-public class JsonListConverter implements AttributeConverter<List<Map<String, Object>>, String> {
+public class JsonListConverter implements AttributeConverter<List<FileMetadata>, String> {
 
     private static final ObjectMapper MAPPER = new ObjectMapper();
-    private static final TypeReference<List<Map<String, Object>>> TYPE = new TypeReference<>() {};
+    private static final TypeReference<List<FileMetadata>> TYPE = new TypeReference<>() {};
 
     @Override
-    public String convertToDatabaseColumn(List<Map<String, Object>> attribute) {
+    public String convertToDatabaseColumn(List<FileMetadata> attribute) {
         if (attribute == null) return null;
         try {
             return MAPPER.writeValueAsString(attribute);
@@ -29,7 +29,7 @@ public class JsonListConverter implements AttributeConverter<List<Map<String, Ob
     }
 
     @Override
-    public List<Map<String, Object>> convertToEntityAttribute(String dbData) {
+    public List<FileMetadata> convertToEntityAttribute(String dbData) {
         if (dbData == null || dbData.isBlank()) return null;
         try {
             return MAPPER.readValue(dbData, TYPE);

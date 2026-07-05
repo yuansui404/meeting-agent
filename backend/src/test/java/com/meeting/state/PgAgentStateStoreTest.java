@@ -206,7 +206,6 @@ class PgAgentStateStoreTest {
         UserMessage msg = new UserMessage("请参考以下资料来回答问题。\n资料内容：xxx\n\n问题：总结一下");
         msg.getMetadata().put("_enriched", true);
         msg.getMetadata().put("_originalQuestion", "总结一下");
-        msg.getMetadata().put("fileIds", List.of(1L, 2L));
         msg.getMetadata().put("files", List.of(Map.of("fileName", "test.pdf")));
         state.contextMutable().add(msg);
 
