@@ -1,6 +1,7 @@
 package com.meeting.config;
 
 import com.meeting.agent.*;
+import com.meeting.conversation.middleware.FileContextMiddleware;
 import com.meeting.knowledgebase.tool.UploadToKnowledgeBaseTool;
 import com.meeting.state.PgAgentStateStore;
 import io.agentscope.core.formatter.openai.DeepSeekFormatter;
@@ -87,7 +88,8 @@ public class AgentConfig {
     @Bean
     public HarnessAgent meetingAssistantAgent(OpenAIChatModel openAIChatModel,
                                               Toolkit toolkit,
-                                              PgAgentStateStore pgAgentStateStore) {
+                                              PgAgentStateStore pgAgentStateStore,
+                                              FileContextMiddleware fileContextMiddleware) {
         return HarnessAgent.builder()
                 .name("MeetingAssistant")
                 .description("会议纪要智能助手，支持子 agent 委派")
@@ -129,6 +131,7 @@ public class AgentConfig {
                 .maxIters(8)
                 .stateStore(pgAgentStateStore)
                 .disableFilesystemTools()
+                .middleware(fileContextMiddleware)
                 .build();
     }
 }

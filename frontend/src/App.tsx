@@ -92,7 +92,6 @@ const App: React.FC = () => {
         status: 'active',
         updatedAt: new Date().toISOString(),
         meetingId: null,
-        imported: false,
       };
       setActiveDialogue(newDialogue);
       refreshDialogues();
@@ -118,7 +117,6 @@ const App: React.FC = () => {
         status: 'active',
         updatedAt: new Date().toISOString(),
         meetingId: null,
-        imported: false,
       };
       setActiveDialogue(newDialogue);
       refreshDialogues();
@@ -146,7 +144,6 @@ const App: React.FC = () => {
         status: 'active',
         updatedAt: new Date().toISOString(),
         meetingId: null,
-        imported: false,
       };
       setActiveDialogue(newDialogue);
       refreshDialogues();

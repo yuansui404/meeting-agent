@@ -2,7 +2,6 @@ package com.meeting.controller;
 
 import com.meeting.common.ApiResponse;
 import com.meeting.common.BusinessException;
-import com.meeting.controller.dto.request.AddMessageRequest;
 import com.meeting.controller.dto.request.CreateSessionRequest;
 import com.meeting.controller.dto.request.UpdateTitleRequest;
 import com.meeting.conversation.service.RewriteService;
@@ -34,12 +33,6 @@ public class SessionController {
         return ApiResponse.ok(Map.of("dialogueId", session.getId()));
     }
 
-    @PostMapping("/dialogue/{id}/message")
-    public ApiResponse<Map<String, Object>> addMessage(@PathVariable Long id, @Valid @RequestBody AddMessageRequest request) {
-        sessionService.addMessage(id, request.role(), request.content(), request.messageType(), null);
-        return ApiResponse.ok(Map.of("messageId", 0, "timestamp", java.time.LocalDateTime.now().toString()));
-    }
-
     @GetMapping("/dialogue/{id}")
     public ApiResponse<?> getSession(@PathVariable Long id) {
         return ApiResponse.ok(sessionService.getSessionWithMessages(id));
@@ -65,12 +58,6 @@ public class SessionController {
     @PutMapping("/dialogue/{id}/title")
     public ApiResponse<Void> updateTitle(@PathVariable Long id, @Valid @RequestBody UpdateTitleRequest request) {
         sessionService.updateTitle(id, request.title().trim());
-        return ApiResponse.ok(null);
-    }
-
-    @PostMapping("/dialogue/{id}/import")
-    public ApiResponse<Void> importSession(@PathVariable Long id) {
-        sessionService.importSession(id);
         return ApiResponse.ok(null);
     }
 

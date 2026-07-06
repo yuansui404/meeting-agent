@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.meeting.common.FileMetadata;
 import com.meeting.common.SseEventTypes.SseEventType;
 import com.meeting.common.SseEventTypes.SseToolResultEvent;
+import com.meeting.conversation.model.AgentResponseMetadata;
 import io.agentscope.core.agent.RuntimeContext;
 import io.agentscope.core.event.*;
 import io.agentscope.core.message.UserMessage;
@@ -14,7 +15,11 @@ import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Service;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
@@ -31,49 +36,47 @@ public class ChatStreamService {
     private final DialoguePersistenceService dialoguePersistenceService;
 
     /**
-     * 执行流式对话：构建 UserMessage → agent.streamEvents() → SSE 事件流 → 持久化。
+     * 执行流式对话：agent.streamEvents() → SSE 事件流 → 持久化。
      * 前端断开只停止推流，大模型继续生成完毕并持久化。
      */
-    public void stream(SseEmitter emitter, Long dialogueId, String enrichedMessage,
-                       String originalQuestion, List<FileMetadata> messageFiles) {
+    public void stream(SseEmitter emitter, Long dialogueId, UserMessage msg,
+                       RuntimeContext ctx, String originalQuestion, List<FileMetadata> messageFiles) {
         StringBuilder fullResponse = new StringBuilder();
+        StringBuilder thinkingText = new StringBuilder();
+        Map<String, AgentResponseMetadata.ToolCallRecord> toolCalls = new LinkedHashMap<>();
         AtomicBoolean disconnected = new AtomicBoolean(false);
 
+        // 注册SSE回调
         emitter.onCompletion(() -> disconnected.set(true));
-        emitter.onTimeout(() -> disconnected.set(true));
-
-        UserMessage msg = new UserMessage(enrichedMessage);
-        msg.getMetadata().put("_enriched", true);
-        msg.getMetadata().put("_originalQuestion", originalQuestion);
-        if (messageFiles != null && !messageFiles.isEmpty()) {
-            msg.getMetadata().put("files", messageFiles);
-        }
-
-        RuntimeContext ctx = RuntimeContext.builder()
-                .sessionId("dialogue-" + dialogueId)
-                .build();
+        emitter.onTimeout(() -> {
+            disconnected.set(true);
+            try {
+                emitter.completeWithError(new TimeoutException("SSE emitter timed out"));
+            } catch (Exception ignored) {
+            }
+        });
 
         Thread.ofVirtual().start(() -> {
             try {
                 agent.streamEvents(msg, ctx).subscribe(
-                        event -> handleEvent(event, fullResponse, emitter, disconnected),
-                        error -> handleError(error, emitter, disconnected, dialogueId,
-                                originalQuestion, fullResponse, messageFiles),
-                        () -> handleComplete(emitter, disconnected, dialogueId,
-                                originalQuestion, fullResponse, messageFiles)
+                        event -> handleEvent(event, fullResponse, thinkingText, toolCalls, emitter, disconnected),
+                        error -> handleError(error, emitter, disconnected, dialogueId, originalQuestion, messageFiles),
+                        () -> handleComplete(emitter, disconnected, dialogueId, fullResponse, thinkingText, toolCalls, originalQuestion, messageFiles)
                 );
             } catch (Exception e) {
+                // streamEvents抛异常处理，与 subscribe 的互补
                 log.error("Failed to subscribe to agent stream for dialogue {}", dialogueId, e);
-                handleError(e, emitter, disconnected, dialogueId,
-                        originalQuestion, fullResponse, messageFiles);
+                handleError(e, emitter, disconnected, dialogueId, originalQuestion, messageFiles);
             }
         });
     }
 
     private void handleEvent(AgentEvent event, StringBuilder fullResponse,
+                             StringBuilder thinkingText, Map<String, AgentResponseMetadata.ToolCallRecord> toolCalls,
                              SseEmitter emitter, AtomicBoolean disconnected) {
         try {
             switch (event.getType()) {
+                // AI 正在生成的文字（逐字）
                 case TEXT_BLOCK_DELTA -> {
                     String delta = ((TextBlockDeltaEvent) event).getDelta();
                     if (delta != null && !delta.isEmpty()) {
@@ -84,27 +87,35 @@ public class ChatStreamService {
                         }
                     }
                 }
+                // AI 的思考过程
                 case THINKING_BLOCK_DELTA -> {
-                    if (!disconnected.get()) {
-                        String delta = ((ThinkingBlockDeltaEvent) event).getDelta();
-                        if (delta != null && !delta.isEmpty()) {
+                    String delta = ((ThinkingBlockDeltaEvent) event).getDelta();
+                    if (delta != null && !delta.isEmpty()) {
+                        thinkingText.append(delta);
+                        if (!disconnected.get()) {
                             emitter.send(SseEmitter.event()
                                     .name(SseEventType.THINKING_DELTA.toString()).data(delta));
                         }
                     }
                 }
+                //  AI 开始调用工具（如 RAG 搜索）
                 case TOOL_CALL_START -> {
+                    ToolCallStartEvent e = (ToolCallStartEvent) event;
+                    toolCalls.put(e.getToolCallId(), new AgentResponseMetadata.ToolCallRecord(
+                            e.getToolCallId(), e.getToolCallName(), ""));
                     if (!disconnected.get()) {
-                        ToolCallStartEvent e = (ToolCallStartEvent) event;
                         String json = objectMapper.writeValueAsString(
                                 new SseToolResultEvent("start", e.getToolCallId(), e.getToolCallName(), null));
                         emitter.send(SseEmitter.event()
                                 .name(SseEventType.TOOL_CALL.toString()).data(json));
                     }
                 }
+                // 工具返回结果的增量
                 case TOOL_RESULT_TEXT_DELTA -> {
+                    ToolResultTextDeltaEvent e = (ToolResultTextDeltaEvent) event;
+                    toolCalls.computeIfPresent(e.getToolCallId(),
+                            (id, tc) -> new AgentResponseMetadata.ToolCallRecord(tc.id(), tc.name(), tc.result() + e.getDelta()));
                     if (!disconnected.get()) {
-                        ToolResultTextDeltaEvent e = (ToolResultTextDeltaEvent) event;
                         String json = objectMapper.writeValueAsString(
                                 new SseToolResultEvent("delta", e.getToolCallId(), e.getToolCallName(), e.getDelta()));
                         emitter.send(SseEmitter.event()
@@ -129,18 +140,14 @@ public class ChatStreamService {
     }
 
     private void handleError(Throwable error, SseEmitter emitter, AtomicBoolean disconnected,
-                             Long dialogueId, String originalQuestion,
-                             StringBuilder fullResponse, List<FileMetadata> messageFiles) {
+                             Long dialogueId,
+                             String originalQuestion, List<FileMetadata> messageFiles) {
         String errorMsg = error instanceof RuntimeException && error.getCause() != null
                 ? error.getCause().getMessage() : error.getMessage();
         log.error("Stream error for dialogue {}: {}", dialogueId, errorMsg);
 
-        try {
-            dialoguePersistenceService.persist(dialogueId, originalQuestion,
-                    fullResponse.toString(), messageFiles);
-        } catch (Exception e) {
-            log.warn("Failed to persist after error for dialogue {}: {}", dialogueId, e.getMessage());
-        }
+        String errorResponse = "抱歉，处理您的请求时遇到错误：" + (errorMsg != null ? errorMsg : "未知错误");
+        dialoguePersistenceService.persistErrorDialogue(dialogueId, originalQuestion, messageFiles, errorResponse);
 
         if (!disconnected.get()) {
             try {
@@ -154,11 +161,13 @@ public class ChatStreamService {
     }
 
     private void handleComplete(SseEmitter emitter, AtomicBoolean disconnected,
-                                Long dialogueId, String originalQuestion,
-                                StringBuilder fullResponse, List<FileMetadata> messageFiles) {
+                                Long dialogueId, StringBuilder fullResponse,
+                                StringBuilder thinkingText, Map<String, AgentResponseMetadata.ToolCallRecord> toolCalls,
+                                String originalQuestion, List<FileMetadata> messageFiles) {
         try {
-            dialoguePersistenceService.persist(dialogueId, originalQuestion,
-                    fullResponse.toString(), messageFiles);
+            dialoguePersistenceService.persistUserMessage(dialogueId, originalQuestion, messageFiles);
+            dialoguePersistenceService.persistAssistantResponse(dialogueId, fullResponse.toString(),
+                    thinkingText.toString(), new ArrayList<>(toolCalls.values()), null);
         } catch (Exception e) {
             log.warn("Failed to persist for dialogue {}: {}", dialogueId, e.getMessage());
         }

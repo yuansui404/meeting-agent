@@ -9,6 +9,9 @@ import org.springframework.data.jpa.repository.Query;
 import java.util.List;
 import java.util.Optional;
 
+/*
+*  会话查询
+* */
 public interface SessionRepository extends JpaRepository<SessionEntity, Long> {
 
     Optional<SessionEntity> findBySessionId(String sessionId);

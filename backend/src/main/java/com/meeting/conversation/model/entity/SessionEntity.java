@@ -26,9 +26,6 @@ public class SessionEntity {
     @Column(length = 50)
     private String status;
 
-    @Column(nullable = false)
-    private boolean imported;
-
     @Column(name = "context_summary", columnDefinition = "TEXT")
     private String contextSummary;
 

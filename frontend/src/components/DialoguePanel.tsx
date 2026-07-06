@@ -28,7 +28,6 @@ import {
   DialogueMessage,
   Meeting,
   getDialogue,
-  addMessage,
   streamChat,
   uploadFile,
   searchMeetings,
@@ -103,6 +102,8 @@ const DialoguePanel: React.FC<Props> = ({ activeDialogue, onDialogueUpdated, onS
   const [input, setInput] = useState('');
   const [sending, setSending] = useState(false);
   const [streaming, setStreaming] = useState<StreamingState>({ content: '', active: false });
+  const [generating, setGenerating] = useState(false);
+  const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const [thinkingText, setThinkingText] = useState('');
   const [toolCalls, setToolCalls] = useState<ToolCallDisplay[]>([]);
   const [searchVisible, setSearchVisible] = useState(false);
@@ -130,7 +131,15 @@ const DialoguePanel: React.FC<Props> = ({ activeDialogue, onDialogueUpdated, onS
       setStreaming({ content: '', active: false });
       setUploadedFiles([]);
     }
+    // 切换对话时清除轮询
+    stopPolling();
+    setGenerating(false);
   }, [activeDialogue]);
+
+  // 组件卸载时清除轮询
+  useEffect(() => {
+    return () => stopPolling();
+  }, []);
 
   useEffect(() => {
     scrollToBottom();
@@ -140,6 +149,37 @@ const DialoguePanel: React.FC<Props> = ({ activeDialogue, onDialogueUpdated, onS
     setTimeout(() => {
       messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     }, 50);
+  };
+
+  const stopPolling = () => {
+    if (pollingRef.current) {
+      clearInterval(pollingRef.current);
+      pollingRef.current = null;
+    }
+  };
+
+  const startPolling = (id: number) => {
+    stopPolling();
+    pollingRef.current = setInterval(async () => {
+      try {
+        const res = await getDialogue(id);
+        const msgs: DisplayMessage[] = (res.data.messages || []).map((m: DialogueMessage) => ({
+          ...m,
+          files: (m.files || []).map((f: any) => ({
+            ...f,
+            title: f.title || f.fileName || f.name || '未知文件',
+          })),
+        }));
+        setMessages(msgs);
+        // 最后一条是 assistant 消息，说明生成完毕
+        if (msgs.length > 0 && msgs[msgs.length - 1].role === 'assistant') {
+          stopPolling();
+          setGenerating(false);
+        }
+      } catch {
+        // 轮询出错时不停止，等下次重试
+      }
+    }, 3000);
   };
 
   const loadMessages = async (id: number) => {
@@ -153,6 +193,14 @@ const DialoguePanel: React.FC<Props> = ({ activeDialogue, onDialogueUpdated, onS
         })),
       }));
       setMessages(msgs);
+      // 最后一条是 user 消息，说明正在生成中
+      if (msgs.length > 0 && msgs[msgs.length - 1].role === 'user') {
+        setGenerating(true);
+        startPolling(id);
+      } else {
+        setGenerating(false);
+        stopPolling();
+      }
     } catch {
       setMessages([]);
     }
@@ -198,6 +246,8 @@ const DialoguePanel: React.FC<Props> = ({ activeDialogue, onDialogueUpdated, onS
   const sendMessage = useCallback(async (content: string, dialogueId: number) => {
     setSending(true);
     setInput('');
+    setGenerating(false);
+    stopPolling();
 
     const filesForDisplay = pendingFileCards
       .filter(f => !f.uploading)
@@ -473,6 +523,28 @@ const DialoguePanel: React.FC<Props> = ({ activeDialogue, onDialogueUpdated, onS
             {messages.map((msg) => (
               <MessageBubble key={msg.id} message={msg} onFilePreview={handleFilePreview} />
             ))}
+            {generating && !streaming.active && (
+              <div style={{ display: 'flex', padding: '12px 24px', justifyContent: 'flex-start' }}>
+                <div style={{ display: 'flex', maxWidth: '75%', gap: 12, alignItems: 'flex-start' }}>
+                  <div style={{
+                    width: 36, height: 36, borderRadius: 8,
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    flexShrink: 0, background: 'var(--hover-bg)', color: 'var(--text-tertiary)', fontSize: 16,
+                  }}>
+                    <RobotOutlined />
+                  </div>
+                  <div style={{
+                    padding: '10px 16px', borderRadius: 12,
+                    background: 'var(--msg-agent-bg)', border: '1px solid var(--border-color)',
+                    fontSize: 14, lineHeight: 1.6,
+                    display: 'flex', alignItems: 'center', gap: 8,
+                  }}>
+                    <Spin size="small" />
+                    <span style={{ color: 'var(--text-secondary)' }}>AI 正在生成中...</span>
+                  </div>
+                </div>
+              </div>
+            )}
             {(thinkingText || toolCalls.length > 0) && (
               <ThoughtProcess
                 thinkingText={thinkingText}
@@ -877,17 +949,159 @@ const DialoguePanel: React.FC<Props> = ({ activeDialogue, onDialogueUpdated, onS
   );
 };
 
+// Tool call item inside the thought process block
+const TOOL_INFO: Record<string, { icon: string; label: string }> = {
+  search_knowledge_base: { icon: '📚', label: '搜索知识库' },
+  search_meeting_titles: { icon: '🔍', label: '搜索会议标题' },
+  memory_search: { icon: '🧠', label: '查询记忆' },
+  memory_get: { icon: '🧠', label: '读取记忆' },
+  read_profile: { icon: '👤', label: '读取用户信息' },
+  update_profile: { icon: '✏️', label: '更新用户信息' },
+  upload_to_knowledge_base: { icon: '📤', label: '上传到知识库' },
+  list_meetings: { icon: '📋', label: '获取会议列表' },
+};
+
+function summarizeResult(toolName: string, resultText: string): string {
+  if (!resultText) return '';
+  try {
+    const data = JSON.parse(resultText);
+    if (toolName === 'search_knowledge_base' && Array.isArray(data)) {
+      const names = data
+        .filter((r: any) => r.source)
+        .map((r: any) => r.source.replace(/\.(docx|doc|pdf|txt|md)$/i, ''))
+        .filter(Boolean);
+      if (names.length > 0) return `找到 ${names.length} 条相关记录：${names.join('、')}`;
+      if (data.length > 0) return `找到 ${data.length} 条结果`;
+    }
+    if (toolName === 'memory_search') {
+      return '已查询个人记忆数据';
+    }
+  } catch {}
+  return '';
+}
+
+const ToolCallItem: React.FC<{ toolCall: ToolCallDisplay }> = ({ toolCall }) => {
+  const info = TOOL_INFO[toolCall.name] || { icon: '🔧', label: toolCall.name };
+  const summary = summarizeResult(toolCall.name, toolCall.result);
+  const hasRawResult = toolCall.result.length > 0 && !summary;
+  const [showRaw, setShowRaw] = useState(false);
+
+  return (
+    <div style={{ marginBottom: 6, fontSize: 13, lineHeight: 1.6 }}>
+      <span>
+        {info.icon}
+        {' '}{info.label}
+        {' '}{toolCall.completed ? '✓' : '...'}
+      </span>
+      {summary && (
+        <div style={{ marginLeft: 20, color: 'var(--text-secondary)', fontSize: 12 }}>
+          {summary}
+        </div>
+      )}
+      {hasRawResult && (
+        <div
+          onClick={() => setShowRaw(!showRaw)}
+          style={{ marginLeft: 20, fontSize: 12, color: 'var(--text-secondary)', cursor: 'pointer' }}
+        >
+          {showRaw ? '▾ 查看返回数据' : '▸ 查看返回数据'}
+          {showRaw && (
+            <pre style={{
+              marginTop: 2, padding: 4, fontSize: 11, lineHeight: 1.4,
+              background: 'var(--toolcall-expanded-bg)', borderRadius: 4,
+              maxHeight: 120, overflow: 'auto', whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+            }}>
+              {toolCall.result}
+            </pre>
+          )}
+        </div>
+      )}
+    </div>
+  );
+};
+
+// Thought process — Qwen-style unified collapsible block for thinking + tool calls
+const ThoughtProcess: React.FC<{
+  thinkingText: string;
+  toolCalls: ToolCallDisplay[];
+  isStreaming: boolean;
+}> = ({ thinkingText, toolCalls, isStreaming }) => {
+  const [expanded, setExpanded] = useState(true);
+
+  // Auto-collapse when streaming finishes
+  useEffect(() => {
+    if (!isStreaming) {
+      // Delay collapse slightly so user sees the final state
+      const timer = setTimeout(() => setExpanded(false), 500);
+      return () => clearTimeout(timer);
+    }
+  }, [isStreaming]);
+
+  const hasContent = thinkingText.length > 0 || toolCalls.length > 0;
+
+  if (!hasContent) return null;
+
+  return (
+    <div style={{ display: 'flex', padding: '8px 24px 2px 24px', justifyContent: 'flex-start' }}>
+      <div style={{ maxWidth: '75%', marginLeft: 48, width: '100%' }}>
+        <div
+          onClick={() => setExpanded(!expanded)}
+          style={{
+            display: 'flex', alignItems: 'center', gap: 8,
+            padding: '6px 12px',
+            background: 'var(--toolcall-bg)',
+            borderRadius: 8,
+            border: '1px solid var(--border-color)',
+            cursor: 'pointer', userSelect: 'none',
+            fontSize: 12,
+            color: 'var(--text-secondary)',
+          }}
+        >
+          <BulbOutlined style={{ fontSize: 13, color: '#faad14' }} />
+          <span style={{ fontWeight: 500, flex: 1 }}>
+            {isStreaming ? 'AI 思考中...' : 'AI 的思考过程'}
+          </span>
+          {isStreaming && <Spin size="small" style={{ fontSize: 10 }} />}
+          {expanded ? '▾' : '▸'}
+        </div>
+        {expanded && (
+          <div style={{
+            marginTop: 4,
+            padding: '8px 12px',
+            background: 'var(--thinking-bg)',
+            borderRadius: 8,
+            border: '1px solid var(--border-color)',
+            fontSize: 13, lineHeight: 1.6,
+            color: 'var(--text-tertiary)',
+          }}>
+            {/* Tool calls */}
+            {toolCalls.map(tc => (
+              <ToolCallItem key={tc.id} toolCall={tc} />
+            ))}
+            {/* Thinking text */}
+            {thinkingText && (
+              <div style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                {thinkingText}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
+
 // Message bubble
 const MessageBubble: React.FC<{ message: DisplayMessage; onFilePreview?: (file: UploadedFile) => void }> = ({ message, onFilePreview }) => {
   const isUser = message.role === 'user';
   const fileList = (message as DisplayMessage).files || [];
-  const hasFiles = isUser && fileList.length > 0;
+  const hasFiles = fileList.length > 0;
 
   // Check if this is a rewrite result message
   let rewriteResultId: number | null = null;
   if (!isUser && message.metadata) {
     try {
-      const meta = JSON.parse(message.metadata);
+      const meta = typeof message.metadata === 'string'
+        ? JSON.parse(message.metadata) : message.metadata;
       if (meta.type === 'rewrite' && meta.rewriteResultId) {
         rewriteResultId = meta.rewriteResultId;
       }
@@ -898,60 +1112,87 @@ const MessageBubble: React.FC<{ message: DisplayMessage; onFilePreview?: (file: 
     return <RewriteBubble message={message} rewriteResultId={rewriteResultId} />;
   }
 
+  // Extract thinking/tool calls from persisted metadata
+  let persistedThinking: string | null = null;
+  let persistedToolCalls: ToolCallDisplay[] | null = null;
+  if (!isUser && message.metadata) {
+    try {
+      const meta = typeof message.metadata === 'string'
+        ? JSON.parse(message.metadata) : message.metadata;
+      if (meta.type === 'chat') {
+        persistedThinking = meta.thinking || null;
+        persistedToolCalls = (meta.toolCalls || []).map((tc: any) => ({
+          id: tc.id, name: tc.name, result: tc.result || '', completed: true,
+        }));
+      }
+    } catch { /* ignore */ }
+  }
+
   return (
-    <div style={{ display: 'flex', padding: '12px 24px', justifyContent: isUser ? 'flex-end' : 'flex-start' }}>
-      <div style={{ display: 'flex', maxWidth: '75%', gap: 12, flexDirection: isUser ? 'row-reverse' : 'row', alignItems: 'flex-start' }}>
-        <div style={{
-          width: 36, height: 36, borderRadius: 8,
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-          flexShrink: 0, background: isUser ? 'var(--primary-color)' : 'var(--hover-bg)',
-          color: isUser ? '#fff' : 'var(--text-tertiary)', fontSize: 16,
-        }}>
-          {isUser ? <UserOutlined /> : <RobotOutlined />}
-        </div>
-        <div style={{
-          padding: '10px 16px', borderRadius: 12,
-          background: isUser ? 'var(--primary-color)' : 'var(--msg-agent-bg)',
-          color: isUser ? '#fff' : 'var(--text-color)',
-          border: isUser ? 'none' : '1px solid var(--border-color)',
-          fontSize: 14, lineHeight: 1.6, wordBreak: 'break-word',
-          maxWidth: 'calc(100% - 48px)',
-        }}>
-          {hasFiles && (
-            <div style={{
-              marginBottom: 8, padding: '6px 10px',
-              background: 'rgba(255,255,255,0.15)',
-              borderRadius: 6, fontSize: 12,
-            }}>
-              {fileList.map((f, i) => (
-                <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: i < fileList.length - 1 ? 4 : 0 }}>
-                  <PaperClipOutlined style={{ fontSize: 12, opacity: 0.8 }} />
-                  <span
-                    onClick={() => onFilePreview?.(f)}
-                    style={{
-                      opacity: 0.9, cursor: 'pointer',
-                      textDecoration: 'underline',
-                      textDecorationStyle: 'dotted',
-                      textUnderlineOffset: 2,
-                    }}
-                  >
-                    {f.title}
-                  </span>
-                  <span style={{ opacity: 0.6, fontSize: 11 }}>(已上传)</span>
-                </div>
-              ))}
-            </div>
-          )}
-          {isUser ? (
-            <span style={{ whiteSpace: 'pre-wrap' }}>{message.content}</span>
-          ) : (
-            <div className="markdown-content">
-              <ReactMarkdown>{message.content}</ReactMarkdown>
-            </div>
-          )}
+    <>
+      {!isUser && (persistedThinking || (persistedToolCalls && persistedToolCalls.length > 0)) && (
+        <ThoughtProcess
+          thinkingText={persistedThinking || ''}
+          toolCalls={persistedToolCalls || []}
+          isStreaming={false}
+        />
+      )}
+      <div style={{ display: 'flex', padding: '12px 24px', justifyContent: isUser ? 'flex-end' : 'flex-start' }}>
+        <div style={{ display: 'flex', maxWidth: '75%', gap: 12, flexDirection: isUser ? 'row-reverse' : 'row', alignItems: 'flex-start' }}>
+          <div style={{
+            width: 36, height: 36, borderRadius: 8,
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            flexShrink: 0, background: isUser ? 'var(--primary-color)' : 'var(--hover-bg)',
+            color: isUser ? '#fff' : 'var(--text-tertiary)', fontSize: 16,
+          }}>
+            {isUser ? <UserOutlined /> : <RobotOutlined />}
+          </div>
+          <div style={{
+            padding: '10px 16px', borderRadius: 12,
+            background: isUser ? 'var(--primary-color)' : 'var(--msg-agent-bg)',
+            color: isUser ? '#fff' : 'var(--text-color)',
+            border: isUser ? 'none' : '1px solid var(--border-color)',
+            fontSize: 14, lineHeight: 1.6, wordBreak: 'break-word',
+            maxWidth: 'calc(100% - 48px)',
+          }}>
+            {hasFiles && (
+              <div style={{
+                marginBottom: 8, padding: '6px 10px',
+                background: isUser ? 'rgba(255,255,255,0.15)' : 'var(--toolcall-bg)',
+                borderRadius: 6, fontSize: 12,
+              }}>
+                {fileList.map((f, i) => (
+                  <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: i < fileList.length - 1 ? 4 : 0 }}>
+                    <PaperClipOutlined style={{ fontSize: 12, opacity: 0.8 }} />
+                    <span
+                      onClick={() => onFilePreview?.(f)}
+                      style={{
+                        opacity: 0.9, cursor: 'pointer',
+                        textDecoration: 'underline',
+                        textDecorationStyle: 'dotted',
+                        textUnderlineOffset: 2,
+                      }}
+                    >
+                      {f.title}
+                    </span>
+                    <span style={{ opacity: 0.6, fontSize: 11 }}>
+                      {isUser ? '(已上传)' : '(AI 生成)'}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+            {isUser ? (
+              <span style={{ whiteSpace: 'pre-wrap' }}>{message.content}</span>
+            ) : (
+              <div className="markdown-content">
+                <ReactMarkdown>{message.content}</ReactMarkdown>
+              </div>
+            )}
+          </div>
         </div>
       </div>
-    </div>
+    </>
   );
 };
 
@@ -1119,147 +1360,6 @@ const RewriteBubble: React.FC<{ message: DisplayMessage; rewriteResultId: number
         </div>
       </Drawer>
     </>
-  );
-};
-
-// Thought process — Qwen-style unified collapsible block for thinking + tool calls
-const ThoughtProcess: React.FC<{
-  thinkingText: string;
-  toolCalls: ToolCallDisplay[];
-  isStreaming: boolean;
-}> = ({ thinkingText, toolCalls, isStreaming }) => {
-  const [expanded, setExpanded] = useState(true);
-
-  // Auto-collapse when streaming finishes
-  useEffect(() => {
-    if (!isStreaming) {
-      // Delay collapse slightly so user sees the final state
-      const timer = setTimeout(() => setExpanded(false), 500);
-      return () => clearTimeout(timer);
-    }
-  }, [isStreaming]);
-
-  const hasContent = thinkingText.length > 0 || toolCalls.length > 0;
-
-  if (!hasContent) return null;
-
-  return (
-    <div style={{ display: 'flex', padding: '8px 24px 2px 24px', justifyContent: 'flex-start' }}>
-      <div style={{ maxWidth: '75%', marginLeft: 48, width: '100%' }}>
-        <div
-          onClick={() => setExpanded(!expanded)}
-          style={{
-            display: 'flex', alignItems: 'center', gap: 8,
-            padding: '6px 12px',
-            background: 'var(--toolcall-bg)',
-            borderRadius: 8,
-            border: '1px solid var(--border-color)',
-            cursor: 'pointer', userSelect: 'none',
-            fontSize: 12,
-            color: 'var(--text-secondary)',
-          }}
-        >
-          <BulbOutlined style={{ fontSize: 13, color: '#faad14' }} />
-          <span style={{ fontWeight: 500, flex: 1 }}>
-            {isStreaming ? 'AI 思考中...' : 'AI 的思考过程'}
-          </span>
-          {isStreaming && <Spin size="small" style={{ fontSize: 10 }} />}
-          {expanded ? '▾' : '▸'}
-        </div>
-        {expanded && (
-          <div style={{
-            marginTop: 4,
-            padding: '8px 12px',
-            background: 'var(--thinking-bg)',
-            borderRadius: 8,
-            border: '1px solid var(--border-color)',
-            fontSize: 13, lineHeight: 1.6,
-            color: 'var(--text-tertiary)',
-          }}>
-            {/* Tool calls */}
-            {toolCalls.map(tc => (
-              <ToolCallItem key={tc.id} toolCall={tc} />
-            ))}
-            {/* Thinking text */}
-            {thinkingText && (
-              <div style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
-                {thinkingText}
-              </div>
-            )}
-          </div>
-        )}
-      </div>
-    </div>
-  );
-};
-
-// Tool call item inside the thought process block
-const TOOL_INFO: Record<string, { icon: string; label: string }> = {
-  search_knowledge_base: { icon: '📚', label: '搜索知识库' },
-  search_meeting_titles: { icon: '🔍', label: '搜索会议标题' },
-  memory_search: { icon: '🧠', label: '查询记忆' },
-  memory_get: { icon: '🧠', label: '读取记忆' },
-  read_profile: { icon: '👤', label: '读取用户信息' },
-  update_profile: { icon: '✏️', label: '更新用户信息' },
-  upload_to_knowledge_base: { icon: '📤', label: '上传到知识库' },
-  list_meetings: { icon: '📋', label: '获取会议列表' },
-};
-
-function summarizeResult(toolName: string, resultText: string): string {
-  if (!resultText) return '';
-  try {
-    const data = JSON.parse(resultText);
-    if (toolName === 'search_knowledge_base' && Array.isArray(data)) {
-      const names = data
-        .filter((r: any) => r.source)
-        .map((r: any) => r.source.replace(/\.(docx|doc|pdf|txt|md)$/i, ''))
-        .filter(Boolean);
-      if (names.length > 0) return `找到 ${names.length} 条相关记录：${names.join('、')}`;
-      if (data.length > 0) return `找到 ${data.length} 条结果`;
-    }
-    if (toolName === 'memory_search') {
-      return '已查询个人记忆数据';
-    }
-  } catch {}
-  return '';
-}
-
-const ToolCallItem: React.FC<{ toolCall: ToolCallDisplay }> = ({ toolCall }) => {
-  const info = TOOL_INFO[toolCall.name] || { icon: '🔧', label: toolCall.name };
-  const summary = summarizeResult(toolCall.name, toolCall.result);
-  const hasRawResult = toolCall.result.length > 0 && !summary;
-  const [showRaw, setShowRaw] = useState(false);
-
-  return (
-    <div style={{ marginBottom: 6, fontSize: 13, lineHeight: 1.6 }}>
-      <span>
-        {info.icon}
-        {' '}{info.label}
-        {' '}{toolCall.completed ? '✓' : '...'}
-      </span>
-      {summary && (
-        <div style={{ marginLeft: 20, color: 'var(--text-secondary)', fontSize: 12 }}>
-          {summary}
-        </div>
-      )}
-      {hasRawResult && (
-        <div
-          onClick={() => setShowRaw(!showRaw)}
-          style={{ marginLeft: 20, fontSize: 12, color: 'var(--text-secondary)', cursor: 'pointer' }}
-        >
-          {showRaw ? '▾ 查看返回数据' : '▸ 查看返回数据'}
-          {showRaw && (
-            <pre style={{
-              marginTop: 2, padding: 4, fontSize: 11, lineHeight: 1.4,
-              background: 'var(--toolcall-expanded-bg)', borderRadius: 4,
-              maxHeight: 120, overflow: 'auto', whiteSpace: 'pre-wrap', wordBreak: 'break-word',
-            }}>
-              {toolCall.result}
-            </pre>
-          )}
-        </div>
-      )}
-    </div>
   );
 };
 

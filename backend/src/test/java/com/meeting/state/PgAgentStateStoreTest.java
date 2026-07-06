@@ -13,7 +13,6 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.util.List;
-import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 
@@ -34,7 +33,7 @@ class PgAgentStateStoreTest {
 
     @BeforeEach
     void setUp() {
-        store = new CleanablePgAgentStateStore(sessionRepository);
+        store = new PgAgentStateStore(sessionRepository);
     }
 
     @Test
@@ -172,94 +171,4 @@ class PgAgentStateStoreTest {
         assertTrue(result.isEmpty());
     }
 
-    // --- CleanablePgAgentStateStore tests ---
-
-    @Test
-    void cleanable_save_ShouldStripEnrichedContent() {
-        CleanablePgAgentStateStore cleanableStore = new CleanablePgAgentStateStore(sessionRepository);
-        AgentState state = AgentState.builder().sessionId("dialogue-1").build();
-
-        String enrichedText = "请参考以下资料来回答问题。\n要求：...\n资料内容：\n[大量文件内容]\n\n问题：什么是AI？";
-        UserMessage msg = new UserMessage(enrichedText);
-        msg.getMetadata().put("_enriched", true);
-        msg.getMetadata().put("_originalQuestion", "什么是AI？");
-        state.contextMutable().add(msg);
-
-        when(sessionRepository.findBySessionId("dialogue-1")).thenReturn(Optional.empty());
-        when(sessionRepository.save(any())).thenAnswer(i -> i.getArgument(0));
-
-        cleanableStore.save("default", "dialogue-1", "agent_state", state);
-
-        verify(sessionRepository).save(entityCaptor.capture());
-        String savedJson = entityCaptor.getValue().getStateJson();
-
-        assertTrue(savedJson.contains("什么是AI？"));
-        assertFalse(savedJson.contains("大量文件内容"));
-        assertFalse(savedJson.contains("请参考以下资料"));
-    }
-
-    @Test
-    void cleanable_save_ShouldPreserveFileMetadata() {
-        CleanablePgAgentStateStore cleanableStore = new CleanablePgAgentStateStore(sessionRepository);
-        AgentState state = AgentState.builder().sessionId("dialogue-1").build();
-
-        UserMessage msg = new UserMessage("请参考以下资料来回答问题。\n资料内容：xxx\n\n问题：总结一下");
-        msg.getMetadata().put("_enriched", true);
-        msg.getMetadata().put("_originalQuestion", "总结一下");
-        msg.getMetadata().put("files", List.of(Map.of("fileName", "test.pdf")));
-        state.contextMutable().add(msg);
-
-        when(sessionRepository.findBySessionId("dialogue-1")).thenReturn(Optional.empty());
-        when(sessionRepository.save(any())).thenAnswer(i -> i.getArgument(0));
-
-        cleanableStore.save("default", "dialogue-1", "agent_state", state);
-
-        verify(sessionRepository).save(entityCaptor.capture());
-        String savedJson = entityCaptor.getValue().getStateJson();
-
-        assertTrue(savedJson.contains("总结一下"));
-        assertTrue(savedJson.contains("test.pdf"));
-    }
-
-    @Test
-    void cleanable_save_ShouldNotModifyNonEnrichedMessages() {
-        CleanablePgAgentStateStore cleanableStore = new CleanablePgAgentStateStore(sessionRepository);
-        AgentState state = AgentState.builder().sessionId("dialogue-1").build();
-
-        UserMessage msg = new UserMessage("普通用户消息，没有_enriched标记");
-        state.contextMutable().add(msg);
-
-        when(sessionRepository.findBySessionId("dialogue-1")).thenReturn(Optional.empty());
-        when(sessionRepository.save(any())).thenAnswer(i -> i.getArgument(0));
-
-        cleanableStore.save("default", "dialogue-1", "agent_state", state);
-
-        verify(sessionRepository).save(entityCaptor.capture());
-        String savedJson = entityCaptor.getValue().getStateJson();
-
-        assertTrue(savedJson.contains("普通用户消息，没有_enriched标记"));
-    }
-
-    @Test
-    void cleanable_save_ShouldFallbackToTextExtraction() {
-        CleanablePgAgentStateStore cleanableStore = new CleanablePgAgentStateStore(sessionRepository);
-        AgentState state = AgentState.builder().sessionId("dialogue-1").build();
-
-        // _enriched=true but no _originalQuestion — should extract from text
-        UserMessage msg = new UserMessage("请参考以下资料来回答问题。\n资料内容：some content\n\n问题：这个问题从文本中提取");
-        msg.getMetadata().put("_enriched", true);
-        // no _originalQuestion
-        state.contextMutable().add(msg);
-
-        when(sessionRepository.findBySessionId("dialogue-1")).thenReturn(Optional.empty());
-        when(sessionRepository.save(any())).thenAnswer(i -> i.getArgument(0));
-
-        cleanableStore.save("default", "dialogue-1", "agent_state", state);
-
-        verify(sessionRepository).save(entityCaptor.capture());
-        String savedJson = entityCaptor.getValue().getStateJson();
-
-        assertTrue(savedJson.contains("这个问题从文本中提取"));
-        assertFalse(savedJson.contains("some content"));
-    }
 }

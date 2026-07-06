@@ -3,13 +3,13 @@ package com.meeting.conversation.model.entity;
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.meeting.common.FileMetadata;
 import com.meeting.conversation.converter.JsonListConverter;
-import com.meeting.conversation.converter.JsonMapConverter;
+import com.meeting.conversation.converter.JsonMetadataConverter;
+import com.meeting.conversation.model.AgentResponseMetadata;
 import jakarta.persistence.*;
 import lombok.Getter;
 import lombok.Setter;
 import java.time.LocalDateTime;
 import java.util.List;
-import java.util.Map;
 
 @Getter
 @Setter
@@ -42,8 +42,8 @@ public class DialogueMessageEntity {
     private String messageType;
 
     @Column(columnDefinition = "TEXT")
-    @Convert(converter = JsonMapConverter.class)
-    private Map<String, Object> metadata;
+    @Convert(converter = JsonMetadataConverter.class)
+    private AgentResponseMetadata metadata;
 
     @Column(name = "created_at")
     private LocalDateTime createdAt;

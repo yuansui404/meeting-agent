@@ -2,6 +2,8 @@ package com.meeting.conversation.service;
 
 import com.meeting.common.FileMetadata;
 import com.meeting.transcription.service.FileContextBuilder;
+import io.agentscope.core.agent.RuntimeContext;
+import io.agentscope.core.message.UserMessage;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.cloud.context.config.annotation.RefreshScope;
@@ -29,7 +31,14 @@ public class ChatService {
                            List<FileMetadata> files) {
         List<FileMetadata> messageFiles = files != null ? files : List.of();
         String fileContext = fileContextBuilder.build(messageFiles);
-        String enrichedMessage = fileContextBuilder.buildEnrichedMessage(fileContext, userMessage);
-        chatStreamService.stream(emitter, dialogueId, enrichedMessage, userMessage, messageFiles);
+
+        UserMessage msg = new UserMessage(userMessage);
+
+        RuntimeContext ctx = RuntimeContext.builder()
+                .sessionId("dialogue-" + dialogueId)
+                .put("fileContext", fileContext)
+                .build();
+
+        chatStreamService.stream(emitter, dialogueId, msg, ctx, userMessage, messageFiles);
     }
 }

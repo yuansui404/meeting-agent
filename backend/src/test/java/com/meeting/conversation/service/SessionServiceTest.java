@@ -3,15 +3,9 @@ package com.meeting.conversation.service;
 import com.meeting.conversation.model.entity.SessionEntity;
 import com.meeting.conversation.repository.DialogueMessageRepository;
 import com.meeting.conversation.repository.SessionRepository;
-import com.meeting.conversation.service.SessionService;
-import io.agentscope.core.message.UserMessage;
-import io.agentscope.core.state.AgentState;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.ArgumentCaptor;
-import org.mockito.Captor;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
@@ -33,16 +27,11 @@ class SessionServiceTest {
     @Mock
     private DialogueMessageRepository dialogueMessageRepository;
 
-    @Captor
-    private ArgumentCaptor<SessionEntity> entityCaptor;
-
-    private final ObjectMapper objectMapper = new ObjectMapper();
-
     private SessionService sessionService;
 
     @BeforeEach
     void setUp() {
-        sessionService = new SessionService(sessionRepository, dialogueMessageRepository, objectMapper);
+        sessionService = new SessionService(sessionRepository, dialogueMessageRepository);
     }
 
     @Test
@@ -196,70 +185,5 @@ class SessionServiceTest {
     void updateTitle_ShouldThrowWhenNotFound() {
         when(sessionRepository.findById(99L)).thenReturn(Optional.empty());
         assertThrows(IllegalArgumentException.class, () -> sessionService.updateTitle(99L, "标题"));
-    }
-
-    @Test
-    void addMessage_ShouldAppendToStateAndDialogueMessages() {
-        AgentState state = AgentState.builder().sessionId("dialogue-1").build();
-        String json = state.toJson();
-
-        SessionEntity entity = new SessionEntity();
-        entity.setId(1L);
-        entity.setSessionId("dialogue-1");
-        entity.setStateJson(json);
-
-        when(sessionRepository.findById(1L)).thenReturn(Optional.of(entity));
-        when(sessionRepository.save(any())).thenAnswer(i -> i.getArgument(0));
-
-        sessionService.addMessage(1L, "user", "new message", "text", null);
-
-        verify(sessionRepository).save(entityCaptor.capture());
-        SessionEntity saved = entityCaptor.getValue();
-        assertNotNull(saved.getStateJson());
-        assertTrue(saved.getStateJson().contains("new message"));
-    }
-
-    @Test
-    void addMessage_ShouldCreateStateWhenNoneExists() {
-        SessionEntity entity = new SessionEntity();
-        entity.setId(1L);
-        entity.setSessionId("dialogue-1");
-        entity.setStateJson(null);
-
-        when(sessionRepository.findById(1L)).thenReturn(Optional.of(entity));
-        when(sessionRepository.save(any())).thenAnswer(i -> i.getArgument(0));
-
-        sessionService.addMessage(1L, "assistant", "reply", "text", null);
-
-        verify(sessionRepository).save(entityCaptor.capture());
-        SessionEntity saved = entityCaptor.getValue();
-        assertNotNull(saved.getStateJson());
-        assertTrue(saved.getStateJson().contains("reply"));
-    }
-
-    @Test
-    void addMessage_ShouldThrowWhenSessionNotFound() {
-        when(sessionRepository.findById(99L)).thenReturn(Optional.empty());
-        assertThrows(IllegalArgumentException.class,
-                () -> sessionService.addMessage(99L, "user", "content", "text", null));
-    }
-
-    @Test
-    void importSession_ShouldSetImportedFlag() {
-        SessionEntity entity = new SessionEntity();
-        entity.setId(1L);
-        entity.setImported(false);
-
-        when(sessionRepository.findById(1L)).thenReturn(Optional.of(entity));
-        when(sessionRepository.save(any())).thenAnswer(i -> i.getArgument(0));
-
-        sessionService.importSession(1L);
-        assertTrue(entity.isImported());
-    }
-
-    @Test
-    void importSession_ShouldThrowWhenNotFound() {
-        when(sessionRepository.findById(99L)).thenReturn(Optional.empty());
-        assertThrows(IllegalArgumentException.class, () -> sessionService.importSession(99L));
     }
 }

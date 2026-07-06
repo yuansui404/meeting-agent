@@ -76,8 +76,7 @@ public class FileProcessingService {
                 filePath.toString(),
                 ext,
                 file.getSize(),
-                isTranscribable(ext) ? "processing" : "completed",
-                null
+                isTranscribable(ext) ? "processing" : "completed"
         );
     }
 

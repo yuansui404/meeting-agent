@@ -26,7 +26,6 @@ export interface Dialogue {
   status: string;
   updatedAt: string;
   meetingId: number | null;
-  imported: boolean;
 }
 
 export interface DialogueMessage {
@@ -36,7 +35,7 @@ export interface DialogueMessage {
   content: string;
   messageType: string;
   timestamp: string;
-  metadata?: string;
+  metadata?: any;
   files?: any[];
 }
 
@@ -74,10 +73,6 @@ export const listMeetings = () =>
 export const createDialogue = (title: string, meetingId?: number) =>
   api.post<{ dialogueId: number }>('/dialogue', { title, meetingId });
 
-// 发送消息
-export const addMessage = (dialogueId: number, role: string, content: string, messageType?: string) =>
-  api.post(`/dialogue/${dialogueId}/message`, { role, content, messageType });
-
 // 获取对话历史
 export const getDialogue = (id: number) =>
   api.get<{ dialogue: Dialogue; messages: DialogueMessage[] }>(`/dialogue/${id}`);
@@ -97,10 +92,6 @@ export const deleteDialogue = (id: number) =>
 // 重命名对话
 export const renameDialogue = (id: number, title: string) =>
   api.put(`/dialogue/${id}/title`, { title });
-
-// 导入知识库
-export const importDialogue = (id: number) =>
-  api.post(`/dialogue/${id}/import`);
 
 // 搜索
 export const searchMeetings = (query: string, dialogueId?: number) =>

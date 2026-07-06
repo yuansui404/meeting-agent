@@ -1,6 +1,7 @@
 package com.meeting.conversation.service;
 
 import com.meeting.common.FileMetadata;
+import com.meeting.conversation.model.AgentResponseMetadata;
 import com.meeting.conversation.model.entity.DialogueMessageEntity;
 import com.meeting.conversation.model.entity.SessionEntity;
 import com.meeting.conversation.repository.SessionRepository;
@@ -25,10 +26,9 @@ public class DialoguePersistenceService {
     private final TransactionTemplate txTemplate;
 
     /**
-     * 持久化用户消息和助手回复到 dialogue_messages 表，并更新 session 的 updatedAt。
+     * 立即持久化用户消息。在 LLM 开始生成前调用，确保刷新页面后用户消息可见。
      */
-    public void persist(Long dialogueId, String userMessage, String assistantResponse,
-                        List<FileMetadata> messageFiles) {
+    public void persistUserMessage(Long dialogueId, String userMessage, List<FileMetadata> messageFiles) {
         try {
             txTemplate.executeWithoutResult(status -> {
                 SessionEntity session = sessionRepository.findById(dialogueId)
@@ -41,6 +41,26 @@ public class DialoguePersistenceService {
                 dmUser.setMessageType("text");
                 dmUser.setFiles(messageFiles);
                 session.addMessage(dmUser);
+                session.setUpdatedAt(LocalDateTime.now());
+                sessionRepository.save(session);
+            });
+        } catch (Exception e) {
+            log.warn("Failed to persist user message for dialogue {}: {}", dialogueId, e.getMessage(), e);
+        }
+    }
+
+    /**
+     * 持久化助手回复到 dialogue_messages 表，并更新 session 的 updatedAt。
+     * 用户消息已在 persistUserMessage() 中提前持久化，此处仅追加 assistant 消息。
+     */
+    public void persistAssistantResponse(Long dialogueId, String assistantResponse,
+                                          String thinkingText,
+                                          List<AgentResponseMetadata.ToolCallRecord> toolCalls,
+                                          List<FileMetadata> files) {
+        try {
+            txTemplate.executeWithoutResult(status -> {
+                SessionEntity session = sessionRepository.findById(dialogueId)
+                        .orElseThrow(() -> new IllegalArgumentException("Session not found: " + dialogueId));
 
                 if (!assistantResponse.isEmpty()) {
                     DialogueMessageEntity asstMsg = new DialogueMessageEntity();
@@ -48,6 +68,23 @@ public class DialoguePersistenceService {
                     asstMsg.setRole("assistant");
                     asstMsg.setContent(assistantResponse);
                     asstMsg.setMessageType("text");
+
+                    // 构建 metadata
+                    AgentResponseMetadata metadata = new AgentResponseMetadata(
+                            "chat",
+                            (thinkingText != null && !thinkingText.isEmpty()) ? thinkingText : null,
+                            (toolCalls != null && !toolCalls.isEmpty()) ? toolCalls : null,
+                            null
+                    );
+                    if (metadata.thinking() != null || metadata.toolCalls() != null) {
+                        asstMsg.setMetadata(metadata);
+                    }
+
+                    // 保存 AI 生成的文件
+                    if (files != null && !files.isEmpty()) {
+                        asstMsg.setFiles(files);
+                    }
+
                     session.addMessage(asstMsg);
                 }
 
@@ -55,8 +92,43 @@ public class DialoguePersistenceService {
                 sessionRepository.save(session);
             });
         } catch (Exception e) {
-            log.warn("Failed to persist dialogue_messages for dialogue {}: {}",
-                    dialogueId, e.getMessage(), e);
+            log.warn("Failed to persist assistant response for dialogue {}: {}", dialogueId, e.getMessage(), e);
+        }
+    }
+
+    /**
+     * 在同一个事务中持久化用户消息和助手错误响应。
+     * 用于错误场景，确保数据一致性。
+     */
+    public void persistErrorDialogue(Long dialogueId, String userMessage,
+                                     List<FileMetadata> messageFiles, String errorResponse) {
+        try {
+            txTemplate.executeWithoutResult(status -> {
+                SessionEntity session = sessionRepository.findById(dialogueId)
+                        .orElseThrow(() -> new IllegalArgumentException("Session not found: " + dialogueId));
+
+                // 保存用户消息
+                DialogueMessageEntity dmUser = new DialogueMessageEntity();
+                dmUser.setSession(session);
+                dmUser.setRole("user");
+                dmUser.setContent(userMessage);
+                dmUser.setMessageType("text");
+                dmUser.setFiles(messageFiles);
+                session.addMessage(dmUser);
+
+                // 保存错误响应
+                DialogueMessageEntity errorMsg = new DialogueMessageEntity();
+                errorMsg.setSession(session);
+                errorMsg.setRole("assistant");
+                errorMsg.setContent(errorResponse);
+                errorMsg.setMessageType("text");
+                session.addMessage(errorMsg);
+
+                session.setUpdatedAt(LocalDateTime.now());
+                sessionRepository.save(session);
+            });
+        } catch (Exception e) {
+            log.warn("Failed to persist error dialogue for {}: {}", dialogueId, e.getMessage(), e);
         }
     }
 }
