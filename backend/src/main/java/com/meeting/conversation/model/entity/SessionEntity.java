@@ -26,9 +26,6 @@ public class SessionEntity {
     @Column(length = 50)
     private String status;
 
-    @Column(name = "context_summary", columnDefinition = "TEXT")
-    private String contextSummary;
-
     @Column(name = "state_json", columnDefinition = "TEXT")
     private String stateJson;
 
@@ -40,9 +37,6 @@ public class SessionEntity {
 
     @OneToMany(mappedBy = "session", cascade = CascadeType.ALL, orphanRemoval = true)
     private List<DialogueMessageEntity> messages = new ArrayList<>();
-
-    @OneToMany(mappedBy = "session", cascade = CascadeType.ALL, orphanRemoval = true)
-    private List<RewriteResultEntity> rewriteResults = new ArrayList<>();
 
     @PrePersist
     protected void onCreate() {

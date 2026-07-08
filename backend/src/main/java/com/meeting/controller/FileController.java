@@ -6,7 +6,6 @@ import com.meeting.common.FileMetadata;
 import com.meeting.config.FileProperties;
 import com.meeting.controller.dto.response.FileUploadVO;
 import com.meeting.controller.dto.response.TextContentVO;
-import com.meeting.meeting.repository.MeetingMinutesRepository;
 import com.meeting.transcription.service.FileProcessingService;
 import com.meeting.conversation.service.SessionService;
 import com.meeting.transcription.service.TranscriptionService;
@@ -31,7 +30,6 @@ public class FileController {
     private final FileProperties fileProps;
     private final FileProcessingService fileProcessingService;
     private final TranscriptionService transcriptionService;
-    private final MeetingMinutesRepository meetingRepository;
     private final SessionService sessionService;
 
     private static final long MAX_FILE_SIZE = 10L * 1024 * 1024;       // 10MB per file
@@ -58,30 +56,6 @@ public class FileController {
                 fileMeta.fileSize(),
                 dialogueId
         ));
-    }
-
-    @GetMapping("/meeting/{id}/file")
-    public ResponseEntity<?> getMeetingFile(@PathVariable Long id) {
-        return meetingRepository.findById(id).map(meeting -> {
-            Path filePath = Path.of(meeting.getFilePath());
-            if (!FileProcessingService.isPathSafe(filePath, fileProps.uploadDir()) || !filePath.toFile().exists()) {
-                throw BusinessException.notFound("文件不存在");
-            }
-            return buildFileResponse(filePath);
-        }).orElseThrow(() -> BusinessException.notFound("会议不存在: " + id));
-    }
-
-    @GetMapping("/meeting/{id}/text-content")
-    public ApiResponse<TextContentVO> getMeetingTextContent(@PathVariable Long id) {
-        return meetingRepository.findById(id).map(meeting -> {
-            Path filePath = Path.of(meeting.getFilePath());
-            if (!FileProcessingService.isPathSafe(filePath, fileProps.uploadDir()) || !filePath.toFile().exists()) {
-                throw BusinessException.notFound("文件不存在");
-            }
-            String ext = FileProcessingService.getExtension(meeting.getTitle()).toLowerCase();
-            String content = FileProcessingService.readFileContent(filePath, ext);
-            return ApiResponse.ok(new TextContentVO(content != null ? content : ""));
-        }).orElseThrow(() -> BusinessException.notFound("会议不存在: " + id));
     }
 
     @GetMapping("/dialogue/{dialogueId}/file/{fileId}")

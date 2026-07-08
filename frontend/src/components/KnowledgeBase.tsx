@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Typography, Button, List, Tag, Spin, message as antMsg, Tooltip, Space, Pagination, Drawer } from 'antd';
+import { Typography, Button, List, Spin, message as antMsg, Tooltip, Space, Pagination, Drawer } from 'antd';
 import {
   FileTextOutlined,
   DatabaseOutlined,
@@ -15,7 +15,7 @@ import {
   StarOutlined,
   StarFilled,
 } from '@ant-design/icons';
-import { Meeting, listMeetings, deleteMeeting, uploadKnowledgeBaseFile, getFileUrl, getMeeting, getMeetingTextContent, setStyleExemplar } from '../services/api';
+import { RagDocument, listDocuments, deleteDocument, uploadDocument, getDocumentFileUrl, getDocumentTextContent, getDocument, setDocumentStyleExemplar } from '../services/api';
 import ReactMarkdown from 'react-markdown';
 
 const { Text } = Typography;
@@ -28,30 +28,30 @@ interface Props {
 const PAGE_SIZE = 8;
 
 const KnowledgeBase: React.FC<Props> = ({ visible, onClose }) => {
-  const [meetings, setMeetings] = useState<Meeting[]>([]);
+  const [documents, setDocuments] = useState<RagDocument[]>([]);
   const [loading, setLoading] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [page, setPage] = useState(1);
-  const [previewFile, setPreviewFile] = useState<Meeting | null>(null);
+  const [previewFile, setPreviewFile] = useState<RagDocument | null>(null);
   const [previewContent, setPreviewContent] = useState<string | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    if (visible) loadMeetings();
+    if (visible) loadDocuments();
   }, [visible]);
 
   useEffect(() => {
     setPage(1);
-  }, [meetings.length]);
+  }, [documents.length]);
 
-  const loadMeetings = async () => {
+  const loadDocuments = async () => {
     setLoading(true);
     try {
-      const res = await listMeetings();
-      setMeetings(res.data || []);
+      const res = await listDocuments(0, 100);
+      setDocuments(res.data?.data?.content || []);
     } catch {
-      setMeetings([]);
+      setDocuments([]);
     }
     setLoading(false);
   };
@@ -65,44 +65,42 @@ const KnowledgeBase: React.FC<Props> = ({ visible, onClose }) => {
     }
     setUploading(true);
     try {
-      await uploadKnowledgeBaseFile(file);
+      await uploadDocument(file);
       antMsg.success(`"${file.name}" 已导入知识库并完成向量化`);
-      loadMeetings();
+      loadDocuments();
     } catch (err: any) {
       antMsg.error('导入失败: ' + (err.response?.data?.message || err.message));
     }
     setUploading(false);
   };
 
-  const handleDelete = (meeting: Meeting) => {
-    if (!window.confirm(`确认从知识库删除「${meeting.title}」？\n向量数据将被一并删除。`)) return;
-    deleteMeeting(meeting.id)
+  const handleDelete = (doc: RagDocument) => {
+    if (!window.confirm(`确认从知识库删除「${doc.title}」？\n向量数据将被一并删除。`)) return;
+    deleteDocument(doc.id)
       .then(() => {
         antMsg.success('已删除');
-        setMeetings(prev => prev.filter(m => m.id !== meeting.id));
+        setDocuments(prev => prev.filter(d => d.id !== doc.id));
       })
       .catch(() => antMsg.error('删除失败'));
   };
 
-  const handlePreview = async (meeting: Meeting) => {
-    setPreviewFile(meeting);
+  const handlePreview = async (doc: RagDocument) => {
+    setPreviewFile(doc);
     setPreviewContent(null);
     setPreviewLoading(true);
     try {
-      // Try text-content endpoint first (supports all formats including PDF, doc, docx)
-      const res = await getMeetingTextContent(meeting.id);
-      if (res.data.content) {
-        setPreviewContent(res.data.content);
+      const res = await getDocumentTextContent(doc.id);
+      if (res.data?.data?.content) {
+        setPreviewContent(res.data.data.content);
       } else {
         // Fallback to transcription
-        const detail = await getMeeting(meeting.id);
-        setPreviewContent(detail.data.transcription || '（文件内容为空）');
+        const detail = await getDocument(doc.id);
+        setPreviewContent(detail.data?.data?.transcription || '（文件内容为空）');
       }
     } catch {
-      // Fallback to transcription
       try {
-        const detail = await getMeeting(meeting.id);
-        setPreviewContent(detail.data.transcription || '（无法读取文件内容）');
+        const detail = await getDocument(doc.id);
+        setPreviewContent(detail.data?.data?.transcription || '（无法读取文件内容）');
       } catch {
         setPreviewContent('（无法读取文件内容）');
       }
@@ -143,7 +141,7 @@ const KnowledgeBase: React.FC<Props> = ({ visible, onClose }) => {
 
   // Paginated items
   const startIndex = (page - 1) * PAGE_SIZE;
-  const pageItems = meetings.slice(startIndex, startIndex + PAGE_SIZE);
+  const pageItems = documents.slice(startIndex, startIndex + PAGE_SIZE);
 
   return (
     <div style={{
@@ -160,11 +158,11 @@ const KnowledgeBase: React.FC<Props> = ({ visible, onClose }) => {
         <Space size={6}>
           <DatabaseOutlined style={{ color: '#1677ff', fontSize: 16 }} />
           <Text strong style={{ fontSize: 13 }}>知识库</Text>
-          {!loading && <Text type="secondary" style={{ fontSize: 11 }}>({meetings.length})</Text>}
+          {!loading && <Text type="secondary" style={{ fontSize: 11 }}>({documents.length})</Text>}
         </Space>
         <Space size={2}>
           <Tooltip title="刷新">
-            <Button type="text" size="small" icon={<ReloadOutlined />} onClick={loadMeetings} />
+            <Button type="text" size="small" icon={<ReloadOutlined />} onClick={loadDocuments} />
           </Tooltip>
           <Tooltip title="关闭">
             <Button type="text" size="small" icon={<CloseOutlined />} onClick={onClose} />
@@ -201,13 +199,13 @@ const KnowledgeBase: React.FC<Props> = ({ visible, onClose }) => {
         </Text>
       </div>
 
-      {/* Meeting list */}
+      {/* Document list */}
       <div style={{ flex: 1, overflow: 'auto', padding: '4px 8px' }}>
         {loading ? (
           <div style={{ textAlign: 'center', paddingTop: 40 }}>
             <Spin size="small" />
           </div>
-        ) : meetings.length === 0 ? (
+        ) : documents.length === 0 ? (
           <div style={{ textAlign: 'center', paddingTop: 40, color: '#999', fontSize: 12 }}>
             <DatabaseOutlined style={{ fontSize: 28, display: 'block', marginBottom: 8, opacity: 0.3 }} />
             知识库暂无内容
@@ -217,9 +215,9 @@ const KnowledgeBase: React.FC<Props> = ({ visible, onClose }) => {
             <List
               dataSource={pageItems}
               split={false}
-              renderItem={(meeting) => {
-                const fileName = meeting.title || '';
-                const fileUrl = getFileUrl(meeting.id);
+              renderItem={(doc) => {
+                const fileName = doc.title || '';
+                const fileUrl = getDocumentFileUrl(doc.id);
                 return (
                   <List.Item
                     style={{
@@ -231,7 +229,7 @@ const KnowledgeBase: React.FC<Props> = ({ visible, onClose }) => {
                       display: 'block',
                       cursor: 'pointer',
                     }}
-                    onClick={() => handlePreview(meeting)}
+                    onClick={() => handlePreview(doc)}
                   >
                     {/* Title row */}
                     <div style={{ display: 'flex', alignItems: 'flex-start', gap: 6, marginBottom: 6 }}>
@@ -239,20 +237,20 @@ const KnowledgeBase: React.FC<Props> = ({ visible, onClose }) => {
                         {getFileIcon(fileName)}
                       </div>
                       <div style={{ flexShrink: 0, marginTop: 2 }}>
-                        <Tooltip title={meeting.styleExemplar ? '取消风格参考标记' : '标记为风格参考'}>
+                        <Tooltip title={doc.styleExemplar ? '取消风格参考标记' : '标记为风格参考'}>
                           <span
                             onClick={(e) => {
                               e.stopPropagation();
-                              const newVal = !meeting.styleExemplar;
-                              setStyleExemplar(meeting.id, newVal).then(() => {
-                                setMeetings(prev => prev.map(m =>
-                                  m.id === meeting.id ? { ...m, styleExemplar: newVal } : m
+                              const newVal = !doc.styleExemplar;
+                              setDocumentStyleExemplar(doc.id, newVal).then(() => {
+                                setDocuments(prev => prev.map(d =>
+                                  d.id === doc.id ? { ...d, styleExemplar: newVal } : d
                                 ));
                               }).catch(() => antMsg.error('标记失败'));
                             }}
                             style={{ cursor: 'pointer', fontSize: 14, lineHeight: 1 }}
                           >
-                            {meeting.styleExemplar ? (
+                            {doc.styleExemplar ? (
                               <StarFilled style={{ color: '#fadb14' }} />
                             ) : (
                               <StarOutlined style={{ color: '#d9d9d9' }} />
@@ -271,7 +269,7 @@ const KnowledgeBase: React.FC<Props> = ({ visible, onClose }) => {
                           size="small"
                           danger
                           icon={<DeleteOutlined />}
-                          onClick={(e) => { e.stopPropagation(); handleDelete(meeting); }}
+                          onClick={(e) => { e.stopPropagation(); handleDelete(doc); }}
                           style={{ flexShrink: 0, width: 22, height: 22, minWidth: 22, padding: 0, fontSize: 11 }}
                         />
                       </Tooltip>
@@ -279,10 +277,10 @@ const KnowledgeBase: React.FC<Props> = ({ visible, onClose }) => {
 
                     {/* Detail fields */}
                     <div style={{ paddingLeft: 22 }}>
-                      {renderDetailRow('会议时间', formatDateTime(meeting.meetingDate || meeting.createdAt), <CalendarOutlined />)}
-                      {renderDetailRow('导入', formatDateTime(meeting.updatedAt), <ClockCircleOutlined />)}
-                      {renderDetailRow('大小', formatFileSize(meeting.fileSize))}
-                      {renderDetailRow('路径', meeting.filePath || '-', <LinkOutlined />)}
+                      {renderDetailRow('会议时间', formatDateTime(doc.meetingDate || doc.createdAt), <CalendarOutlined />)}
+                      {renderDetailRow('导入', formatDateTime(doc.updatedAt), <ClockCircleOutlined />)}
+                      {renderDetailRow('大小', formatFileSize(doc.fileSize))}
+                      {renderDetailRow('路径', doc.filePath || '-', <LinkOutlined />)}
                     </div>
 
                     {/* Actions */}
@@ -291,7 +289,7 @@ const KnowledgeBase: React.FC<Props> = ({ visible, onClose }) => {
                         type="link"
                         size="small"
                         icon={<EyeOutlined />}
-                        onClick={(e) => { e.stopPropagation(); handlePreview(meeting); }}
+                        onClick={(e) => { e.stopPropagation(); handlePreview(doc); }}
                         style={{ fontSize: 11, padding: 0, height: 20 }}
                       >
                         预览
@@ -312,12 +310,12 @@ const KnowledgeBase: React.FC<Props> = ({ visible, onClose }) => {
                 );
               }}
             />
-            {meetings.length > PAGE_SIZE && (
+            {documents.length > PAGE_SIZE && (
               <div style={{ textAlign: 'center', padding: '8px 0' }}>
                 <Pagination
                   size="small"
                   current={page}
-                  total={meetings.length}
+                  total={documents.length}
                   pageSize={PAGE_SIZE}
                   onChange={setPage}
                   showSizeChanger={false}
@@ -342,7 +340,7 @@ const KnowledgeBase: React.FC<Props> = ({ visible, onClose }) => {
               type="primary"
               size="small"
               icon={<DownloadOutlined />}
-              href={getFileUrl(previewFile.id)}
+              href={getDocumentFileUrl(previewFile.id)}
               target="_blank"
             >
               下载原文

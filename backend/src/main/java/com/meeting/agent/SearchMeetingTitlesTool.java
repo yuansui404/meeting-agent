@@ -1,8 +1,8 @@
 package com.meeting.agent;
 
 import com.meeting.common.JsonUtil;
-import com.meeting.meeting.model.entity.MeetingMinutes;
-import com.meeting.meeting.repository.MeetingMinutesRepository;
+import com.meeting.document.model.entity.DocumentEntity;
+import com.meeting.document.repository.DocumentRepository;
 import io.agentscope.core.message.ToolResultBlock;
 import io.agentscope.core.tool.AgentTool;
 import io.agentscope.core.tool.ToolCallParam;
@@ -19,7 +19,7 @@ import java.util.*;
 @RequiredArgsConstructor
 public class SearchMeetingTitlesTool implements AgentTool {
 
-    private final MeetingMinutesRepository meetingRepository;
+    private final DocumentRepository documentRepository;
 
     @Override
     public String getName() {
@@ -63,19 +63,19 @@ public class SearchMeetingTitlesTool implements AgentTool {
                 limit = Math.max(1, Math.min(50, n.intValue()));
             }
 
-            List<MeetingMinutes> meetings = meetingRepository.searchByTitleKeyword(keyword, limit);
-            if (meetings.isEmpty()) {
+            List<DocumentEntity> docs = documentRepository.searchByTitleKeyword(keyword, limit);
+            if (docs.isEmpty()) {
                 return ToolResultBlock.text("未找到标题包含「" + keyword + "」的会议。");
             }
 
             List<Map<String, Object>> items = new ArrayList<>();
             DateTimeFormatter fmt = DateTimeFormatter.ISO_LOCAL_DATE;
-            for (MeetingMinutes m : meetings) {
+            for (DocumentEntity d : docs) {
                 Map<String, Object> item = new LinkedHashMap<>();
-                item.put("id", m.getId());
-                item.put("title", m.getTitle() != null ? m.getTitle() : "");
-                item.put("date", m.getMeetingDate() != null ? m.getMeetingDate().format(fmt) : "");
-                item.put("status", m.getStatus());
+                item.put("id", d.getId());
+                item.put("title", d.getTitle() != null ? d.getTitle() : "");
+                item.put("date", d.getMeetingDate() != null ? d.getMeetingDate().format(fmt) : "");
+                item.put("status", d.getStatus());
                 items.add(item);
             }
 

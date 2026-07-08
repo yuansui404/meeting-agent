@@ -16,34 +16,23 @@ import {
   PaperClipOutlined,
   ArrowUpOutlined,
   CloseOutlined,
-  LikeOutlined,
-  DislikeOutlined,
-  DownloadOutlined,
-  EditOutlined,
-  EyeOutlined,
 } from '@ant-design/icons';
 import ReactMarkdown from 'react-markdown';
 import {
   Dialogue,
   DialogueMessage,
-  Meeting,
   getDialogue,
   streamChat,
   uploadFile,
-  searchMeetings,
-  SearchResult,
+  searchDocuments,
   UploadedFile,
   listDialogueMeetings,
-  deleteMeeting,
-  getFileUrl,
-  getMeeting,
+  deleteDocument,
+  getDocumentFileUrl,
+  getDocumentTextContent,
   getDialogueFileUrl,
   getDialogueFileTextContent,
   api,
-  submitRewriteFeedback,
-  getRewriteResult,
-  getRewriteFileUrl,
-  RewriteResultData,
 } from '../services/api';
 
 const { Text, Title } = Typography;
@@ -107,7 +96,7 @@ const DialoguePanel: React.FC<Props> = ({ activeDialogue, onDialogueUpdated, onS
   const [thinkingText, setThinkingText] = useState('');
   const [toolCalls, setToolCalls] = useState<ToolCallDisplay[]>([]);
   const [searchVisible, setSearchVisible] = useState(false);
-  const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
+  const [searchResults, setSearchResults] = useState<any[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [searching, setSearching] = useState(false);
   const [uploadingFiles, setUploadingFiles] = useState<{ name: string; id?: number }[]>([]);
@@ -222,7 +211,7 @@ const DialoguePanel: React.FC<Props> = ({ activeDialogue, onDialogueUpdated, onS
         // (disk cleanup can be async)
         if (activeDialogue) loadFiles(activeDialogue.id);
       } else {
-        await deleteMeeting(file.id);
+        await deleteDocument(file.id);
         if (activeDialogue) loadFiles(activeDialogue.id);
       }
     } catch {
@@ -236,7 +225,7 @@ const DialoguePanel: React.FC<Props> = ({ activeDialogue, onDialogueUpdated, onS
     if (id > 0 && !card?.fileId) {
       // Old-style file in meeting_minutes — delete the DB record
       try {
-        await deleteMeeting(id);
+        await deleteDocument(id);
       } catch { /* ignore */ }
       if (activeDialogue) loadFiles(activeDialogue.id);
     }
@@ -440,8 +429,8 @@ const DialoguePanel: React.FC<Props> = ({ activeDialogue, onDialogueUpdated, onS
     setSearchQuery(query);
     setSearching(true);
     try {
-      const res = await searchMeetings(query);
-      setSearchResults(res.data.results || []);
+      const res = await searchDocuments(query);
+      setSearchResults(res.data?.data?.results || []);
     } catch {
       setSearchResults([]);
     } finally {
@@ -476,19 +465,13 @@ const DialoguePanel: React.FC<Props> = ({ activeDialogue, onDialogueUpdated, onS
           setPreviewContent(resp.data.content);
         }
       } else if (file.id > 0) {
-        // Old-style file: stored in meeting_minutes, use meeting endpoints
-        const res = await getMeeting(file.id);
-        const meeting = res.data as Meeting;
-        if (meeting.transcription && meeting.transcription !== '{}' && meeting.transcription.length > 10) {
-          setPreviewContent(meeting.transcription);
-        } else {
-          try {
-            const textResp = await api.get(`/meeting/${file.id}/text-content`);
-            if (textResp.data?.content) {
-              setPreviewContent(textResp.data.content);
-            }
-          } catch { /* unsupported format or fetch error */ }
-        }
+        // Old-style file: try document text-content endpoint
+        try {
+          const textResp = await getDocumentTextContent(file.id);
+          if (textResp.data?.data?.content) {
+            setPreviewContent(textResp.data.data.content);
+          }
+        } catch { /* unsupported format or fetch error */ }
       } else {
         setPreviewContent(null);
       }
@@ -863,7 +846,7 @@ const DialoguePanel: React.FC<Props> = ({ activeDialogue, onDialogueUpdated, onS
                 <img
                   src={(previewFile as any).fileId && activeDialogue
                     ? getDialogueFileUrl(activeDialogue.id, (previewFile as any).fileId)
-                    : getFileUrl(previewFile.id)}
+                    : getDocumentFileUrl(previewFile.id)}
                   alt={previewFile.title}
                   style={{ maxWidth: '100%', borderRadius: 8, boxShadow: '0 2px 8px rgba(0,0,0,0.1)' }}
                 />
@@ -896,7 +879,7 @@ const DialoguePanel: React.FC<Props> = ({ activeDialogue, onDialogueUpdated, onS
                   onClick={() => window.open(
                     (previewFile as any).fileId && activeDialogue
                       ? getDialogueFileUrl(activeDialogue.id, (previewFile as any).fileId)
-                      : getFileUrl(previewFile.id), '_blank')}
+                      : getDocumentFileUrl(previewFile.id), '_blank')}
                   style={{ marginTop: 8 }}
                 >
                   查看原始文件
@@ -924,18 +907,20 @@ const DialoguePanel: React.FC<Props> = ({ activeDialogue, onDialogueUpdated, onS
         />
         {searchResults.length > 0 && (
           <div style={{ maxHeight: 400, overflow: 'auto' }}>
-            {searchResults.map((item) => (
-              <div key={item.id} style={{ padding: '10px 0', borderBottom: '1px solid #f0f0f0' }}>
+            {searchResults.map((item: any, idx: number) => (
+              <div key={idx} style={{ padding: '10px 0', borderBottom: '1px solid #f0f0f0' }}>
                 <Text strong style={{ fontSize: 14 }}>
-                  {highlight(item.title, searchQuery)}
-                  <Text style={{ fontSize: 11, marginLeft: 6 }} type="secondary">
-                    {item.type === 'vector' ? '语义匹配' : '关键词匹配'}
-                  </Text>
+                  {highlight(item.source || '', searchQuery)}
+                  {item.score != null && (
+                    <Text style={{ fontSize: 11, marginLeft: 6 }} type="secondary">
+                      {(item.score * 100).toFixed(0)}% 匹配
+                    </Text>
+                  )}
                 </Text>
                 <div style={{ fontSize: 13, color: 'var(--text-tertiary)', marginTop: 4, whiteSpace: 'pre-wrap' }}>
-                  {item.matchedContent
-                    ? highlight(item.matchedContent.substring(0, 200), searchQuery)
-                    : (item.transcription?.substring(0, 200) || '')}
+                  {item.content
+                    ? highlight(item.content.substring(0, 200), searchQuery)
+                    : ''}
                 </div>
               </div>
             ))}
@@ -1096,22 +1081,6 @@ const MessageBubble: React.FC<{ message: DisplayMessage; onFilePreview?: (file: 
   const fileList = (message as DisplayMessage).files || [];
   const hasFiles = fileList.length > 0;
 
-  // Check if this is a rewrite result message
-  let rewriteResultId: number | null = null;
-  if (!isUser && message.metadata) {
-    try {
-      const meta = typeof message.metadata === 'string'
-        ? JSON.parse(message.metadata) : message.metadata;
-      if (meta.type === 'rewrite' && meta.rewriteResultId) {
-        rewriteResultId = meta.rewriteResultId;
-      }
-    } catch { /* ignore invalid metadata */ }
-  }
-
-  if (rewriteResultId) {
-    return <RewriteBubble message={message} rewriteResultId={rewriteResultId} />;
-  }
-
   // Extract thinking/tool calls from persisted metadata
   let persistedThinking: string | null = null;
   let persistedToolCalls: ToolCallDisplay[] | null = null;
@@ -1230,139 +1199,6 @@ const StreamingBubble: React.FC<{ content: string }> = ({ content }) => {
 };
 
 // Rewrite message bubble with document-level feedback and preview
-const RewriteBubble: React.FC<{ message: DisplayMessage; rewriteResultId: number }> = ({ message, rewriteResultId }) => {
-  const [docFeedback, setDocFeedback] = React.useState<'like' | 'dislike' | null>(null);
-  const [previewOpen, setPreviewOpen] = React.useState(false);
-
-  const handleFeedback = async (action: 'like' | 'dislike') => {
-    if (docFeedback === action) {
-      setDocFeedback(null);
-      return;
-    }
-    setDocFeedback(action);
-    try {
-      // paragraphIndex=-1 means document-level feedback
-      await submitRewriteFeedback(rewriteResultId, -1, action);
-    } catch {
-      setDocFeedback(null);
-    }
-  };
-
-  return (
-    <>
-      <div style={{ display: 'flex', padding: '12px 24px', justifyContent: 'flex-start' }}>
-        <div style={{ display: 'flex', maxWidth: '80%', gap: 12, alignItems: 'flex-start' }}>
-          <div style={{
-            width: 36, height: 36, borderRadius: 8,
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            flexShrink: 0, background: 'var(--hover-bg)', color: 'var(--text-tertiary)', fontSize: 16,
-          }}>
-            <EditOutlined />
-          </div>
-          <div style={{ flex: 1 }}>
-            {/* Header */}
-            <div style={{
-              padding: '8px 16px', background: 'var(--app-bg)',
-              borderRadius: '12px 12px 0 0',
-              border: '1px solid var(--border-color)', borderBottom: 'none',
-              fontSize: 13, fontWeight: 600, color: 'var(--primary-color)',
-            }}>
-              <FileTextOutlined style={{ marginRight: 6 }} />
-              改写结果
-            </div>
-            {/* Content */}
-            <div style={{
-              background: 'var(--app-bg)',
-              border: '1px solid var(--border-color)', borderTop: 'none',
-              padding: '12px 16px',
-              fontSize: 14, lineHeight: 1.7, whiteSpace: 'pre-wrap',
-              wordBreak: 'break-word',
-            }}>
-              <ReactMarkdown>{message.content}</ReactMarkdown>
-            </div>
-            {/* Footer with preview, download, feedback */}
-            <div style={{
-              padding: '8px 16px', background: 'var(--sider-bg)',
-              borderRadius: '0 0 12px 12px',
-              border: '1px solid var(--border-color)', borderTop: 'none',
-              display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-            }}>
-              <div style={{ display: 'flex', gap: 4 }}>
-                <Button
-                  type="link"
-                  size="small"
-                  icon={<EyeOutlined />}
-                  onClick={() => setPreviewOpen(true)}
-                  style={{ fontSize: 12 }}
-                >
-                  预览
-                </Button>
-                <Button
-                  type="link"
-                  size="small"
-                  icon={<DownloadOutlined />}
-                  href={getRewriteFileUrl(rewriteResultId)}
-                  target="_blank"
-                  style={{ fontSize: 12 }}
-                >
-                  下载对照版
-                </Button>
-              </div>
-              <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
-                <Text type="secondary" style={{ fontSize: 11, marginRight: 8 }}>文档评价</Text>
-                <Button
-                  type="text"
-                  size="small"
-                  icon={<LikeOutlined />}
-                  onClick={() => handleFeedback('like')}
-                  style={{
-                    fontSize: 12, color: docFeedback === 'like' ? 'var(--primary-color)' : 'var(--text-secondary)',
-                  }}
-                />
-                <Button
-                  type="text"
-                  size="small"
-                  icon={<DislikeOutlined />}
-                  onClick={() => handleFeedback('dislike')}
-                  style={{
-                    fontSize: 12, color: docFeedback === 'dislike' ? '#ff4d4f' : 'var(--text-secondary)',
-                  }}
-                />
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-      {/* Preview Drawer */}
-      <Drawer
-        title="改写结果预览"
-        placement="right"
-        onClose={() => setPreviewOpen(false)}
-        open={previewOpen}
-        width={600}
-        extra={
-          <Button
-            type="primary"
-            size="small"
-            icon={<DownloadOutlined />}
-            href={getRewriteFileUrl(rewriteResultId)}
-            target="_blank"
-          >
-            下载对照版
-          </Button>
-        }
-      >
-        <div style={{
-          fontSize: 14, lineHeight: 1.8, whiteSpace: 'pre-wrap',
-          wordBreak: 'break-word',
-        }}>
-          <ReactMarkdown>{message.content}</ReactMarkdown>
-        </div>
-      </Drawer>
-    </>
-  );
-};
-
 const formatFileSize = (bytes: number | null): string => {
   if (!bytes) return '';
   if (bytes < 1024) return bytes + ' B';

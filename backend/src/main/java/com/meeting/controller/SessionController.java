@@ -1,21 +1,13 @@
 package com.meeting.controller;
 
 import com.meeting.common.ApiResponse;
-import com.meeting.common.BusinessException;
 import com.meeting.controller.dto.request.CreateSessionRequest;
 import com.meeting.controller.dto.request.UpdateTitleRequest;
-import com.meeting.conversation.service.RewriteService;
 import com.meeting.conversation.service.SessionService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
-import org.springframework.core.io.FileSystemResource;
-import org.springframework.core.io.Resource;
-import org.springframework.http.HttpHeaders;
-import org.springframework.http.MediaType;
-import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
-import java.nio.file.Path;
 import java.util.Map;
 
 @RestController
@@ -24,7 +16,6 @@ import java.util.Map;
 public class SessionController {
 
     private final SessionService sessionService;
-    private final RewriteService rewriteService;
 
     @PostMapping("/dialogue")
     public ApiResponse<Map<String, Object>> createSession(@Valid @RequestBody CreateSessionRequest request) {
@@ -59,58 +50,5 @@ public class SessionController {
     public ApiResponse<Void> updateTitle(@PathVariable Long id, @Valid @RequestBody UpdateTitleRequest request) {
         sessionService.updateTitle(id, request.title().trim());
         return ApiResponse.ok(null);
-    }
-
-    @GetMapping("/rewrite-result/{id}")
-    public ApiResponse<?> getRewriteResult(@PathVariable Long id) {
-        return rewriteService.getRewriteResult(id)
-                .map(result -> {
-                    Map<String, Object> data = new java.util.HashMap<>();
-                    data.put("id", result.getId());
-                    data.put("dialogueId", result.getDialogueId());
-                    data.put("sourceFileIds", result.getSourceFileIds());
-                    data.put("referenceIds", result.getReferenceIds());
-                    data.put("content", result.getContent());
-                    data.put("docxPath", result.getDocxPath());
-                    data.put("version", result.getVersion());
-                    data.put("createdAt", result.getCreatedAt());
-                    return ApiResponse.ok(data);
-                })
-                .orElseThrow(() -> BusinessException.notFound("改写结果不存在: " + id));
-    }
-
-    @GetMapping("/dialogue/{id}/rewrite-history")
-    public ApiResponse<?> getRewriteHistory(@PathVariable Long id) {
-        var results = rewriteService.getRewriteHistory(id).stream()
-                .map(r -> Map.<String, Object>of(
-                        "id", r.getId(),
-                        "version", r.getVersion(),
-                        "docxPath", r.getDocxPath() != null ? r.getDocxPath() : "",
-                        "createdAt", r.getCreatedAt()
-                )).toList();
-        return ApiResponse.ok(results);
-    }
-
-    @GetMapping("/rewrite-result/{id}/file")
-    public ResponseEntity<?> downloadRewriteFile(@PathVariable Long id) {
-        return rewriteService.getRewriteResult(id)
-                .map(result -> {
-                    String docxPath = result.getDocxPath();
-                    if (docxPath == null || docxPath.isBlank()) {
-                        throw BusinessException.notFound("文件不存在");
-                    }
-                    Path filePath = Path.of(docxPath);
-                    if (!filePath.toFile().exists()) {
-                        throw BusinessException.notFound("文件不存在");
-                    }
-                    Resource resource = new FileSystemResource(filePath);
-                    String filename = "rewrite_" + result.getDialogueId() + "_v" + result.getVersion() + ".docx";
-                    return ResponseEntity.ok()
-                            .contentType(MediaType.APPLICATION_OCTET_STREAM)
-                            .header(HttpHeaders.CONTENT_DISPOSITION,
-                                    "attachment; filename*=UTF-8''" + filename)
-                            .body(resource);
-                })
-                .orElseThrow(() -> BusinessException.notFound("改写结果不存在: " + id));
     }
 }

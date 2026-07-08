@@ -13,10 +13,7 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 import java.util.List;
 
 /**
- * 对话入口 Facade。负责 metadata 解析和组件编排，具体职责委托给：
- * - FileContextBuilder：文件上下文构建
- * - ChatStreamService：SSE 流控制
- * - DialoguePersistenceService：消息持久化
+ * 对话入口 Facade。负责 metadata 解析和组件编排。
  */
 @Slf4j
 @Service
@@ -30,6 +27,8 @@ public class ChatService {
     public void streamChat(SseEmitter emitter, Long dialogueId, String userMessage,
                            List<FileMetadata> files) {
         List<FileMetadata> messageFiles = files != null ? files : List.of();
+
+        // 用户上传文件具体内容
         String fileContext = fileContextBuilder.build(messageFiles);
 
         UserMessage msg = new UserMessage(userMessage);

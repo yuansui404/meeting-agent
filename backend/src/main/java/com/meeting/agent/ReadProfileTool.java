@@ -27,14 +27,19 @@ public class ReadProfileTool implements AgentTool {
 
     @Override
     public String getDescription() {
-        return "读取用户画像（Profile）的全部内容。当需要了解用户的偏好、习惯用语、个人背景或任何已记录的用户信息时使用。返回所有 .md 文件的完整内容。";
+        return "读取用户画像（Profile）的内容。不传 filename 则读取全部文件，传 filename 则只读取指定文件。";
     }
 
     @Override
     public Map<String, Object> getParameters() {
+        Map<String, Object> properties = new LinkedHashMap<>();
+        properties.put("filename", Map.of(
+                "type", "string",
+                "description", "可选，指定要读取的文件名（如 与会人.md）。不传则读取全部文件。"
+        ));
         return Map.of(
                 "type", "object",
-                "properties", Map.of(),
+                "properties", properties,
                 "required", List.of()
         );
     }
@@ -42,25 +47,44 @@ public class ReadProfileTool implements AgentTool {
     @Override
     public Mono<ToolResultBlock> callAsync(ToolCallParam param) {
         return Mono.fromCallable(() -> {
-            List<String> files = profileService.listFiles();
-            if (files.isEmpty()) {
-                return ToolResultBlock.text("用户画像为空，没有已记录的信息。");
-            }
+            Map<String, Object> input = param.getInput();
+            String filename = input.containsKey("filename") ? input.get("filename").toString() : null;
 
-            StringBuilder sb = new StringBuilder();
-            sb.append("用户画像内容：\n\n");
-            for (String filename : files) {
-                try {
-                    String content = profileService.readFile(filename);
-                    String label = filename.replace(".md", "");
-                    sb.append("=== ").append(label).append(" ===\n");
-                    sb.append(content).append("\n\n");
-                } catch (Exception e) {
-                    log.warn("Failed to read profile file {}: {}", filename, e.getMessage());
-                }
+            if (filename != null && !filename.isBlank()) {
+                return readSingleFile(filename);
             }
-
-            return ToolResultBlock.text(sb.toString());
+            return readAllFiles();
         });
+    }
+
+    private ToolResultBlock readSingleFile(String filename) {
+        try {
+            String content = profileService.readFile(filename);
+            String label = filename.replace(".md", "");
+            return ToolResultBlock.text("=== " + label + " ===\n" + content);
+        } catch (Exception e) {
+            return ToolResultBlock.text("读取文件失败: " + e.getMessage());
+        }
+    }
+
+    private ToolResultBlock readAllFiles() {
+        List<String> files = profileService.listFiles();
+        if (files.isEmpty()) {
+            return ToolResultBlock.text("用户画像为空，没有已记录的信息。");
+        }
+
+        StringBuilder sb = new StringBuilder();
+        sb.append("用户画像内容：\n\n");
+        for (String filename : files) {
+            try {
+                String content = profileService.readFile(filename);
+                String label = filename.replace(".md", "");
+                sb.append("=== ").append(label).append(" ===\n");
+                sb.append(content).append("\n\n");
+            } catch (Exception e) {
+                log.warn("Failed to read profile file {}: {}", filename, e.getMessage());
+            }
+        }
+        return ToolResultBlock.text(sb.toString());
     }
 }

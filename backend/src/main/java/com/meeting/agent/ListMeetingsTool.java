@@ -1,8 +1,8 @@
 package com.meeting.agent;
 
 import com.meeting.common.JsonUtil;
-import com.meeting.meeting.model.entity.MeetingMinutes;
-import com.meeting.meeting.repository.MeetingMinutesRepository;
+import com.meeting.document.model.entity.DocumentEntity;
+import com.meeting.document.repository.DocumentRepository;
 import io.agentscope.core.message.ToolResultBlock;
 import io.agentscope.core.tool.AgentTool;
 import io.agentscope.core.tool.ToolCallParam;
@@ -21,7 +21,7 @@ import java.util.*;
 @RequiredArgsConstructor
 public class ListMeetingsTool implements AgentTool {
 
-    private final MeetingMinutesRepository meetingRepository;
+    private final DocumentRepository documentRepository;
 
     @Override
     public String getName() {
@@ -65,23 +65,23 @@ public class ListMeetingsTool implements AgentTool {
                 size = Math.max(1, Math.min(50, n.intValue()));
             }
 
-            Page<MeetingMinutes> meetingPage = meetingRepository.findAllByOrderByCreatedAtDesc(PageRequest.of(page, size));
-            List<MeetingMinutes> meetings = meetingPage.getContent();
+            Page<DocumentEntity> docPage = documentRepository.findAllByOrderByCreatedAtDesc(PageRequest.of(page, size));
+            List<DocumentEntity> docs = docPage.getContent();
 
             List<Map<String, Object>> items = new ArrayList<>();
             DateTimeFormatter fmt = DateTimeFormatter.ISO_LOCAL_DATE;
-            for (MeetingMinutes m : meetings) {
+            for (DocumentEntity d : docs) {
                 Map<String, Object> item = new LinkedHashMap<>();
-                item.put("id", m.getId());
-                item.put("title", m.getTitle() != null ? m.getTitle() : "");
-                item.put("date", m.getMeetingDate() != null ? m.getMeetingDate().format(fmt) : "");
-                item.put("status", m.getStatus());
+                item.put("id", d.getId());
+                item.put("title", d.getTitle() != null ? d.getTitle() : "");
+                item.put("date", d.getMeetingDate() != null ? d.getMeetingDate().format(fmt) : "");
+                item.put("status", d.getStatus());
                 items.add(item);
             }
 
             Map<String, Object> result = new LinkedHashMap<>();
-            result.put("total", meetingPage.getTotalElements());
-            result.put("page", meetingPage.getNumber());
+            result.put("total", docPage.getTotalElements());
+            result.put("page", docPage.getNumber());
             result.put("items", items);
 
             return ToolResultBlock.text(JsonUtil.toJson(result));

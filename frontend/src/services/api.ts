@@ -4,22 +4,6 @@ export const api = axios.create({
   baseURL: process.env.REACT_APP_API_URL || 'http://localhost:8080/api',
 });
 
-export interface Meeting {
-  id: number;
-  title: string;
-  transcription: string | null;
-  duration: number | null;
-  fileSize: number | null;
-  status: string;
-  createdAt: string;
-  updatedAt?: string;
-  filePath?: string;
-  dialogueId?: number | null;
-  mdFilePath?: string | null;
-  meetingDate?: string | null;
-  styleExemplar?: boolean;
-}
-
 export interface Dialogue {
   id: number;
   title: string;
@@ -39,16 +23,6 @@ export interface DialogueMessage {
   files?: any[];
 }
 
-export interface SearchResult {
-  id: number;
-  title: string;
-  transcription: string;
-  duration: number;
-  createdAt: string;
-  type: string;
-  matchedContent?: string;
-}
-
 // 上传文件
 export const uploadFile = (file: File, dialogueId?: number) => {
   const formData = new FormData();
@@ -56,18 +30,6 @@ export const uploadFile = (file: File, dialogueId?: number) => {
   if (dialogueId) formData.append('dialogueId', String(dialogueId));
   return api.post('/upload', formData);
 };
-
-// 获取会议详情
-export const getMeeting = (id: number) =>
-  api.get<Meeting>(`/meeting/${id}`);
-
-// 获取会议文本内容（用于预览）
-export const getMeetingTextContent = (id: number) =>
-  api.get<{ content: string; warning?: string }>(`/meeting/${id}/text-content`);
-
-// 获取所有会议
-export const listMeetings = () =>
-  api.get<Meeting[]>('/meetings');
 
 // 创建对话
 export const createDialogue = (title: string, meetingId?: number) =>
@@ -93,48 +55,9 @@ export const deleteDialogue = (id: number) =>
 export const renameDialogue = (id: number, title: string) =>
   api.put(`/dialogue/${id}/title`, { title });
 
-// 搜索
-export const searchMeetings = (query: string, dialogueId?: number) =>
-  api.get<{ query: string; results: SearchResult[] }>('/search', {
-    params: { query, dialogueId },
-  });
-
-// 向量化会议
-export const vectorizeMeeting = (id: number) =>
-  api.post(`/meeting/${id}/vectorize`);
-
-// 切换知识库状态（已废弃，会议上传后自动向量化）
-export const toggleKnowledgeBase = (id: number) =>
-  api.post<{ success: boolean; knowledgeBase: boolean }>(`/meeting/${id}/knowledge-base`);
-
-// 获取知识库会议列表
-export const listKnowledgeBase = () =>
-  api.get<Meeting[]>('/meetings/knowledge-base');
-
-// 上传文件到知识库（自动向量化）
-export const uploadKnowledgeBaseFile = (file: File) => {
-  const formData = new FormData();
-  formData.append('file', file);
-  return api.post<{ success: boolean; meetingId: number; title: string }>('/meetings/knowledge-base/upload', formData);
-};
-
-// 搜索知识库
-export const searchKnowledgeBase = (query: string) =>
-  api.get<{ query: string; results: SearchResult[] }>('/search', {
-    params: { query, kbOnly: true },
-  });
-
 // 获取对话下的文件列表
 export const listDialogueMeetings = (dialogueId: number) =>
   api.get<UploadedFile[]>(`/dialogue/${dialogueId}/meetings`);
-
-// 删除文件
-export const deleteMeeting = (id: number) =>
-  api.delete(`/meeting/${id}`);
-
-// 获取文件预览URL
-export const getFileUrl = (id: number) =>
-  `${api.defaults.baseURL || 'http://localhost:8080/api'}/meeting/${id}/file`;
 
 // 获取对话文件URL（state_json 存储的文件）
 export const getDialogueFileUrl = (dialogueId: number, fileId: string) =>
@@ -161,7 +84,7 @@ export interface UploadedFile {
 }
 
 // ============================================================
-// RAG 新管线 API
+// RAG 文档 API
 // ============================================================
 
 export interface RagDocument {
@@ -173,13 +96,31 @@ export interface RagDocument {
   meetingDate: string | null;
   status: string;
   chunkCount: number;
+  transcription?: string | null;
+  styleExemplar?: boolean;
+  styleTags?: string | null;
+  participants?: string | null;
+  duration?: number | null;
+  mdFilePath?: string | null;
   createdAt: string;
   updatedAt: string;
 }
 
 // 获取文档列表
-export const listDocuments = () =>
-  api.get<{ success: boolean; data: RagDocument[] }>('/document');
+export const listDocuments = (page = 0, size = 20) =>
+  api.get<{ success: boolean; data: { content: RagDocument[]; totalElements: number } }>('/document', { params: { page, size } });
+
+// 获取单个文档
+export const getDocument = (id: number) =>
+  api.get<{ success: boolean; data: RagDocument }>(`/document/${id}`);
+
+// 获取文档文本内容（用于预览）
+export const getDocumentTextContent = (id: number) =>
+  api.get<{ success: boolean; data: { content: string } }>(`/document/${id}/text-content`);
+
+// 获取文档文件下载URL
+export const getDocumentFileUrl = (id: number) =>
+  `${api.defaults.baseURL || 'http://localhost:8080/api'}/document/${id}/file`;
 
 // 删除文档
 export const deleteDocument = (id: number) =>
@@ -192,86 +133,19 @@ export const uploadDocument = (file: File) => {
   return api.post<{ success: boolean; data: RagDocument }>('/document/upload', formData);
 };
 
-export interface Conversation {
-  id: number;
-  title: string;
-  status: string;
-  contextSummary: string | null;
-  messageCount: number;
-  createdAt: string;
-  updatedAt: string;
-}
-
-export interface ChatMessage {
-  id: number;
-  conversationId: number;
-  role: string;
-  content: string;
-  traceId: string | null;
-  metadata: string | null;
-  createdAt: string;
-}
-
-// 创建会话
-export const createConversation = (title?: string) =>
-  api.post<{ success: boolean; data: Conversation }>('/conversation', { title });
-
-// 获取会话列表
-export const listConversations = () =>
-  api.get<{ success: boolean; data: Conversation[] }>('/conversation');
-
-// 删除会话
-export const deleteConversation = (id: number) =>
-  api.delete(`/conversation/${id}`);
-
-// 获取会话消息
-export const getConversationMessages = (id: number) =>
-  api.get<{ success: boolean; data: ChatMessage[] }>(`/conversation/${id}/messages`);
-
-// 流式对话（RAG）
-// ============================================================
-// 改写风格学习 API
-// ============================================================
-
-export interface RewriteResultData {
-  id: number;
-  dialogueId: number;
-  sourceFileIds: string;
-  referenceIds: string | null;
-  content: string;
-  docxPath: string | null;
-  version: number;
-  createdAt: string;
-}
-
-// 获取改写结果详情
-export const getRewriteResult = (id: number) =>
-  api.get<RewriteResultData>(`/rewrite-result/${id}`);
-
-// 获取改写结果文件的下载 URL
-export const getRewriteFileUrl = (rewriteResultId: number) =>
-  `${api.defaults.baseURL || 'http://localhost:8080/api'}/rewrite-result/${rewriteResultId}/file`;
-
-// 获取对话的改写历史
-export const getRewriteHistory = (dialogueId: number) =>
-  api.get<{ id: number; version: number; docxPath: string; createdAt: string }[]>(
-    `/dialogue/${dialogueId}/rewrite-history`
-  );
-
-// 提交段落点赞/踩反馈
-export const submitRewriteFeedback = (
-  rewriteResultId: number,
-  paragraphIndex: number,
-  action: 'like' | 'dislike'
-) => api.post('/rewrite-feedback', { rewriteResultId, paragraphIndex, action });
-
 // 标记文档为风格范例
-export const setStyleExemplar = (meetingId: number, styleExemplar: boolean, styleTags?: string) =>
-  api.post(`/meeting/${meetingId}/style-exemplar`, { styleExemplar, styleTags });
+export const setDocumentStyleExemplar = (id: number, styleExemplar: boolean, styleTags?: string) =>
+  api.post(`/document/${id}/style-exemplar`, { styleExemplar, styleTags });
 
 // 获取风格范例列表
 export const listStyleExemplars = () =>
-  api.get<{ id: number; title: string; styleTags: string }[]>('/meetings/style-exemplars');
+  api.get<{ success: boolean; data: { id: number; title: string; styleTags: string }[] }>('/document/style-exemplars');
+
+// 搜索文档
+export const searchDocuments = (query: string, timeRange?: string) =>
+  api.get<{ success: boolean; data: { query: string; evidenceLevel: string; results: any[]; citations: any[] } }>('/search', {
+    params: { query, timeRange },
+  });
 
 // ============================================================
 // 流式对话（RAG + 改写路由）
@@ -380,5 +254,34 @@ export const getMemory = () =>
 
 export const saveMemory = (content: string) =>
   api.put('/memory', { content });
+
+// ============================================================
+// Profile API
+// ============================================================
+
+export interface ProfileFileItem {
+  filename: string;
+  description?: string;
+  enabled?: boolean;
+  updatedAt?: string;
+}
+
+export const getProfileFiles = () =>
+  api.get<{ success: boolean; data: ProfileFileItem[] }>('/profile/files');
+
+export const getProfileFile = (filename: string) =>
+  api.get<{ success: boolean; data: { content: string } }>(`/profile/${filename}`);
+
+export const saveProfileFile = (filename: string, data: { content: string; description?: string }) =>
+  api.put(`/profile/${filename}`, data);
+
+export const createProfileFile = (filename: string, data?: { content?: string; description?: string }) =>
+  api.post(`/profile/${filename}`, data);
+
+export const deleteProfileFile = (filename: string) =>
+  api.delete(`/profile/${filename}`);
+
+export const toggleProfileFile = (filename: string, enabled: boolean) =>
+  api.patch(`/profile/${filename}/toggle`, { enabled });
 
 export default api;

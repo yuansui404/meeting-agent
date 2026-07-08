@@ -1,29 +1,30 @@
 import React, { useState } from 'react';
-import { List, Tag, Typography, Modal, Button, message as antMsg, Space } from 'antd';
+import { List, Tag, Typography, Modal, Space } from 'antd';
 import { FileTextOutlined } from '@ant-design/icons';
-import { getMeeting, Meeting } from '../services/api';
+import { getDocument, RagDocument } from '../services/api';
 
 const { Text } = Typography;
 
 interface Props {
-  meetings: Meeting[];
+  meetings: RagDocument[];
   compact?: boolean;
 }
 
 const statusConfig: Record<string, { color: string; text: string }> = {
-  processing: { color: 'processing', text: '转写中' },
-  completed: { color: 'success', text: '已完成' },
-  failed: { color: 'error', text: '失败' },
+  UPLOADED: { color: 'processing', text: '已上传' },
+  PROCESSING: { color: 'processing', text: '处理中' },
+  COMPLETED: { color: 'success', text: '已完成' },
+  FAILED: { color: 'error', text: '失败' },
 };
 
 const MeetingList: React.FC<Props> = ({ meetings, compact }) => {
   const [detailVisible, setDetailVisible] = useState(false);
-  const [detail, setDetail] = useState<Meeting | null>(null);
+  const [detail, setDetail] = useState<RagDocument | null>(null);
 
   const showDetail = async (id: number) => {
     try {
-      const res = await getMeeting(id);
-      setDetail(res.data);
+      const res = await getDocument(id);
+      setDetail(res.data?.data || null);
       setDetailVisible(true);
     } catch { /* ignore */ }
   };
@@ -77,7 +78,7 @@ const MeetingList: React.FC<Props> = ({ meetings, compact }) => {
         }}
       />
       <Modal
-        title={detail?.title || '会议详情'}
+        title={detail?.title || '文档详情'}
         open={detailVisible}
         onCancel={() => setDetailVisible(false)}
         footer={null}

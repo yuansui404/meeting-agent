@@ -2,6 +2,8 @@ package com.meeting.user.service;
 
 import com.meeting.common.BusinessException;
 import com.meeting.config.FileProperties;
+import com.meeting.user.model.entity.ProfileMetadataEntity;
+import com.meeting.user.repository.ProfileMetadataRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -16,6 +18,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.util.List;
+import java.util.Optional;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -25,6 +28,7 @@ import java.util.stream.Stream;
 public class ProfileService {
 
     private final FileProperties fileProps;
+    private final ProfileMetadataRepository metadataRepo;
     private Path profileDir;
 
     @PostConstruct
@@ -138,6 +142,7 @@ public class ProfileService {
         }
         try {
             Files.delete(file);
+            deleteMeta(filename);
             log.info("Deleted profile file: {}", filename);
         } catch (IOException e) {
             throw BusinessException.processingFailed("Failed to delete profile file: " + filename, e);
@@ -167,6 +172,47 @@ public class ProfileService {
             }
         }
         return sb.toString();
+    }
+
+    /** Build file index from DB metadata (enabled only). Injected into user message for Agent awareness. */
+    public String buildFileIndex() {
+        List<ProfileMetadataEntity> metas = metadataRepo.findAllByEnabledTrueOrderByFilenameAsc();
+        if (metas.isEmpty()) return "";
+
+        StringBuilder sb = new StringBuilder();
+        sb.append("=== 可用的用户画像文件 ===\n");
+        for (ProfileMetadataEntity meta : metas) {
+            sb.append("- ").append(meta.getFilename());
+            if (meta.getDescription() != null && !meta.getDescription().isBlank()) {
+                sb.append(" — ").append(meta.getDescription());
+            }
+            sb.append("\n");
+        }
+        sb.append("如需参考，请调用 read_profile 工具读取指定文件。\n");
+        return sb.toString();
+    }
+
+    /** Find metadata for a profile file. */
+    public Optional<ProfileMetadataEntity> findMeta(String filename) {
+        return metadataRepo.findByFilename(filename);
+    }
+
+    /** Upsert metadata for a profile file. */
+    public void updateMeta(String filename, String description, Boolean enabled) {
+        ProfileMetadataEntity entity = metadataRepo.findByFilename(filename)
+                .orElseGet(() -> {
+                    ProfileMetadataEntity e = new ProfileMetadataEntity();
+                    e.setFilename(filename);
+                    return e;
+                });
+        if (description != null) entity.setDescription(description);
+        if (enabled != null) entity.setEnabled(enabled);
+        metadataRepo.save(entity);
+    }
+
+    /** Delete metadata when a profile file is deleted. */
+    public void deleteMeta(String filename) {
+        metadataRepo.deleteByFilename(filename);
     }
 
     public Path getProfileDir() {

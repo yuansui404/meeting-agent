@@ -2,6 +2,7 @@ package com.meeting.config;
 
 import com.meeting.agent.*;
 import com.meeting.conversation.middleware.FileContextMiddleware;
+import com.meeting.conversation.middleware.ProfileIndexMiddleware;
 import com.meeting.knowledgebase.tool.UploadToKnowledgeBaseTool;
 import com.meeting.state.PgAgentStateStore;
 import io.agentscope.core.formatter.openai.DeepSeekFormatter;
@@ -13,7 +14,6 @@ import io.agentscope.core.tool.mcp.McpClientBuilder;
 import io.agentscope.core.tool.mcp.McpClientWrapper;
 import io.agentscope.harness.agent.HarnessAgent;
 import io.agentscope.harness.agent.memory.compaction.CompactionConfig;
-import io.agentscope.harness.agent.subagent.SubagentDeclaration;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
@@ -47,7 +47,6 @@ public class AgentConfig {
 
     @Bean
     public Toolkit toolkit(UploadToKnowledgeBaseTool uploadToKnowledgeBaseTool,
-                           SearchKnowledgeBaseTool searchKnowledgeBaseTool,
                            SearchDocumentsTool searchDocumentsTool,
                            ListMeetingsTool listMeetingsTool,
                            SearchMeetingTitlesTool searchMeetingTitlesTool,
@@ -58,7 +57,6 @@ public class AgentConfig {
                            @Value("${tavily.api-key:}") String tavilyApiKey) {
         Toolkit tk = new Toolkit();
         tk.registerAgentTool(uploadToKnowledgeBaseTool);
-        tk.registerAgentTool(searchKnowledgeBaseTool);
         tk.registerAgentTool(searchDocumentsTool);
         tk.registerAgentTool(listMeetingsTool);
         tk.registerAgentTool(searchMeetingTitlesTool);
@@ -89,7 +87,8 @@ public class AgentConfig {
     public HarnessAgent meetingAssistantAgent(OpenAIChatModel openAIChatModel,
                                               Toolkit toolkit,
                                               PgAgentStateStore pgAgentStateStore,
-                                              FileContextMiddleware fileContextMiddleware) {
+                                              FileContextMiddleware fileContextMiddleware,
+                                              ProfileIndexMiddleware profileIndexMiddleware) {
         return HarnessAgent.builder()
                 .name("MeetingAssistant")
                 .description("会议纪要智能助手，支持子 agent 委派")
@@ -107,30 +106,11 @@ public class AgentConfig {
                 .disableSessionPersistence()
                 .disableMemoryTools()
                 .disableMemoryHooks()
-                .subagent(SubagentDeclaration.builder()
-                        .name("rewrite_agent")
-                        .description("改写成正式会议纪要，润色校对")
-                        .mode(SubagentDeclaration.Mode.SUBAGENT)
-                        .steps(15)
-                        .tools(List.of("search_documents", "search_knowledge_base"))
-                        .inlineAgentsBody("""
-                                你是专业的会议纪要撰写助手。将用户提供的录音/会议记录改写为正式会议纪要。
-
-                                ## 工作流程
-                                1. 用 search_documents 搜索"会议纪要"，学习知识库中历史纪要的格式和风格
-                                2. 严格按照历史纪要的格式进行改写
-                                3. 保持原文关键信息（参会人、时间、决定、结论）不变
-
-                                ## 要求
-                                - 输出严格遵循知识库中历史纪要的格式
-                                - 语言正式、简洁、结构清晰
-                                - 不添加原文没有的信息
-                                """)
-                        .build())
                 .enableTaskList(false)
                 .maxIters(8)
                 .stateStore(pgAgentStateStore)
                 .disableFilesystemTools()
+                .middleware(profileIndexMiddleware)
                 .middleware(fileContextMiddleware)
                 .build();
     }

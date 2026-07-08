@@ -39,6 +39,23 @@ public class DocumentEntity {
     @Column(name = "chunk_count")
     private Integer chunkCount;
 
+    @Column(columnDefinition = "TEXT")
+    private String transcription;
+
+    @Column(name = "style_exemplar")
+    private Boolean styleExemplar = false;
+
+    @Column(name = "style_tags", length = 500)
+    private String styleTags;
+
+    @Column(columnDefinition = "TEXT")
+    private String participants;
+
+    private Integer duration;
+
+    @Column(name = "md_file_path", length = 500)
+    private String mdFilePath;
+
     @Column(name = "created_at")
     private LocalDateTime createdAt;
 

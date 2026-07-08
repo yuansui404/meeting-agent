@@ -45,7 +45,7 @@ public class DocumentUploadService {
     }
 
     /**
-     * 异步执行：解析文本 → 分块向量化
+     * 异步执行：解析文本 → 保存 markdown → 分块向量化
      */
     @Async
     public void processDocumentAsync(Long documentId) {
@@ -53,9 +53,44 @@ public class DocumentUploadService {
             DocumentEntity doc = documentRepository.findById(documentId)
                     .orElseThrow(() -> BusinessException.notFound("文档不存在"));
             String text = documentParserService.parse(doc.getFilePath());
+
+            // 保存清洗后的 markdown 到磁盘
+            String mdPath = saveMarkdownFile(doc.getFilePath(), text);
+            if (mdPath != null) {
+                doc.setMdFilePath(mdPath);
+            }
+
+            doc.setTranscription(text);
+            doc.setStatus("COMPLETED");
+            documentRepository.save(doc);
+
             chunkService.processDocument(documentId, text);
         } catch (Exception e) {
             log.error("Async document processing failed for id={}", documentId, e);
+            // Mark as failed
+            documentRepository.findById(documentId).ifPresent(doc -> {
+                doc.setStatus("FAILED");
+                documentRepository.save(doc);
+            });
+        }
+    }
+
+    /**
+     * 保存清洗后的 markdown 到磁盘。路径与原文件同目录，扩展名改为 .md。
+     */
+    private String saveMarkdownFile(String originalPath, String markdown) {
+        try {
+            Path original = Path.of(originalPath);
+            String name = original.getFileName().toString();
+            int dot = name.lastIndexOf('.');
+            String baseName = dot > 0 ? name.substring(0, dot) : name;
+            Path mdPath = original.getParent().resolve(baseName + ".cleaned.md");
+            Files.writeString(mdPath, markdown);
+            log.info("Saved cleaned markdown: {}", mdPath);
+            return mdPath.toString();
+        } catch (IOException e) {
+            log.warn("Failed to save markdown file: {}", e.getMessage());
+            return null;
         }
     }
 

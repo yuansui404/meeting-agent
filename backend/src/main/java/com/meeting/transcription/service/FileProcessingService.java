@@ -41,7 +41,7 @@ public class FileProcessingService {
     private final FileProperties fileProps;
 
     /**
-     * Save a dialogue file to disk without creating a MeetingMinutes record.
+     * Save a dialogue file to disk.
      * Returns file metadata for storage in state_json.
      */
     public FileMetadata saveDialogueFile(MultipartFile file, Long dialogueId) throws IOException {

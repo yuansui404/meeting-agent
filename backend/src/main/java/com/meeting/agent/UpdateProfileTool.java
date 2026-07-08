@@ -41,6 +41,10 @@ public class UpdateProfileTool implements AgentTool {
                 "type", "string",
                 "description", "要保存的内容（Markdown 格式）"
         ));
+        properties.put("description", Map.of(
+                "type", "string",
+                "description", "可选，文件的简短描述（如 '公司常与会人名单'），用于文件索引展示"
+        ));
         return Map.of(
                 "type", "object",
                 "properties", properties,
@@ -54,6 +58,7 @@ public class UpdateProfileTool implements AgentTool {
             Map<String, Object> input = param.getInput();
             String filename = input.getOrDefault("filename", "").toString();
             String content = input.getOrDefault("content", "").toString();
+            String description = input.containsKey("description") ? input.get("description").toString() : null;
 
             if (filename.isBlank() || !filename.endsWith(".md")) {
                 return ToolResultBlock.text("文件名必须以 .md 结尾");
@@ -63,6 +68,9 @@ public class UpdateProfileTool implements AgentTool {
             }
 
             profileService.appendFile(filename, content);
+            if (description != null && !description.isBlank()) {
+                profileService.updateMeta(filename, description, null);
+            }
             return ToolResultBlock.text("已成功更新「" + filename.replace(".md", "") + "」信息。");
         });
     }

@@ -16,7 +16,7 @@ import {
 } from '@ant-design/icons';
 import DialoguePanel from './components/DialoguePanel';
 import KnowledgeBase from './components/KnowledgeBase';
-import MemoryEditor from './components/MemoryEditor';
+import ProfileManager from './components/ProfileManager';
 import { listDialogues, createDialogue, deleteDialogue, renameDialogue, Dialogue } from './services/api';
 
 const { Sider, Content } = Layout;
@@ -281,7 +281,7 @@ const App: React.FC = () => {
             </div>
           </div>
 
-          {/* Agent Memory */}
+          {/* Profile Manager */}
           <div style={{ marginBottom: 8 }}>
             <div
               onClick={() => setMemoryVisible(true)}
@@ -300,7 +300,7 @@ const App: React.FC = () => {
             >
               <BulbOutlined style={{ fontSize: 16, color: 'var(--text-tertiary)' }} />
               <Text style={{ fontSize: 14, fontWeight: 500, color: 'var(--text-color)' }}>
-                Agent 记忆
+                用户画像
               </Text>
             </div>
           </div>
@@ -457,7 +457,7 @@ const App: React.FC = () => {
       </Content>
 
       {/* Memory Editor Drawer */}
-      <MemoryEditor visible={memoryVisible} onClose={() => setMemoryVisible(false)} />
+      <ProfileManager visible={memoryVisible} onClose={() => setMemoryVisible(false)} />
 
       {/* Knowledge Base Right Panel */}
       {kbVisible && (

@@ -6,9 +6,10 @@ import com.meeting.conversation.model.entity.SessionEntity;
 import com.meeting.conversation.repository.DialogueMessageRepository;
 import com.meeting.conversation.repository.SessionRepository;
 import com.meeting.conversation.service.SessionService;
-import com.meeting.llm.service.VectorizationService;
-import com.meeting.meeting.model.entity.MeetingMinutes;
-import com.meeting.meeting.repository.MeetingMinutesRepository;
+import com.meeting.document.model.entity.DocumentEntity;
+import com.meeting.document.repository.DocumentRepository;
+import com.meeting.document.service.ChunkService;
+import com.meeting.document.service.DocumentTextExtractor;
 import com.meeting.transcription.service.FileProcessingService;
 import io.agentscope.core.message.Msg;
 import io.agentscope.core.message.MsgRole;
@@ -33,8 +34,8 @@ import java.util.Set;
 @RequiredArgsConstructor
 public class UploadToKnowledgeBaseTool implements AgentTool {
 
-    private final MeetingMinutesRepository meetingRepository;
-    private final VectorizationService vectorizationService;
+    private final DocumentRepository documentRepository;
+    private final ChunkService chunkService;
     private final SessionRepository sessionRepository;
     private final DialogueMessageRepository dialogueMessageRepository;
     private final SessionService sessionService;
@@ -112,14 +113,9 @@ public class UploadToKnowledgeBaseTool implements AgentTool {
                 + "If the user agrees, call this tool again and I will proceed."));
     }
 
-    /**
-     * Execute the actual upload to knowledge base.
-     * Reads files from state_json (new), falls back to meeting_minutes (backward compat).
-     */
     private Mono<ToolResultBlock> executeUpload(Long dialogueId) {
         List<String> uploaded = new ArrayList<>();
 
-        // Priority 1: New-style files from state_json
         List<FileMetadata> stateFiles = sessionService.extractFilesFromState(dialogueId);
         for (FileMetadata fm : stateFiles) {
             String fileId = fm.fileId();
@@ -127,28 +123,32 @@ public class UploadToKnowledgeBaseTool implements AgentTool {
             String filePathStr = fm.filePath();
             if (fileId == null || filePathStr == null) continue;
             try {
-                // Check if this file is already in meeting_minutes (already vectorized)
-                MeetingMinutes existing = meetingRepository.findByFilePath(filePathStr);
+                // Check if this file is already in document table
+                DocumentEntity existing = documentRepository.findByFilePath(filePathStr);
                 if (existing != null) {
                     uploaded.add(fileName != null ? fileName : fileId);
                     continue;
                 }
-                // Upload file content by extracting text and vectorizing
+
                 Path filePath = Path.of(filePathStr);
                 if (!Files.exists(filePath)) continue;
+
                 String ext = FileProcessingService.getExtension(fileName != null ? fileName : "").toLowerCase();
                 String content = extractFileContent(filePath, ext);
                 if (content == null || content.isBlank()) continue;
 
-                MeetingMinutes meeting = new MeetingMinutes();
-                meeting.setTitle(fileName != null ? fileName : fileId);
-                meeting.setFilePath(filePathStr);
-                meeting.setFileSize(filePath.toFile().length());
-                meeting.setStatus("completed");
-                meeting.setTranscription(content);
-                meeting.setDialogueId(dialogueId);
-                meeting = meetingRepository.save(meeting);
-                vectorizationService.vectorizeMeeting(meeting.getId());
+                // Create document entity
+                DocumentEntity doc = new DocumentEntity();
+                doc.setTitle(fileName != null ? fileName : fileId);
+                doc.setFileType(ext.replaceFirst("^\\.", ""));
+                doc.setFilePath(filePathStr);
+                doc.setFileSize(filePath.toFile().length());
+                doc.setStatus("COMPLETED");
+                doc.setTranscription(content);
+                doc = documentRepository.save(doc);
+
+                // Chunk and vectorize
+                chunkService.processDocument(doc.getId(), content);
                 uploaded.add(fileName != null ? fileName : fileId);
                 log.info("Tool: uploaded state file {} to knowledge base", fileId);
             } catch (Exception e) {
@@ -175,7 +175,7 @@ public class UploadToKnowledgeBaseTool implements AgentTool {
             if (textFormats.contains(ext)) {
                 return Files.readString(filePath, java.nio.charset.StandardCharsets.UTF_8);
             } else if (docFormats.contains(ext)) {
-                return com.meeting.document.service.DocumentTextExtractor.extractText(filePath, ext);
+                return DocumentTextExtractor.extractText(filePath, ext);
             }
         } catch (Exception e) {
             log.warn("Failed to extract file content: {}", e.getMessage());
@@ -183,10 +183,6 @@ public class UploadToKnowledgeBaseTool implements AgentTool {
         return null;
     }
 
-    /**
-     * Check if the AI has already asked the user about saving to knowledge base.
-     * Looks for "知识库" in the last assistant message from conversation context.
-     */
     private boolean wasUserAskedAboutKb(Long dialogueId) {
         try {
             return sessionRepository.findById(dialogueId)
@@ -214,9 +210,6 @@ public class UploadToKnowledgeBaseTool implements AgentTool {
         }
     }
 
-    /**
-     * Extract the last user message text from the dialogue_messages table.
-     */
     private String extractLastUserMessage(Long dialogueId) {
         try {
             SessionEntity session = sessionRepository.findById(dialogueId)
@@ -236,9 +229,6 @@ public class UploadToKnowledgeBaseTool implements AgentTool {
         return null;
     }
 
-    /**
-     * Check if the user explicitly asked to save/upload to knowledge base.
-     */
     private boolean hasExplicitSaveIntent(String userMessage) {
         if (userMessage == null || userMessage.isBlank()) return false;
         String[] keywords = {"保存", "上传", "入库", "存档"};
@@ -250,14 +240,8 @@ public class UploadToKnowledgeBaseTool implements AgentTool {
         return false;
     }
 
-    /**
-     * Check if the user responded with an affirmation (after being asked about KB upload).
-     * Only short messages (≤5 chars) qualify — longer messages are not simple affirmations.
-     */
     private boolean isAffirmation(String userMessage) {
         if (userMessage == null || userMessage.isBlank()) return false;
-        // Only short messages can be simple affirmations like "好"/"可以"/"是的"
-        // Longer messages like "要对这个PDF分析" should NOT match
         if (userMessage.length() > 5) return false;
         String[] affirmatives = {"好", "可以", "是的", "行", "嗯", "上传", "保存"};
         for (String kw : affirmatives) {
