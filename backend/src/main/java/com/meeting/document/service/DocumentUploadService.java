@@ -20,6 +20,7 @@ import java.util.UUID;
 import java.util.regex.Pattern;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
+import org.springframework.transaction.annotation.Transactional;
 
 @Slf4j
 @Service
@@ -30,9 +31,41 @@ public class DocumentUploadService {
     private final DocumentParserService documentParserService;
     private final ChunkService chunkService;
     private final FileProperties fileProperties;
+    private final MeetingMinutesPreprocessor meetingMinutesPreprocessor;
 
     private Path getUploadDir() {
         return Paths.get(fileProperties.uploadDir(), "rag-documents");
+    }
+
+    /**
+     * 处理已存在的文件：创建 DocumentEntity + 解析 + 预处理 + 分块向量化。
+     * 与 {@link #processUpload(MultipartFile)} 走相同逻辑，适用于文件已在磁盘上的场景。
+     *
+     * @return 文档实体（status=UPLOADED，异步处理完成后变为 COMPLETED/FAILED）
+     */
+    public DocumentEntity processFile(String filePath, String title) {
+        Path path = Path.of(filePath);
+        String ext = getExtension(title).toLowerCase();
+        if (!List.of("pdf", "doc", "docx", "txt", "md").contains(ext)) {
+            throw new BusinessException("不支持的文件格式: " + ext);
+        }
+
+        DocumentEntity entity = new DocumentEntity();
+        entity.setTitle(title);
+        entity.setFileType(ext);
+        entity.setFilePath(filePath);
+        try {
+            entity.setFileSize(Files.size(path));
+        } catch (IOException e) {
+            throw BusinessException.processingFailed("文件读取失败", e);
+        }
+        entity.setMeetingDate(extractMeetingDate(title));
+        entity.setStatus("UPLOADED");
+        documentRepository.save(entity);
+
+        log.info("Document registered from file: id={}, name={}, path={}", entity.getId(), title, filePath);
+        processDocumentAsync(entity.getId());
+        return entity;
     }
 
     /**
@@ -54,6 +87,15 @@ public class DocumentUploadService {
                     .orElseThrow(() -> BusinessException.notFound("文档不存在"));
             String text = documentParserService.parse(doc.getFilePath());
 
+            // 预处理：一次扫描同时提取元数据 + 剥离元数据章节
+            var result = meetingMinutesPreprocessor.preprocess(text);
+            var meta = result.metadata();
+
+            // 提取的元数据写入 DocumentEntity
+            if (meta.containsKey("meeting_date")) doc.setMeetingDate((LocalDate) meta.get("meeting_date"));
+            if (meta.containsKey("participants")) doc.setParticipants((String) meta.get("participants"));
+            if (meta.containsKey("duration")) doc.setDuration((Integer) meta.get("duration"));
+
             // 保存清洗后的 markdown 到磁盘
             String mdPath = saveMarkdownFile(doc.getFilePath(), text);
             if (mdPath != null) {
@@ -64,7 +106,7 @@ public class DocumentUploadService {
             doc.setStatus("COMPLETED");
             documentRepository.save(doc);
 
-            chunkService.processDocument(documentId, text);
+            chunkService.processDocument(documentId, result.cleanedText());
         } catch (Exception e) {
             log.error("Async document processing failed for id={}", documentId, e);
             // Mark as failed
@@ -103,9 +145,12 @@ public class DocumentUploadService {
                 .orElseThrow(() -> BusinessException.notFound("文档不存在"));
     }
 
+    @Transactional
     public void delete(Long id) {
         DocumentEntity doc = documentRepository.findById(id)
                 .orElseThrow(() -> BusinessException.notFound("文档不存在"));
+        // 先用原生 SQL 删除 chunks，避免 Hibernate 加载 VECTOR 列
+        documentRepository.deleteChunksByDocumentId(id);
         documentRepository.deleteById(id);
         // 删除物理文件
         if (doc.getFilePath() != null) {
@@ -113,6 +158,13 @@ public class DocumentUploadService {
                 Files.deleteIfExists(Path.of(doc.getFilePath()));
             } catch (IOException e) {
                 log.warn("Failed to delete physical file: {}", doc.getFilePath(), e);
+            }
+        }
+        if (doc.getMdFilePath() != null) {
+            try {
+                Files.deleteIfExists(Path.of(doc.getMdFilePath()));
+            } catch (IOException e) {
+                log.warn("Failed to delete markdown file: {}", doc.getMdFilePath(), e);
             }
         }
     }

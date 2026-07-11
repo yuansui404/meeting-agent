@@ -18,7 +18,7 @@ public class FullTextSearchService {
     public List<ChunkResult> search(String query, int topK) {
         int effectiveTopK = Math.max(1, Math.min(topK, 100));
         String sql = """
-            SELECT c.id, c.document_id, c.content, c.chunk_index, c.speaker, c.section_type,
+            SELECT c.id, c.document_id, c.content, c.chunk_index, c.speaker,
                    d.title AS file_name,
                    ts_rank(c.content_tsv, plainto_tsquery('simple', ?)) AS score
             FROM document_chunk c
@@ -40,7 +40,6 @@ public class FullTextSearchService {
                         .content(rs.getString("content"))
                         .chunkIndex(rs.getInt("chunk_index"))
                         .speaker(rs.getString("speaker"))
-                        .sectionType(rs.getString("section_type"))
                         .fileName(rs.getString("file_name"))
                         .ftsScore(rs.getDouble("score"))
                         .ftsRank(Integer.valueOf(rowNum + 1))

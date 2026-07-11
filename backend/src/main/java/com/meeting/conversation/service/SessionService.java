@@ -12,6 +12,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
 import java.util.*;
+import java.util.UUID;
 
 @Slf4j
 @Service
@@ -26,10 +27,9 @@ public class SessionService {
         SessionEntity entity = new SessionEntity();
         entity.setTitle(title != null ? title : "新对话");
         entity.setStatus("active");
+        entity.setSessionId(UUID.randomUUID().toString());
         entity.setCreatedAt(LocalDateTime.now());
         entity.setUpdatedAt(LocalDateTime.now());
-        entity = sessionRepository.save(entity);
-        entity.setSessionId("dialogue-" + entity.getId());
         return sessionRepository.save(entity);
     }
 

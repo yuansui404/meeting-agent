@@ -204,7 +204,6 @@ public class HybridSearchService {
                             .content(n.getContent())
                             .chunkIndex(n.getChunkIndex())
                             .speaker(n.getSpeaker())
-                            .sectionType(n.getSectionType())
                             .build());
                 }
             }

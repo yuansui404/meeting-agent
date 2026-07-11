@@ -6,5 +6,9 @@ import com.meeting.document.model.ChunkSegment;
 import java.util.List;
 
 public interface ChunkStrategy {
-    List<ChunkSegment> chunk(String text, RagProperties.Chunk config);
+    List<ChunkSegment> chunk(String text, RagProperties.Chunk config, String documentTitle);
+
+    default List<ChunkSegment> chunk(String text, RagProperties.Chunk config) {
+        return chunk(text, config, null);
+    }
 }

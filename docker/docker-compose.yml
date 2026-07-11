@@ -73,7 +73,7 @@ services:
       nacos:
         condition: service_started
     volumes:
-      - ../../uploads:/app/data/uploads
+      - ${HOME}/meeting-agent/uploads:/app/data/uploads
 
   # React 前端服务
   frontend:

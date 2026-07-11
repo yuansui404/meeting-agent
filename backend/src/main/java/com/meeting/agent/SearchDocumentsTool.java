@@ -82,7 +82,6 @@ public class SearchDocumentsTool implements AgentTool {
                 item.put("content", chunk.getContent() != null ? chunk.getContent() : "");
                 item.put("score", Math.round(chunk.getFinalScore() * 100.0) / 100.0);
                 item.put("speaker", chunk.getSpeaker() != null ? chunk.getSpeaker() : "");
-                item.put("sectionType", chunk.getSectionType() != null ? chunk.getSectionType() : "");
                 items.add(item);
             }
 

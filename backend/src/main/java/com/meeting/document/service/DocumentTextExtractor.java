@@ -38,8 +38,13 @@ public class DocumentTextExtractor {
     private static final Set<String> META_KEYS = Set.of("日期", "时间", "会议时长", "地点", "召集人", "与会人");
 
     // Speaker pattern: "XX总意见：" / "XX作了汇报：" / "XX总："
+    // No ^ anchor — matches mid-paragraph too (table cell text has newlines removed)
+    // Negative lookbehind prevents greedily absorbing preceding CJK text into the name
     private static final Pattern SPEAKER_PATTERN = Pattern.compile(
-            "^(.{1,6}(?:总意见|作了.*汇报|总))[:：]");
+            "(?<=^|[^\\u4e00-\\u9fff])([\\u4e00-\\u9fff]{1,4}(?:总意见|作了.{0,10}?汇报|总))[：:]");
+
+    // Section labels that are redundant when followed by a table (e.g. "会议讨论：" before content table)
+    private static final Set<String> SECTION_LABELS = Set.of("会议讨论", "会议信息", "会议决策", "会议总结", "会议结论");
 
     public static String extractText(Path filePath, String ext) throws IOException {
         return switch (ext.toLowerCase()) {
@@ -55,9 +60,21 @@ public class DocumentTextExtractor {
     private static String extractDocxText(Path filePath) throws IOException {
         try (XWPFDocument doc = new XWPFDocument(Files.newInputStream(filePath))) {
             StringBuilder sb = new StringBuilder();
-            for (IBodyElement element : doc.getBodyElements()) {
+            List<IBodyElement> elements = doc.getBodyElements();
+            for (int i = 0; i < elements.size(); i++) {
+                IBodyElement element = elements.get(i);
                 if (element.getElementType() == BodyElementType.PARAGRAPH) {
-                    sb.append(convertParagraph((XWPFParagraph) element));
+                    XWPFParagraph para = (XWPFParagraph) element;
+                    // Skip redundant section labels that precede a table
+                    // (e.g. standalone "会议讨论：" paragraph before content table)
+                    if (i + 1 < elements.size() && elements.get(i + 1).getElementType() == BodyElementType.TABLE) {
+                        String text = getParagraphText(para).strip()
+                                .replace("：", "").replace(":", "").strip();
+                        if (SECTION_LABELS.contains(text)) {
+                            continue;
+                        }
+                    }
+                    sb.append(convertParagraph(para));
                 } else if (element.getElementType() == BodyElementType.TABLE) {
                     sb.append(convertTable((XWPFTable) element));
                 }
@@ -146,20 +163,18 @@ public class DocumentTextExtractor {
     }
 
     /**
-     * Convert metadata table to "## 会议信息" with key-value markdown table.
+     * Convert metadata table to "## 会议信息" with plain key-value pairs.
      * Handles both 2-col (key|value) and 4-col (key|value|key|value) layouts.
      */
     private static String convertMetadataTable(List<List<String>> rows) {
         StringBuilder sb = new StringBuilder("## 会议信息\n\n");
-        sb.append("| 项目 | 内容 |\n");
-        sb.append("|------|------|\n");
         for (List<String> row : rows) {
             if (row.size() >= 2 && !row.get(0).isBlank()) {
-                sb.append("| ").append(escapePipe(row.get(0))).append(" | ").append(escapePipe(row.get(1))).append(" |\n");
+                sb.append("**").append(row.get(0).strip()).append("**：").append(row.get(1).strip()).append("\n");
             }
             // Handle 4-col layout: key1|val1|key2|val2
             if (row.size() >= 4 && !row.get(2).isBlank()) {
-                sb.append("| ").append(escapePipe(row.get(2))).append(" | ").append(escapePipe(row.get(3))).append(" |\n");
+                sb.append("**").append(row.get(2).strip()).append("**：").append(row.get(3).strip()).append("\n");
             }
         }
         return sb.append("\n").toString();
@@ -204,29 +219,31 @@ public class DocumentTextExtractor {
     }
 
     /**
-     * Parse discussion content, detecting speaker patterns like "XX总意见："
+     * Parse discussion content, detecting all speaker patterns (including mid-paragraph).
+     * Table cell text has newlines removed, so speakers may appear anywhere in the content.
      */
     private static String parseDiscussionContent(String content) {
         StringBuilder sb = new StringBuilder();
-        // Split by speaker pattern boundaries
-        String[] lines = content.split("\n");
-        for (String line : lines) {
-            String trimmed = line.strip();
-            if (trimmed.isEmpty()) {
-                sb.append("\n");
-                continue;
+        Matcher m = SPEAKER_PATTERN.matcher(content);
+        int lastEnd = 0;
+
+        while (m.find()) {
+            // Text before this speaker
+            String before = content.substring(lastEnd, m.start()).strip();
+            if (!before.isEmpty()) {
+                sb.append(before).append("\n\n");
             }
-            Matcher m = SPEAKER_PATTERN.matcher(trimmed);
-            if (m.find()) {
-                sb.append("**").append(m.group()).append("**\n\n");
-                String rest = trimmed.substring(m.end()).strip();
-                if (!rest.isEmpty()) {
-                    sb.append(rest).append("\n\n");
-                }
-            } else {
-                sb.append(trimmed).append("\n\n");
-            }
+            // Speaker label in bold
+            sb.append("**").append(m.group().strip()).append("**\n\n");
+            lastEnd = m.end();
         }
+
+        // Remaining text after last speaker
+        String remaining = content.substring(lastEnd).strip();
+        if (!remaining.isEmpty()) {
+            sb.append(remaining).append("\n\n");
+        }
+
         return sb.toString();
     }
 

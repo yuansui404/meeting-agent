@@ -52,8 +52,9 @@ const App: React.FC = () => {
   const refreshDialogues = useCallback(async () => {
     try {
       const res = await listDialogues();
-      setDialogues(res.data);
-    } catch { /* ignore */ }
+      const data = res.data as any;
+      setDialogues(Array.isArray(data) ? data : (data?.data || []));
+    } catch { setDialogues([]); }
   }, []);
 
   useEffect(() => {
@@ -82,12 +83,16 @@ const App: React.FC = () => {
   }, [activeDialogue]);
 
   const handleNewDialogue = async () => {
+    if (!activeDialogue) {
+      antMsg.info('已经处于新对话中');
+      return;
+    }
     if (creating) return;
     setCreating(true);
     try {
       const res = await createDialogue('新对话');
       const newDialogue: Dialogue = {
-        id: res.data.dialogueId,
+        id: (res.data as any)?.data?.dialogueId || res.data.dialogueId,
         title: '新对话',
         status: 'active',
         updatedAt: new Date().toISOString(),
@@ -112,7 +117,7 @@ const App: React.FC = () => {
     try {
       const res = await createDialogue('新对话');
       const newDialogue: Dialogue = {
-        id: res.data.dialogueId,
+        id: (res.data as any)?.data?.dialogueId || res.data.dialogueId,
         title: '新对话',
         status: 'active',
         updatedAt: new Date().toISOString(),
@@ -139,7 +144,7 @@ const App: React.FC = () => {
     try {
       const res = await createDialogue('新对话');
       const newDialogue: Dialogue = {
-        id: res.data.dialogueId,
+        id: (res.data as any)?.data?.dialogueId || res.data.dialogueId,
         title: '新对话',
         status: 'active',
         updatedAt: new Date().toISOString(),
@@ -189,14 +194,12 @@ const App: React.FC = () => {
   };
 
   const formatDate = (dateStr: string) => {
-    const d = new Date(dateStr);
-    const now = new Date();
-    const diffMs = now.getTime() - d.getTime();
-    const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
-    if (diffDays === 0) return d.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
-    if (diffDays === 1) return '昨天';
-    if (diffDays < 7) return `${diffDays}天前`;
-    return d.toLocaleDateString('zh-CN', { month: 'short', day: 'numeric' });
+    // 后端返回的日期无时区标记（如 2026-07-10T17:33:12），
+    // 补上 +08:00 按中国时区解析
+    return new Date(dateStr + '+08:00').toLocaleString('zh-CN', {
+      year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit', hour12: false,
+    });
   };
 
   return (

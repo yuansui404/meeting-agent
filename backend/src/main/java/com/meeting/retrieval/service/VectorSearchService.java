@@ -52,8 +52,7 @@ public class VectorSearchService {
                     .content(hit.content())
                     .chunkIndex(hit.chunkIndex())
                     .speaker(hit.speaker())
-                    .sectionType(hit.sectionType())
-                    .fileName(doc != null ? doc.getTitle() : "")
+                                        .fileName(doc != null ? doc.getTitle() : "")
                     .vectorScore(hit.similarityScore())
                     .vectorRank(Integer.valueOf(i + 1))
                     .build());

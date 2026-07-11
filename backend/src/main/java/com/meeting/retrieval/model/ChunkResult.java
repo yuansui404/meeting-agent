@@ -13,7 +13,6 @@ public class ChunkResult {
     private String content;
     private int chunkIndex;
     private String speaker;
-    private String sectionType;
     private String fileName;
     private double vectorScore;
     private double ftsScore;

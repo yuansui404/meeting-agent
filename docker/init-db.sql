@@ -62,7 +62,6 @@ CREATE TABLE IF NOT EXISTS document_chunk (
     embedding VECTOR(1024),
     chunk_index INT NOT NULL,
     speaker VARCHAR(100),
-    section_type VARCHAR(50),
     metadata TEXT DEFAULT '{}',
     created_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
@@ -78,7 +77,6 @@ CREATE INDEX IF NOT EXISTS idx_document_meeting_date ON document(meeting_date);
 
 -- 文档块表索引
 CREATE INDEX IF NOT EXISTS idx_chunk_document_id ON document_chunk(document_id);
-CREATE INDEX IF NOT EXISTS idx_chunk_section_type ON document_chunk(section_type);
 CREATE INDEX IF NOT EXISTS idx_chunk_embedding ON document_chunk USING hnsw (embedding vector_cosine_ops) WITH (m = 16, ef_construction = 200);
 
 -- 全文搜索支持

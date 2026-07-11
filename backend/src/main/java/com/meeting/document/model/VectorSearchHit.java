@@ -6,6 +6,5 @@ public record VectorSearchHit(
         String content,
         Integer chunkIndex,
         String speaker,
-        String sectionType,
         Double similarityScore
 ) {}

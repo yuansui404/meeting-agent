@@ -52,7 +52,6 @@ public class DeepSeekReranker implements Reranker {
                         .content(original.getContent())
                         .chunkIndex(original.getChunkIndex())
                         .speaker(original.getSpeaker())
-                        .sectionType(original.getSectionType())
                         .fileName(original.getFileName())
                         .vectorScore(original.getVectorScore())
                         .ftsScore(original.getFtsScore())

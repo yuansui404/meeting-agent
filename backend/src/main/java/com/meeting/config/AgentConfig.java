@@ -68,7 +68,7 @@ public class AgentConfig {
         if (tavilyApiKey != null && !tavilyApiKey.isBlank()) {
             try {
                 McpClientWrapper tavilyClient = McpClientBuilder.create("tavily")
-                        .stdioTransport("npx", List.of("tavily-mcp"), Map.of("TAVILY_API_KEY", tavilyApiKey))
+                        .stdioTransport("npx", List.of("tavily-mcp@0.2.20"), Map.of("TAVILY_API_KEY", tavilyApiKey))
                         .timeout(Duration.ofSeconds(30))
                         .buildSync();
                 tk.registerMcpClient(tavilyClient).block();

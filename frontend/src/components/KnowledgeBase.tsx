@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Typography, Button, List, Spin, message as antMsg, Tooltip, Space, Pagination, Drawer } from 'antd';
+import { Typography, Button, List, Spin, message as antMsg, Tooltip, Space, Pagination } from 'antd';
 import {
   FileTextOutlined,
   DatabaseOutlined,
@@ -16,7 +16,7 @@ import {
   StarFilled,
 } from '@ant-design/icons';
 import { RagDocument, listDocuments, deleteDocument, uploadDocument, getDocumentFileUrl, getDocumentTextContent, getDocument, setDocumentStyleExemplar } from '../services/api';
-import ReactMarkdown from 'react-markdown';
+import PreviewDrawer from './PreviewDrawer';
 
 const { Text } = Typography;
 
@@ -34,7 +34,6 @@ const KnowledgeBase: React.FC<Props> = ({ visible, onClose }) => {
   const [page, setPage] = useState(1);
   const [previewFile, setPreviewFile] = useState<RagDocument | null>(null);
   const [previewContent, setPreviewContent] = useState<string | null>(null);
-  const [previewLoading, setPreviewLoading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -49,7 +48,8 @@ const KnowledgeBase: React.FC<Props> = ({ visible, onClose }) => {
     setLoading(true);
     try {
       const res = await listDocuments(0, 100);
-      setDocuments(res.data?.data?.content || []);
+      const content = res.data?.data?.content;
+      setDocuments(Array.isArray(content) ? content : []);
     } catch {
       setDocuments([]);
     }
@@ -67,11 +67,13 @@ const KnowledgeBase: React.FC<Props> = ({ visible, onClose }) => {
     try {
       await uploadDocument(file);
       antMsg.success(`"${file.name}" 已导入知识库并完成向量化`);
-      loadDocuments();
+      await loadDocuments();
     } catch (err: any) {
-      antMsg.error('导入失败: ' + (err.response?.data?.message || err.message));
+      const msg = err?.response?.data?.message || err?.message || '未知错误';
+      antMsg.error('导入失败: ' + msg);
+    } finally {
+      setUploading(false);
     }
-    setUploading(false);
   };
 
   const handleDelete = (doc: RagDocument) => {
@@ -87,25 +89,18 @@ const KnowledgeBase: React.FC<Props> = ({ visible, onClose }) => {
   const handlePreview = async (doc: RagDocument) => {
     setPreviewFile(doc);
     setPreviewContent(null);
-    setPreviewLoading(true);
+    // Pre-fetch text content as fallback for non-PDF/DOCX formats
     try {
       const res = await getDocumentTextContent(doc.id);
-      if (res.data?.data?.content) {
-        setPreviewContent(res.data.data.content);
-      } else {
-        // Fallback to transcription
-        const detail = await getDocument(doc.id);
-        setPreviewContent(detail.data?.data?.transcription || '（文件内容为空）');
-      }
+      setPreviewContent(res.data?.data?.content || null);
     } catch {
       try {
         const detail = await getDocument(doc.id);
-        setPreviewContent(detail.data?.data?.transcription || '（无法读取文件内容）');
+        setPreviewContent(detail.data?.data?.transcription || null);
       } catch {
-        setPreviewContent('（无法读取文件内容）');
+        setPreviewContent(null);
       }
     }
-    setPreviewLoading(false);
   };
 
   const formatDateTime = (dateStr?: string) => {
@@ -328,43 +323,15 @@ const KnowledgeBase: React.FC<Props> = ({ visible, onClose }) => {
       </div>
 
       {/* Preview Drawer */}
-      <Drawer
-        title={previewFile ? previewFile.title : '文件预览'}
-        placement="right"
-        width={560}
-        onClose={() => { setPreviewFile(null); setPreviewContent(null); }}
+      <PreviewDrawer
         open={!!previewFile}
-        extra={
-          previewFile && (
-            <Button
-              type="primary"
-              size="small"
-              icon={<DownloadOutlined />}
-              href={getDocumentFileUrl(previewFile.id)}
-              target="_blank"
-            >
-              下载原文
-            </Button>
-          )
-        }
-      >
-        {previewLoading ? (
-          <div style={{ textAlign: 'center', paddingTop: 60 }}>
-            <Spin />
-          </div>
-        ) : previewContent ? (
-          <div style={{
-            fontSize: 14, lineHeight: 1.8,
-            whiteSpace: 'pre-wrap', wordBreak: 'break-word',
-          }}>
-            <ReactMarkdown>{previewContent}</ReactMarkdown>
-          </div>
-        ) : (
-          <div style={{ textAlign: 'center', paddingTop: 60, color: '#999' }}>
-            无法读取文件内容
-          </div>
-        )}
-      </Drawer>
+        onClose={() => { setPreviewFile(null); setPreviewContent(null); }}
+        title={previewFile?.title || '文件预览'}
+        fileUrl={previewFile ? getDocumentFileUrl(previewFile.id) : ''}
+        fileType={previewFile?.fileType || ''}
+        textContent={previewContent || undefined}
+        width={560}
+      />
     </div>
   );
 };

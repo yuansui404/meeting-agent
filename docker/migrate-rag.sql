@@ -38,14 +38,13 @@ WHERE NOT EXISTS (
 
 -- 2. 从 meeting_vectors 迁移到 document_chunk
 -- 通过 file_path 关联 meeting_minutes → document
-INSERT INTO document_chunk (document_id, content, embedding, chunk_index, speaker, section_type, metadata, created_at)
+INSERT INTO document_chunk (document_id, content, embedding, chunk_index, speaker, metadata, created_at)
 SELECT
     d.id,
     mv.content,
     mv.embedding,
     mv.chunk_index,
     NULL,  -- 旧数据无 speaker
-    NULL,  -- 旧数据无 section_type
     CASE WHEN mv.priority_score > 0
         THEN jsonb_build_object('priorityScore', mv.priority_score)::text
         ELSE NULL

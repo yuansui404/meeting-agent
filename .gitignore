@@ -38,4 +38,7 @@ Thumbs.db
 # Models
 models/
 
+# Uploaded files (mapped to ~/meeting-agent/uploads via docker compose)
+uploads/
+
 .nacos

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Input, Button, Typography, Spin, message as antMsg, Modal, Dropdown, Tag, Drawer } from 'antd';
+import { Input, Button, Typography, Spin, message as antMsg, Modal, Dropdown, Tag } from 'antd';
 import type { MenuProps } from 'antd';
 import {
   SendOutlined,
@@ -34,6 +34,7 @@ import {
   getDialogueFileTextContent,
   api,
 } from '../services/api';
+import PreviewDrawer from './PreviewDrawer';
 
 const { Text, Title } = Typography;
 const { TextArea } = Input;
@@ -105,11 +106,11 @@ const DialoguePanel: React.FC<Props> = ({ activeDialogue, onDialogueUpdated, onS
   const [pendingFileCards, setPendingFileCards] = useState<PendingFileCard[]>([]);
   const [previewFile, setPreviewFile] = useState<UploadedFile | null>(null);
   const [previewContent, setPreviewContent] = useState<string | null>(null);
-  const [previewLoading, setPreviewLoading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<AbortController | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const streamingContentRef = useRef('');
 
   useEffect(() => {
     if (activeDialogue) {
@@ -174,7 +175,8 @@ const DialoguePanel: React.FC<Props> = ({ activeDialogue, onDialogueUpdated, onS
   const loadMessages = async (id: number) => {
     try {
       const res = await getDialogue(id);
-      const msgs: DisplayMessage[] = (res.data.messages || []).map((m: DialogueMessage) => ({
+      const data = res.data as any;
+      const msgs: DisplayMessage[] = ((data.data?.messages || data.messages) || []).map((m: DialogueMessage) => ({
         ...m,
         files: (m.files || []).map((f: any) => ({
           ...f,
@@ -198,7 +200,8 @@ const DialoguePanel: React.FC<Props> = ({ activeDialogue, onDialogueUpdated, onS
   const loadFiles = async (id: number) => {
     try {
       const res = await listDialogueMeetings(id);
-      setUploadedFiles(res.data || []);
+      const data = res.data as any;
+      setUploadedFiles(data.data || data || []);
     } catch {
       setUploadedFiles([]);
     }
@@ -272,9 +275,11 @@ const DialoguePanel: React.FC<Props> = ({ activeDialogue, onDialogueUpdated, onS
         dialogueId,
         content,
         (token) => {
+          streamingContentRef.current += token;
           setStreaming(prev => ({ content: prev.content + token, active: true }));
         },
         () => {
+          streamingContentRef.current = '';
           setStreaming({ content: '', active: false });
           setSending(false);
           setThinkingText(prev => prev ? prev + '\n\n---\n' : '');
@@ -303,6 +308,7 @@ const DialoguePanel: React.FC<Props> = ({ activeDialogue, onDialogueUpdated, onS
           }
         },
         (text) => {
+          streamingContentRef.current = text;
           setStreaming({ content: text, active: false });
         }
       );
@@ -386,17 +392,18 @@ const DialoguePanel: React.FC<Props> = ({ activeDialogue, onDialogueUpdated, onS
     }]);
     try {
       const res = await uploadFile(file, dialogue.id);
-      // Support both new-style (fileId string) and old-style (meetingId number)
-      if (res.data.fileId || res.data.meetingId) {
+      // 解包 ApiResponse：res.data = { success, data: FileUploadVO }
+      const uploadResult = (res.data as any)?.data || res.data;
+      if (uploadResult.fileId) {
         setPendingFileCards(prev => prev.map(c =>
           c.name === file.name && c.uploading
             ? {
                 ...c,
-                id: res.data.meetingId || c.id,
-                fileId: res.data.fileId,
-                filePath: res.data.filePath,
+                id: uploadResult.fileId || c.id,
+                fileId: uploadResult.fileId,
+                filePath: uploadResult.filePath,
                 uploading: false,
-                status: res.data.status || 'completed',
+                status: 'completed',
               }
             : c
         ));
@@ -406,7 +413,7 @@ const DialoguePanel: React.FC<Props> = ({ activeDialogue, onDialogueUpdated, onS
       }
     } catch (err: any) {
       setPendingFileCards(prev => prev.filter(c => c.name !== file.name || !c.uploading));
-      antMsg.error('上传失败: ' + (err.response?.data?.error || err.message));
+      antMsg.error('上传失败: ' + (err?.response?.data?.message || err?.message || '未知错误'));
     }
   };
 
@@ -451,34 +458,17 @@ const DialoguePanel: React.FC<Props> = ({ activeDialogue, onDialogueUpdated, onS
   const handleFilePreview = useCallback(async (file: UploadedFile) => {
     setPreviewFile(file);
     setPreviewContent(null);
-    setPreviewLoading(true);
-    const imageExts = ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp', '.svg'];
-    const isImage = imageExts.includes(file.ext?.toLowerCase() || '');
+    // Pre-fetch text content as fallback for non-PDF/DOCX formats
     try {
-      if (isImage) {
-        // Images are rendered directly in the drawer JSX
-      } else if ((file as any).fileId && activeDialogue) {
-        // New-style file: stored in state_json, use dialogue file endpoints
-        const fileId = (file as any).fileId;
-        const resp = await getDialogueFileTextContent(activeDialogue.id, fileId);
-        if (resp.data?.content) {
-          setPreviewContent(resp.data.content);
-        }
+      if ((file as any).fileId && activeDialogue) {
+        const resp = await getDialogueFileTextContent(activeDialogue.id, (file as any).fileId);
+        setPreviewContent(resp.data?.content || null);
       } else if (file.id > 0) {
-        // Old-style file: try document text-content endpoint
-        try {
-          const textResp = await getDocumentTextContent(file.id);
-          if (textResp.data?.data?.content) {
-            setPreviewContent(textResp.data.data.content);
-          }
-        } catch { /* unsupported format or fetch error */ }
-      } else {
-        setPreviewContent(null);
+        const textResp = await getDocumentTextContent(file.id);
+        setPreviewContent(textResp.data?.data?.content || null);
       }
     } catch {
       setPreviewContent(null);
-    } finally {
-      setPreviewLoading(false);
     }
   }, [activeDialogue]);
 
@@ -574,31 +564,60 @@ const DialoguePanel: React.FC<Props> = ({ activeDialogue, onDialogueUpdated, onS
               上传会议视频自动转写，智能搜索历史内容，帮你高效管理会议信息
             </Text>
 
-            {/* Feature cards */}
-            <div style={{ display: 'flex', gap: 12, marginBottom: 32, flexWrap: 'wrap', justifyContent: 'center' }}>
-              {[
-                { icon: <VideoCameraOutlined />, title: '上传视频', desc: 'MP4 / 音频 / 文档' },
-                { icon: <FileTextOutlined />, title: '智能转写', desc: '语音识别生成纪要' },
-                { icon: <SearchOutlined />, title: '语义搜索', desc: '全文 + 向量混合检索' },
-              ].map((f, i) => (
-                <div key={i} style={{
-                  display: 'flex', alignItems: 'center', gap: 10,
-                  padding: '12px 16px', borderRadius: 10,
-                  background: 'var(--welcome-card-bg)', backdropFilter: 'blur(8px)',
-                  border: '1px solid var(--welcome-card-border)',
-                  minWidth: 140,
-                }}>
-                  <div style={{
-                    width: 36, height: 36, borderRadius: 10,
-                    background: 'var(--feature-icon-bg)', display: 'flex', alignItems: 'center', justifyContent: 'center',
-                    color: 'var(--primary-color)', fontSize: 18, flexShrink: 0,
-                  }}>{f.icon}</div>
-                  <div>
-                    <Text style={{ fontSize: 13, fontWeight: 600, display: 'block' }}>{f.title}</Text>
-                    <Text type="secondary" style={{ fontSize: 11 }}>{f.desc}</Text>
-                  </div>
-                </div>
-              ))}
+            {/* Centered input box */}
+            <div style={{ width: '100%', maxWidth: 560, marginBottom: 24 }}>
+              <div style={{
+                display: 'flex', gap: 8, alignItems: 'center',
+                borderRadius: 12, padding: '4px 4px 4px 16px',
+                background: 'var(--content-bg)',
+                border: '1px solid var(--border-color)',
+                boxShadow: '0 2px 8px rgba(0,0,0,0.04)',
+              }}>
+                <Dropdown
+                  trigger={['hover']}
+                  placement="bottomLeft"
+                  menu={{
+                    items: [
+                      { key: 'video', icon: <VideoCameraOutlined />, label: '视频', extra: 'MP4, AVI, MOV, MKV' },
+                      { key: 'audio', icon: <AudioOutlined />, label: '音频', extra: 'MP3, WAV, M4A, AAC' },
+                      { key: 'document', icon: <FileTextOutlined />, label: '文档', extra: 'PDF, DOC, TXT, MD' },
+                      { key: 'image', icon: <PictureOutlined />, label: '图片', extra: 'JPG, PNG, GIF, WebP' },
+                    ],
+                    onClick: ({ key }) => {
+                      const acceptMap: Record<string, string> = {
+                        video: '.mp4,.avi,.mov,.mkv,.webm,.wmv,.flv',
+                        audio: '.mp3,.wav,.m4a,.aac,.ogg,.wma,.flac',
+                        document: '.pdf,.doc,.docx,.txt,.md,.csv,.xlsx,.pptx',
+                        image: '.jpg,.jpeg,.png,.gif,.bmp,.webp,.svg',
+                      };
+                      triggerUpload(acceptMap[key] || '');
+                    },
+                  }}
+                >
+                  <Button
+                    type="text"
+                    icon={<PaperClipOutlined />}
+                    style={{ color: 'var(--text-tertiary)', fontSize: 16, flexShrink: 0 }}
+                  />
+                </Dropdown>
+                <Input
+                  size="large"
+                  placeholder="提问..."
+                  value={input}
+                  onChange={(e) => setInput(e.target.value)}
+                  onPressEnter={handleSend}
+                  variant="borderless"
+                  style={{ flex: 1, fontSize: 15, background: 'transparent' }}
+                />
+                <Button
+                  type="primary"
+                  shape="circle"
+                  icon={<ArrowUpOutlined />}
+                  onClick={handleSend}
+                  disabled={!input.trim()}
+                  style={{ flexShrink: 0 }}
+                />
+              </div>
             </div>
 
             {/* Suggestion buttons */}
@@ -624,19 +643,18 @@ const DialoguePanel: React.FC<Props> = ({ activeDialogue, onDialogueUpdated, onS
 
             {/* Footer hint */}
             <Text type="secondary" style={{ fontSize: 11, marginTop: 24, color: 'rgba(0,0,0,0.3)' }}>
-              由 DeepSeek V4 Flash 驱动 · 新建对话或从左侧选择已有对话开始
+              由 DeepSeek V4 Flash 驱动
             </Text>
           </div>
         )}
       </div>
 
-
       {/* Input area */}
       <div style={{
-        borderTop: '1px solid var(--border-color)',
-        background: 'var(--app-bg)',
-        padding: '8px 24px 16px',
-      }}>
+          borderTop: activeDialogue ? '1px solid var(--border-color)' : 'none',
+          background: 'var(--app-bg)',
+          padding: activeDialogue ? '8px 24px 16px' : '0 24px 16px',
+        }}>
         <div style={{ maxWidth: 800, margin: '0 auto' }}>
           {/* Integrated input container */}
           <div style={{
@@ -701,7 +719,7 @@ const DialoguePanel: React.FC<Props> = ({ activeDialogue, onDialogueUpdated, onS
                       }}
                       onClick={() => {
                         if (activeDialogue) {
-                          sendMessage(text + ' ->', activeDialogue.id);
+                          sendMessage(text, activeDialogue.id);
                         }
                       }}
                     >
@@ -712,12 +730,40 @@ const DialoguePanel: React.FC<Props> = ({ activeDialogue, onDialogueUpdated, onS
               </div>
             )}
 
-            {/* Text input row */}
+            {/* Text input row — only when in a conversation */}
+            {activeDialogue && (
             <div style={{
               display: 'flex',
               gap: 8,
               alignItems: 'flex-end',
             }}>
+              <Dropdown
+                trigger={['hover']}
+                placement="bottomLeft"
+                menu={{
+                  items: [
+                    { key: 'video', icon: <VideoCameraOutlined />, label: '视频', extra: 'MP4, AVI, MOV, MKV' },
+                    { key: 'audio', icon: <AudioOutlined />, label: '音频', extra: 'MP3, WAV, M4A, AAC' },
+                    { key: 'document', icon: <FileTextOutlined />, label: '文档', extra: 'PDF, DOC, TXT, MD' },
+                    { key: 'image', icon: <PictureOutlined />, label: '图片', extra: 'JPG, PNG, GIF, WebP' },
+                  ],
+                  onClick: ({ key }) => {
+                    const acceptMap: Record<string, string> = {
+                      video: '.mp4,.avi,.mov,.mkv,.webm,.wmv,.flv',
+                      audio: '.mp3,.wav,.m4a,.aac,.ogg,.wma,.flac',
+                      document: '.pdf,.doc,.docx,.txt,.md,.csv,.xlsx,.pptx',
+                      image: '.jpg,.jpeg,.png,.gif,.bmp,.webp,.svg',
+                    };
+                    triggerUpload(acceptMap[key] || '');
+                  },
+                }}
+              >
+                <Button
+                  type="text"
+                  icon={<PaperClipOutlined />}
+                  style={{ color: 'var(--text-tertiary)', fontSize: 16, flexShrink: 0, marginBottom: 4 }}
+                />
+              </Dropdown>
               <TextArea
                 ref={textareaRef}
                 value={input}
@@ -739,72 +785,17 @@ const DialoguePanel: React.FC<Props> = ({ activeDialogue, onDialogueUpdated, onS
                 style={{ borderRadius: 8, height: 36, width: 36, flexShrink: 0 }}
               />
             </div>
+            )}
           </div>
 
-          {/* Quick actions below input */}
-          <div style={{ display: 'flex', gap: 6, marginTop: 8, paddingLeft: 4 }}>
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept={uploadAccept}
-              onChange={handleFileInputChange}
-              style={{ display: 'none' }}
-            />
-            <Dropdown
-              trigger={['hover']}
-              placement="bottomLeft"
-              menu={{
-                items: [
-                  {
-                    key: 'video',
-                    icon: <VideoCameraOutlined />,
-                    label: '视频',
-                    extra: 'MP4, AVI, MOV, MKV',
-                    onClick: () => triggerUpload('.mp4,.avi,.mov,.mkv,.webm,.wmv,.flv'),
-                  },
-                  {
-                    key: 'audio',
-                    icon: <AudioOutlined />,
-                    label: '音频',
-                    extra: 'MP3, WAV, M4A, AAC',
-                    onClick: () => triggerUpload('.mp3,.wav,.m4a,.aac,.ogg,.wma,.flac'),
-                  },
-                  {
-                    key: 'document',
-                    icon: <FileTextOutlined />,
-                    label: '文档',
-                    extra: 'PDF, DOC, TXT, MD',
-                    onClick: () => triggerUpload('.pdf,.doc,.docx,.txt,.md,.csv,.xlsx,.pptx'),
-                  },
-                  {
-                    key: 'image',
-                    icon: <PictureOutlined />,
-                    label: '图片',
-                    extra: 'JPG, PNG, GIF, WebP',
-                    onClick: () => triggerUpload('.jpg,.jpeg,.png,.gif,.bmp,.webp,.svg'),
-                  },
-                ],
-              }}
-            >
-              <Button
-                type="text"
-                icon={<UploadOutlined />}
-                size="small"
-                style={{ color: 'var(--text-tertiary)', fontSize: 13 }}
-                loading={uploadingFiles.length > 0}
-              >
-                上传文件
-              </Button>
-            </Dropdown>
-            <Button
-              type="text"
-              icon={<BulbOutlined />}
-              size="small"
-              style={{ color: 'var(--text-tertiary)', fontSize: 13 }}
-            >
-              思考
-            </Button>
-          </div>
+          {/* Hidden file input (shared by welcome page upload icon) */}
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept={uploadAccept}
+            onChange={handleFileInputChange}
+            style={{ display: 'none' }}
+          />
           <Text type="secondary" style={{ fontSize: 11, display: 'block', marginTop: 6, textAlign: 'center' }}>
             由 DeepSeek V4 Flash 驱动 · 支持上传 MP4 会议视频
           </Text>
@@ -812,83 +803,19 @@ const DialoguePanel: React.FC<Props> = ({ activeDialogue, onDialogueUpdated, onS
       </div>
 
       {/* File Preview Drawer */}
-      <Drawer
-        title={previewFile?.title || '文件预览'}
-        placement="right"
-        width={440}
-        onClose={() => { setPreviewFile(null); setPreviewContent(null); }}
+      <PreviewDrawer
         open={!!previewFile}
-      >
-        {previewLoading ? (
-          <div style={{ textAlign: 'center', padding: 60 }}>
-            <Spin />
-            <Text type="secondary" style={{ display: 'block', marginTop: 12 }}>加载中...</Text>
-          </div>
-        ) : previewFile ? (
-          <div>
-            {/* Metadata */}
-            <div style={{
-              display: 'flex', alignItems: 'center', gap: 10,
-              padding: '12px 0', borderBottom: '1px solid var(--sider-border)',
-              marginBottom: 16,
-            }}>
-              <FileTextOutlined style={{ fontSize: 24, color: 'var(--primary-color)' }} />
-              <div>
-                <Text strong style={{ fontSize: 14 }}>{previewFile.title}</Text>
-                <Text type="secondary" style={{ fontSize: 12, display: 'block', marginTop: 2 }}>
-                  大小: {formatFileSize(previewFile.fileSize)} · {previewFile.ext}
-                </Text>
-              </div>
-            </div>
-            {/* Image preview */}
-            {['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp', '.svg'].includes(previewFile.ext?.toLowerCase() || '') ? (
-              <div style={{ textAlign: 'center' }}>
-                <img
-                  src={(previewFile as any).fileId && activeDialogue
-                    ? getDialogueFileUrl(activeDialogue.id, (previewFile as any).fileId)
-                    : getDocumentFileUrl(previewFile.id)}
-                  alt={previewFile.title}
-                  style={{ maxWidth: '100%', borderRadius: 8, boxShadow: '0 2px 8px rgba(0,0,0,0.1)' }}
-                />
-              </div>
-            ) : previewContent ? (
-              /* Text content */
-              <div style={{
-                background: 'var(--preview-bg)',
-                borderRadius: 8,
-                padding: 16,
-                maxHeight: 'calc(100vh - 220px)',
-                overflow: 'auto',
-                fontSize: 13,
-                lineHeight: 1.7,
-                whiteSpace: 'pre-wrap',
-                fontFamily: "'SF Mono', 'Menlo', 'Monaco', 'Consolas', monospace",
-              }}>
-                {previewContent}
-              </div>
-            ) : (
-              /* Empty state */
-              <div style={{ textAlign: 'center', padding: 60 }}>
-                <FileTextOutlined style={{ fontSize: 48, color: 'var(--empty-icon)' }} />
-                <Text type="secondary" style={{ display: 'block', marginTop: 16 }}>
-                  暂无内容预览
-                </Text>
-                <Button
-                  type="link"
-                  icon={<PictureOutlined />}
-                  onClick={() => window.open(
-                    (previewFile as any).fileId && activeDialogue
-                      ? getDialogueFileUrl(activeDialogue.id, (previewFile as any).fileId)
-                      : getDocumentFileUrl(previewFile.id), '_blank')}
-                  style={{ marginTop: 8 }}
-                >
-                  查看原始文件
-                </Button>
-              </div>
-            )}
-          </div>
-        ) : null}
-      </Drawer>
+        onClose={() => { setPreviewFile(null); setPreviewContent(null); }}
+        title={previewFile?.title || '文件预览'}
+        fileUrl={previewFile
+          ? ((previewFile as any).fileId && activeDialogue
+            ? getDialogueFileUrl(activeDialogue.id, (previewFile as any).fileId)
+            : getDocumentFileUrl(previewFile.id))
+          : ''}
+        fileType={previewFile?.ext || ''}
+        textContent={previewContent || undefined}
+        width={440}
+      />
 
       {/* Search Modal */}
       <Modal

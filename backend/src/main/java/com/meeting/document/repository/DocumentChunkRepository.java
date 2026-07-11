@@ -22,7 +22,7 @@ public interface DocumentChunkRepository extends JpaRepository<DocumentChunkEnti
     List<VectorSearchHit> vectorSearch(@Param("embedding") String embedding, @Param("topK") int topK);
 
     @Query(value = "SELECT dc.id, dc.document_id AS documentId, dc.content, dc.chunk_index AS chunkIndex, "
-            + "dc.speaker, dc.section_type AS sectionType, "
+            + "dc.speaker, "
             + "1 - (dc.embedding <=> CAST(:embedding AS vector)) AS similarityScore "
             + "FROM document_chunk dc "
             + "JOIN document d ON dc.document_id = d.id "

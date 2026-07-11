@@ -1,6 +1,7 @@
 package com.meeting.conversation.service;
 
 import com.meeting.common.FileMetadata;
+import com.meeting.conversation.repository.SessionRepository;
 import com.meeting.transcription.service.FileContextBuilder;
 import io.agentscope.core.agent.RuntimeContext;
 import io.agentscope.core.message.UserMessage;
@@ -23,18 +24,25 @@ public class ChatService {
 
     private final FileContextBuilder fileContextBuilder;
     private final ChatStreamService chatStreamService;
+    private final SessionRepository sessionRepository;
 
     public void streamChat(SseEmitter emitter, Long dialogueId, String userMessage,
                            List<FileMetadata> files) {
         List<FileMetadata> messageFiles = files != null ? files : List.of();
 
+        String sessionId = sessionRepository.findById(dialogueId)
+                .orElseThrow(() -> new IllegalArgumentException("Session not found: " + dialogueId))
+                .getSessionId();
+
         // 用户上传文件具体内容
         String fileContext = fileContextBuilder.build(messageFiles);
 
-        UserMessage msg = new UserMessage(userMessage);
+        // 清理用户输入：去除尾部 -> 或 > 后缀（快速指令按钮或手动输入可能带入）
+        String cleanedMessage = userMessage.replaceAll("\\s*[=-]?>\\s*$", "").strip();
+        UserMessage msg = new UserMessage(cleanedMessage);
 
         RuntimeContext ctx = RuntimeContext.builder()
-                .sessionId("dialogue-" + dialogueId)
+                .sessionId(sessionId)
                 .put("fileContext", fileContext)
                 .build();
 

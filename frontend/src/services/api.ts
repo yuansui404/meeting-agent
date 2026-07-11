@@ -284,4 +284,11 @@ export const deleteProfileFile = (filename: string) =>
 export const toggleProfileFile = (filename: string, enabled: boolean) =>
   api.patch(`/profile/${filename}/toggle`, { enabled });
 
+// 获取文件 Blob（用于前端预览）
+export const getFileBlob = async (url: string): Promise<Blob> => {
+  const resp = await fetch(url);
+  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+  return resp.blob();
+};
+
 export default api;

@@ -25,7 +25,7 @@
   --empty-icon: #d9d9d9;
   --welcome-card-bg: rgba(255,255,255,0.7);
   --welcome-card-border: rgba(255,255,255,0.8);
-  --welcome-bg: linear-gradient(135deg, #f0f5ff 0%, #e6f7ff 50%, #f0f0ff 100%);
+  --welcome-bg: #fff;
   --feature-icon-bg: #f0f5ff;
 }
 
@@ -51,7 +51,7 @@
   --empty-icon: #434343;
   --welcome-card-bg: rgba(31,31,31,0.8);
   --welcome-card-border: rgba(48,48,48,0.8);
-  --welcome-bg: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #1a1a2e 100%);
+  --welcome-bg: var(--app-bg);
   --feature-icon-bg: #16213e;
 }
 

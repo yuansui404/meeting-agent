@@ -8,9 +8,7 @@ import com.meeting.conversation.repository.SessionRepository;
 import com.meeting.conversation.service.SessionService;
 import com.meeting.document.model.entity.DocumentEntity;
 import com.meeting.document.repository.DocumentRepository;
-import com.meeting.document.service.ChunkService;
-import com.meeting.document.service.DocumentTextExtractor;
-import com.meeting.transcription.service.FileProcessingService;
+import com.meeting.document.service.DocumentUploadService;
 import io.agentscope.core.message.Msg;
 import io.agentscope.core.message.MsgRole;
 import io.agentscope.core.state.AgentState;
@@ -22,12 +20,9 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 import reactor.core.publisher.Mono;
 
-import java.nio.file.Files;
-import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 
 @Slf4j
 @Component
@@ -35,7 +30,7 @@ import java.util.Set;
 public class UploadToKnowledgeBaseTool implements AgentTool {
 
     private final DocumentRepository documentRepository;
-    private final ChunkService chunkService;
+    private final DocumentUploadService documentUploadService;
     private final SessionRepository sessionRepository;
     private final DialogueMessageRepository dialogueMessageRepository;
     private final SessionService sessionService;
@@ -47,7 +42,7 @@ public class UploadToKnowledgeBaseTool implements AgentTool {
 
     @Override
     public String getDescription() {
-        return "Upload files to knowledge base for search. "
+        return "Upload files from the current conversation to knowledge base for search. "
                 + "When the user requests file analysis, do NOT upload automatically. "
                 + "First ask the user if they want to save to knowledge base. "
                 + "Only call this tool after the user explicitly confirms. "
@@ -130,25 +125,8 @@ public class UploadToKnowledgeBaseTool implements AgentTool {
                     continue;
                 }
 
-                Path filePath = Path.of(filePathStr);
-                if (!Files.exists(filePath)) continue;
-
-                String ext = FileProcessingService.getExtension(fileName != null ? fileName : "").toLowerCase();
-                String content = extractFileContent(filePath, ext);
-                if (content == null || content.isBlank()) continue;
-
-                // Create document entity
-                DocumentEntity doc = new DocumentEntity();
-                doc.setTitle(fileName != null ? fileName : fileId);
-                doc.setFileType(ext.replaceFirst("^\\.", ""));
-                doc.setFilePath(filePathStr);
-                doc.setFileSize(filePath.toFile().length());
-                doc.setStatus("COMPLETED");
-                doc.setTranscription(content);
-                doc = documentRepository.save(doc);
-
-                // Chunk and vectorize
-                chunkService.processDocument(doc.getId(), content);
+                // Full processing: parse → preprocess → save metadata → chunk
+                documentUploadService.processFile(filePathStr, fileName != null ? fileName : fileId);
                 uploaded.add(fileName != null ? fileName : fileId);
                 log.info("Tool: uploaded state file {} to knowledge base", fileId);
             } catch (Exception e) {
@@ -166,21 +144,6 @@ public class UploadToKnowledgeBaseTool implements AgentTool {
         }
 
         return Mono.just(ToolResultBlock.text(result.toString()));
-    }
-
-    private String extractFileContent(Path filePath, String ext) {
-        try {
-            Set<String> textFormats = Set.of(".txt", ".md", ".csv", ".json", ".xml", ".html", ".yaml", ".yml", ".properties", ".log");
-            Set<String> docFormats = Set.of(".pdf", ".doc", ".docx");
-            if (textFormats.contains(ext)) {
-                return Files.readString(filePath, java.nio.charset.StandardCharsets.UTF_8);
-            } else if (docFormats.contains(ext)) {
-                return DocumentTextExtractor.extractText(filePath, ext);
-            }
-        } catch (Exception e) {
-            log.warn("Failed to extract file content: {}", e.getMessage());
-        }
-        return null;
     }
 
     private boolean wasUserAskedAboutKb(Long dialogueId) {

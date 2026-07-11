@@ -88,3 +88,4 @@ com.meeting/
 ## Related Docs
 
 - [设计文档](docs/superpowers/specs/2026-06-19-meeting-agent-design.md)
+- --dangerously-skip-permissions

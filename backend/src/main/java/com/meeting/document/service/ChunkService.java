@@ -15,6 +15,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -49,8 +50,18 @@ public class ChunkService {
         List<ChunkSegment> segments;
         try {
             // 2. 分块（CPU 操作，无事务）
-            segments = chunkStrategy.chunk(text, ragProperties.getChunk());
+            DocumentEntity docForChunk = documentRepository.findById(documentId)
+                    .orElseThrow(() -> BusinessException.notFound("文档不存在"));
+            segments = chunkStrategy.chunk(text, ragProperties.getChunk(), docForChunk.getTitle());
             log.info("Document {} chunked into {} segments", documentId, segments.size());
+
+            // 2.5 清理 chunk 内容中的 overlap 标记
+            for (ChunkSegment segment : segments) {
+                String cleaned = segment.getContent()
+                        .replaceAll("\\[overlap\\]\\n?", "")
+                        .strip();
+                segment.setContent(cleaned);
+            }
 
             // 3. 生成 embedding（网络 I/O，无事务）
             List<float[]> embeddings = new ArrayList<>(segments.size());
@@ -71,11 +82,8 @@ public class ChunkService {
                     chunk.setContent(segment.getContent());
                     chunk.setChunkIndex(segment.getIndex());
                     chunk.setSpeaker(segment.getSpeaker());
-                    chunk.setSectionType(segment.getSectionType());
                     chunk.setEmbedding(embeddings.get(i));
-                    chunk.setMetadata(JsonUtil.toJson(
-                            Map.<String, Object>of("length", segment.getContent().length())
-                    ));
+                    chunk.setMetadata(JsonUtil.toJson(buildMetadata(segment, doc)));
                     chunks.add(chunk);
                 }
                 chunkRepository.saveAll(chunks);
@@ -95,5 +103,17 @@ public class ChunkService {
             });
             throw BusinessException.processingFailed("文档处理失败: " + e.getMessage(), e);
         }
+    }
+
+    private Map<String, Object> buildMetadata(ChunkSegment segment, DocumentEntity doc) {
+        Map<String, Object> metadata = new HashMap<>();
+        metadata.put("length", segment.getContent().length());
+        metadata.put("document_title", doc.getTitle());
+        if (doc.getMeetingDate() != null) metadata.put("meeting_date", doc.getMeetingDate().toString());
+        if (doc.getParticipants() != null) metadata.put("participants", doc.getParticipants());
+        if (segment.getTopic() != null) metadata.put("topic", segment.getTopic());
+        if (segment.getSectionHeading() != null) metadata.put("section_heading", segment.getSectionHeading());
+        if (segment.getSpeaker() != null) metadata.put("speaker", segment.getSpeaker());
+        return metadata;
     }
 }

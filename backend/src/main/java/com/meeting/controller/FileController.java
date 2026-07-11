@@ -108,10 +108,36 @@ public class FileController {
         Resource resource = new FileSystemResource(filePath);
         String encodedFilename = filePath.getFileName().toString()
                 .replaceFirst("^[0-9a-f-]+_", "");
+
+        // 根据文件扩展名设置正确的 Content-Type
+        MediaType mediaType = getMediaType(encodedFilename);
+
         return ResponseEntity.ok()
-                .contentType(MediaType.APPLICATION_OCTET_STREAM)
+                .contentType(mediaType)
                 .header(HttpHeaders.CONTENT_DISPOSITION,
                         "inline; filename*=UTF-8''" + encodedFilename)
                 .body(resource);
+    }
+
+    private MediaType getMediaType(String filename) {
+        String ext = filename.substring(filename.lastIndexOf('.') + 1).toLowerCase();
+        return switch (ext) {
+            case "pdf" -> MediaType.APPLICATION_PDF;
+            case "png" -> MediaType.IMAGE_PNG;
+            case "jpg", "jpeg" -> MediaType.IMAGE_JPEG;
+            case "gif" -> MediaType.IMAGE_GIF;
+            case "webp" -> MediaType.valueOf("image/webp");
+            case "svg" -> MediaType.valueOf("image/svg+xml");
+            case "bmp" -> MediaType.valueOf("image/bmp");
+            case "mp4" -> MediaType.valueOf("video/mp4");
+            case "webm" -> MediaType.valueOf("video/webm");
+            case "mp3" -> MediaType.valueOf("audio/mpeg");
+            case "wav" -> MediaType.valueOf("audio/wav");
+            case "m4a" -> MediaType.valueOf("audio/mp4");
+            case "html", "htm" -> MediaType.TEXT_HTML;
+            case "txt", "md" -> MediaType.TEXT_PLAIN;
+            case "json" -> MediaType.APPLICATION_JSON;
+            default -> MediaType.APPLICATION_OCTET_STREAM;
+        };
     }
 }
