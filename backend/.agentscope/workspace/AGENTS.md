@@ -61,3 +61,4 @@
 - search_documents 返回的 evidenceLevel 标识检索质量：SUFFICIENT=充分, PARTIAL=部分, WEAK=弱, NONE=无
   如果 WEAK 或 NONE，应改写关键词后再次检索
 - 多步检索时逐步执行，每步使用 refine 后的查询词，避免简单重复
+- **调用 search_documents 前必须消歧**：如果 query 中包含代词（它、他、她、这、那、该等），结合对话历史替换为具体的人名、会议名或主题。例如"它最新的观点" → "XX 最新的观点"、"这个项目" → "XX项目"。消歧后再传参搜索。

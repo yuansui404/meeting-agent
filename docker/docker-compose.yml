@@ -74,6 +74,7 @@ services:
         condition: service_started
     volumes:
       - ${HOME}/meeting-agent/uploads:/app/data/uploads
+      - ${HOME}/meeting-agent/models:/models
 
   # React 前端服务
   frontend:

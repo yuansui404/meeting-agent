@@ -46,6 +46,17 @@ public class AgentConfig {
     }
 
     @Bean
+    public OpenAIChatModel nonStreamingOpenAIChatModel(DeepSeekProperties props) {
+        return OpenAIChatModel.builder()
+                .apiKey(props.getApiKey())
+                .modelName(props.getModel())
+                .baseUrl(props.getUrl())
+                .formatter(new DeepSeekFormatter())
+                .stream(false)
+                .build();
+    }
+
+    @Bean
     public Toolkit toolkit(UploadToKnowledgeBaseTool uploadToKnowledgeBaseTool,
                            SearchDocumentsTool searchDocumentsTool,
                            ListMeetingsTool listMeetingsTool,

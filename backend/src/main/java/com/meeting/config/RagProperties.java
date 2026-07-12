@@ -21,8 +21,8 @@ public class RagProperties {
 
     @Data
     public static class Retrieval {
-        private int vectorTopk = 20;
-        private int ftsTopk = 20;
+        private int vectorTopk = 10;
+        private int ftsTopk = 10;
         private int rrfK = 60;
         private boolean rerankEnabled = false;
         private int rerankTopk = 5;

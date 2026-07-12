@@ -3,11 +3,8 @@ package com.meeting.retrieval.service;
 import com.meeting.common.TtlMdcAdapter;
 import com.meeting.config.RagProperties;
 import com.meeting.document.model.entity.DocumentChunkEntity;
-import com.meeting.document.model.entity.DocumentEntity;
 import com.meeting.document.repository.DocumentChunkRepository;
-import com.meeting.document.repository.DocumentRepository;
 import com.meeting.retrieval.algorithm.CitationBuilder;
-import com.meeting.retrieval.algorithm.DocumentDeduplicator;
 import com.meeting.retrieval.algorithm.EvidenceEvaluator;
 import com.meeting.retrieval.algorithm.RrfMerger;
 import com.meeting.retrieval.algorithm.TimeDecayScorer;
@@ -36,12 +33,10 @@ public class HybridSearchService {
     private final Reranker reranker;
     private final RrfMerger rrfMerger;
     private final TimeDecayScorer timeDecayScorer;
-    private final DocumentDeduplicator documentDeduplicator;
     private final EvidenceEvaluator evidenceEvaluator;
     private final CitationBuilder citationBuilder;
     private final RagProperties ragProperties;
     private final DocumentChunkRepository chunkRepository;
-    private final DocumentRepository documentRepository;
     @Qualifier("llmTaskExecutor")
     private final TaskExecutor taskExecutor;
 
@@ -50,21 +45,26 @@ public class HybridSearchService {
             String evidenceLevel,
             List<Citation> citations,
             String queryUsed,
-            boolean retried
+            boolean retried,
+            double topScore,
+            String strategyUsed,
+            int totalCandidates
     ) {}
 
     public SearchResult search(String query, String timeRange) {
+        // 日志用
         TtlMdcAdapter.setLayer("RETRIEVAL");
         try {
             QueryPlanningService.QueryPlan plan = queryPlanningService.plan(query);
-            log.info("Query plan: strategy={}, rewritten={}", plan.strategy(), plan.rewrittenQuery());
+            log.info("Query plan: strategy={}, rewritten={}, timeIntent={}, timeRange={}",
+                    plan.strategy(), plan.rewrittenQuery(), plan.timeIntent(), plan.timeRange());
 
             boolean retried = false;
-            String actualQuery = plan.rewrittenQuery();
+            String actualQuery = plan.rewrittenQuery(); // 读取plan的rewrittenQuery字段
 
             // Step 1: Execute searches (all sub-queries in parallel)
-            List<CompletableFuture<List<ChunkResult>>> vectorFutures = new ArrayList<>();
-            List<CompletableFuture<List<ChunkResult>>> ftsFutures = new ArrayList<>();
+            List<CompletableFuture<List<ChunkResult>>> vectorFutures = new ArrayList<>(); //向量检索汇总
+            List<CompletableFuture<List<ChunkResult>>> ftsFutures = new ArrayList<>(); // 全文检索汇总
             for (String subQuery : plan.subQueries()) {
                 vectorFutures.add(CompletableFuture.supplyAsync(() ->
                         vectorSearchService.search(subQuery, ragProperties.getRetrieval().getVectorTopk()), taskExecutor));
@@ -84,11 +84,12 @@ public class HybridSearchService {
                 merged = reranker.reRank(actualQuery, merged, ragProperties.getRetrieval().getRerankTopk());
             }
 
-            // Step 4: Time decay (batch fetch documents to avoid N+1)
-            merged = applyTimeDecay(merged);
+            // Step 4: Time decay (conditionally applied based on query time intent)
+            merged = applyDecayWithIntent(merged, plan.timeIntent(), plan.timeRange());
 
-            // Step 5: Deduplicate
-            merged = documentDeduplicator.deduplicate(merged, 5);
+            // Step 5: Expand neighbors (removed document deduplication — same document chunks are complementary, not redundant)
+            int totalCandidates = merged.size();
+            merged = expandNeighbors(merged);
 
             // Step 6: Retry if low confidence
             double topScore = merged.isEmpty() ? 0.0 : merged.get(0).getFinalScore();
@@ -96,9 +97,8 @@ public class HybridSearchService {
                 log.info("Low confidence (topScore={}), triggering retry", topScore);
                 String retryQuery = generateRetryQuery(actualQuery);
                 List<ChunkResult> retryMerged = executeSearch(retryQuery);
-                retryMerged = applyTimeDecay(retryMerged);
-                retryMerged = documentDeduplicator.deduplicate(retryMerged, 5);
-
+                retryMerged = applyDecayWithIntent(retryMerged, plan.timeIntent(), plan.timeRange());
+                totalCandidates = retryMerged.size();
                 double retryTopScore = retryMerged.isEmpty() ? 0.0 : retryMerged.get(0).getFinalScore();
                 if (retryTopScore > topScore) {
                     merged = retryMerged;
@@ -107,17 +107,15 @@ public class HybridSearchService {
                 }
             }
 
-            // Step 7: Expand neighbors
-            merged = expandNeighbors(merged);
-
             // Step 8: Evaluate evidence
+            double finalTopScore = merged.isEmpty() ? 0.0 : merged.get(0).getFinalScore();
             EvidenceLevel evidenceLevel = evidenceEvaluator.evaluate(merged, vectorResults.size(), ftsResults.size());
             List<Citation> citations = citationBuilder.build(merged);
 
-            log.info("Hybrid search complete: query={}, chunks={}, evidence={}",
-                    actualQuery, merged.size(), evidenceLevel);
+            log.info("Hybrid search complete: query={}, chunks={}, evidence={}, strategy={}",
+                    actualQuery, merged.size(), evidenceLevel, plan.strategy());
 
-            return new SearchResult(merged, evidenceLevel.name(), citations, actualQuery, retried);
+            return new SearchResult(merged, evidenceLevel.name(), citations, actualQuery, retried, finalTopScore, plan.strategy(), totalCandidates);
         } finally {
             TtlMdcAdapter.remove("layer");
         }
@@ -141,27 +139,34 @@ public class HybridSearchService {
             return chunks;
         }
 
-        // Batch fetch all documents to avoid N+1 queries
-        Set<Long> docIds = chunks.stream()
-                .map(ChunkResult::getDocumentId)
-                .filter(Objects::nonNull)
-                .collect(Collectors.toSet());
-        Map<Long, DocumentEntity> docMap = new HashMap<>();
-        if (!docIds.isEmpty()) {
-            documentRepository.findAllById(docIds).forEach(doc -> docMap.put(doc.getId(), doc));
-        }
-
         var config = ragProperties.getTimeDecay();
         for (ChunkResult r : chunks) {
-            DocumentEntity doc = docMap.get(r.getDocumentId());
-            LocalDate meetingDate = doc != null ? doc.getMeetingDate() : null;
-            r.setFinalScore(timeDecayScorer.apply(r.getRrfScore(), meetingDate,
+            r.setFinalScore(timeDecayScorer.apply(r.getRrfScore(), r.getMeetingDate(),
                     new TimeDecayScorer.TimeDecayConfig(
                             true, config.getRecentDays(), config.getRecentWeight(),
                             config.getNormalWeight(), config.getOldWeight(), config.getArchiveWeight()
                     )));
         }
         return chunks;
+    }
+
+    private List<ChunkResult> applyDecayWithIntent(List<ChunkResult> chunks,
+                                                    QueryPlanningService.TimeIntent intent,
+                                                    String timeRange) {
+        return switch (intent) {
+            case RECENT -> applyTimeDecay(chunks);
+            case HISTORICAL, NEUTRAL, RANGE -> {
+                // Skip time decay, preserve semantic ranking (RRF/Rerank score).
+                // Historical queries should not be penalized for age.
+                // Range queries need structured date parsing (future work).
+                // Neutral queries have no time preference.
+                if (chunks.isEmpty()) yield chunks;
+                for (ChunkResult r : chunks) {
+                    r.setFinalScore(r.getRrfScore());
+                }
+                yield chunks;
+            }
+        };
     }
 
     String generateRetryQuery(String originalQuery) {

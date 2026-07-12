@@ -6,9 +6,38 @@ import ReactMarkdown from 'react-markdown';
 
 const { Text } = Typography;
 
+const DOCX_PREVIEW_STYLE = `
+  .docx-preview table {
+    border-collapse: collapse;
+    width: 100%;
+    margin: 12px 0;
+    font-size: 13px;
+  }
+  .docx-preview table td, .docx-preview table th {
+    border: 1px solid #d0d0d0;
+    padding: 8px 10px;
+    text-align: left;
+    vertical-align: top;
+  }
+  .docx-preview table th {
+    background: #f0f0f0;
+    font-weight: 600;
+  }
+  .docx-preview p {
+    margin: 0 0 8px 0;
+  }
+  .docx-preview h1, .docx-preview h2, .docx-preview h3,
+  .docx-preview h4, .docx-preview h5, .docx-preview h6 {
+    margin: 16px 0 8px 0;
+  }
+`;
+
 const IMAGE_EXTS = ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp', '.svg'];
 const DOCX_EXTS = ['.docx'];
 const PDF_EXTS = ['.pdf'];
+
+/** Normalize file extension to always include leading dot (e.g. "docx" → ".docx") */
+const normalizeExt = (ext: string) => ext.startsWith('.') ? ext : `.${ext}`;
 
 interface PreviewDrawerProps {
   open: boolean;
@@ -37,7 +66,7 @@ const PreviewDrawer: React.FC<PreviewDrawerProps> = ({
   const [error, setError] = useState<string | null>(null);
   const [fullScreen, setFullScreen] = useState(false);
 
-  const ext = fileType?.toLowerCase() || '';
+  const ext = normalizeExt(fileType?.toLowerCase() || '');
   const isImage = IMAGE_EXTS.includes(ext);
   const isPdf = PDF_EXTS.includes(ext);
   const isDocx = DOCX_EXTS.includes(ext);
@@ -133,10 +162,14 @@ const PreviewDrawer: React.FC<PreviewDrawerProps> = ({
     // DOCX: rendered HTML
     if (isDocx && htmlContent !== null) {
       return (
-        <div
-          style={{ fontSize: 14, lineHeight: 1.8, wordBreak: 'break-word' }}
-          dangerouslySetInnerHTML={{ __html: htmlContent }}
-        />
+        <>
+          <style>{DOCX_PREVIEW_STYLE}</style>
+          <div
+            className="docx-preview"
+            style={{ fontSize: 14, lineHeight: 1.8, wordBreak: 'break-word' }}
+            dangerouslySetInnerHTML={{ __html: htmlContent }}
+          />
+        </>
       );
     }
 

@@ -16,7 +16,7 @@ import java.time.LocalDateTime;
 @NamedNativeQuery(
     name = "DocumentChunkEntity.vectorSearch",
     query = """
-        SELECT id, document_id, content, chunk_index, speaker,
+        SELECT id, document_id, content, chunk_index, speaker, metadata,
                1 - (embedding <=> CAST(:embedding AS vector)) AS similarity
         FROM document_chunk
         WHERE embedding IS NOT NULL
@@ -35,6 +35,7 @@ import java.time.LocalDateTime;
             @ColumnResult(name = "content", type = String.class),
             @ColumnResult(name = "chunk_index", type = Integer.class),
             @ColumnResult(name = "speaker", type = String.class),
+            @ColumnResult(name = "metadata", type = String.class),
             @ColumnResult(name = "similarity", type = Double.class)
         }
     )

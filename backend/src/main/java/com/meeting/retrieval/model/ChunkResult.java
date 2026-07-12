@@ -4,6 +4,8 @@ import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
 
+import java.time.LocalDate;
+
 @Data
 @Builder
 @AllArgsConstructor
@@ -20,4 +22,5 @@ public class ChunkResult {
     private double finalScore;
     private Integer vectorRank;
     private Integer ftsRank;
+    private LocalDate meetingDate; // 会议日期（从分块metadata解析，用于时间衰减）
 }

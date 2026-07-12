@@ -114,6 +114,20 @@
             <version>2.0.0-RC3</version>
         </dependency>
 
+        <!-- ONNX Runtime for BGE Reranker inference -->
+        <dependency>
+            <groupId>com.microsoft.onnxruntime</groupId>
+            <artifactId>onnxruntime</artifactId>
+            <version>1.21.0</version>
+        </dependency>
+
+        <!-- DJL Tokenizer for HuggingFace tokenization (SentencePiece + WordPiece) -->
+        <dependency>
+            <groupId>ai.djl.huggingface</groupId>
+            <artifactId>tokenizers</artifactId>
+            <version>0.31.0</version>
+        </dependency>
+
         <!-- PDF text extraction -->
         <dependency>
             <groupId>org.apache.pdfbox</groupId>

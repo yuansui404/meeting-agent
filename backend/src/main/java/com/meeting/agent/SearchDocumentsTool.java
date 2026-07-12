@@ -35,7 +35,7 @@ public class SearchDocumentsTool implements AgentTool {
         Map<String, Object> properties = new LinkedHashMap<>();
         properties.put("query", Map.of(
                 "type", "string",
-                "description", "搜索关键词，尽量简洁准确"
+                "description", "搜索关键词，尽量简洁准确。注意：如果用户问题中包含代词（它、他、她、这、那、该等），请先结合对话历史替换为具体的人名/会议名/主题，再传入此参数"
         ));
         properties.put("timeRange", Map.of(
                 "type", "string",
@@ -54,7 +54,7 @@ public class SearchDocumentsTool implements AgentTool {
             Map<String, Object> input = param.getInput();
             String query = input.getOrDefault("query", "").toString();
             if (query.isBlank()) {
-                return ToolResultBlock.text("{\"evidenceLevel\":\"NONE\",\"results\":[],\"citations\":[],\"queryUsed\":\"\",\"retried\":false}");
+                return ToolResultBlock.text("{\"evidenceLevel\":\"NONE\",\"topScore\":0.0,\"strategyUsed\":\"\",\"totalCandidates\":0,\"results\":[],\"citations\":[],\"queryUsed\":\"\",\"retried\":false}");
             }
 
             String timeRange = null;
@@ -68,6 +68,9 @@ public class SearchDocumentsTool implements AgentTool {
             if (result.chunks().isEmpty()) {
                 return ToolResultBlock.text(JsonUtil.toJson(Map.of(
                         "evidenceLevel", result.evidenceLevel(),
+                        "topScore", result.topScore(),
+                        "strategyUsed", result.strategyUsed(),
+                        "totalCandidates", result.totalCandidates(),
                         "results", List.of(),
                         "citations", result.citations(),
                         "queryUsed", result.queryUsed(),
@@ -87,6 +90,9 @@ public class SearchDocumentsTool implements AgentTool {
 
             Map<String, Object> toolResult = new LinkedHashMap<>();
             toolResult.put("evidenceLevel", result.evidenceLevel());
+            toolResult.put("topScore", result.topScore());
+            toolResult.put("strategyUsed", result.strategyUsed());
+            toolResult.put("totalCandidates", result.totalCandidates());
             toolResult.put("results", items);
             toolResult.put("citations", result.citations());
             toolResult.put("queryUsed", result.queryUsed());

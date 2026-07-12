@@ -79,17 +79,32 @@ CREATE INDEX IF NOT EXISTS idx_document_meeting_date ON document(meeting_date);
 CREATE INDEX IF NOT EXISTS idx_chunk_document_id ON document_chunk(document_id);
 CREATE INDEX IF NOT EXISTS idx_chunk_embedding ON document_chunk USING hnsw (embedding vector_cosine_ops) WITH (m = 16, ef_construction = 200);
 
--- 全文搜索支持
+-- 全文搜索支持（中文分词）
+CREATE EXTENSION IF NOT EXISTS zhparser;
+
 DO $$
 BEGIN
-    IF NOT EXISTS (
-        SELECT 1 FROM information_schema.columns
-        WHERE table_name = 'document_chunk' AND column_name = 'content_tsv'
-    ) THEN
-        ALTER TABLE document_chunk ADD COLUMN content_tsv tsvector
-            GENERATED ALWAYS AS (to_tsvector('simple', coalesce(content, ''))) STORED;
+    IF NOT EXISTS (SELECT 1 FROM pg_ts_config WHERE cfgname = 'chinese') THEN
+        CREATE TEXT SEARCH CONFIGURATION chinese (PARSER = zhparser);
+        ALTER TEXT SEARCH CONFIGURATION chinese ADD MAPPING FOR n,v,a,i,e,l,m WITH simple;
+        ALTER TEXT SEARCH CONFIGURATION chinese ADD MAPPING FOR en WITH simple;
     END IF;
 END $$;
+
+SET zhparser.punctuation_ignore = 't';
+SET zhparser.seg_with_duality = 'f';
+SET zhparser.dict_in_memory = 't';
+SET zhparser.multi_short = 't';
+
+ALTER DATABASE meeting_agent SET zhparser.punctuation_ignore = 't';
+ALTER DATABASE meeting_agent SET zhparser.seg_with_duality = 'f';
+ALTER DATABASE meeting_agent SET zhparser.dict_in_memory = 't';
+ALTER DATABASE meeting_agent SET zhparser.multi_short = 't';
+
+DROP INDEX IF EXISTS idx_chunk_content_tsv;
+ALTER TABLE document_chunk DROP COLUMN IF EXISTS content_tsv;
+ALTER TABLE document_chunk ADD COLUMN content_tsv tsvector
+    GENERATED ALWAYS AS (to_tsvector('chinese', coalesce(content, ''))) STORED;
 CREATE INDEX IF NOT EXISTS idx_chunk_content_tsv ON document_chunk USING gin (content_tsv);
 
 -- ============================================================

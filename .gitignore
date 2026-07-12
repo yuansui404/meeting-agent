@@ -42,3 +42,6 @@ models/
 uploads/
 
 .nacos
+
+# Documentation (not committed to git)
+docs/
