@@ -13,6 +13,7 @@ import io.agentscope.core.tool.Toolkit;
 import io.agentscope.core.tool.mcp.McpClientBuilder;
 import io.agentscope.core.tool.mcp.McpClientWrapper;
 import io.agentscope.harness.agent.HarnessAgent;
+import io.agentscope.harness.agent.subagent.SubagentDeclaration;
 import io.agentscope.harness.agent.memory.compaction.CompactionConfig;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -123,6 +124,27 @@ public class AgentConfig {
                 .disableFilesystemTools()
                 .middleware(profileIndexMiddleware)
                 .middleware(fileContextMiddleware)
+                .subagent(SubagentDeclaration.builder()
+                        .name("search_agent")
+                        .description("检索子 agent，负责知识库内容搜索和会议标题搜索。当用户查询会议内容、知识库时派发给此 agent")
+                        .inlineAgentsBody("你是一个检索专家。你的职责是根据用户查询，从知识库中找到最相关的信息。\n\n" +
+                                "你的工具：\n" +
+                                "- search_documents：完整 RAG 检索管线，返回带证据等级(evidenceLevel)的结果\n" +
+                                "- search_meeting_titles：按标题关键词搜索会议\n\n" +
+                                "工作流程：\n" +
+                                "1. 先调用 search_documents(query) 进行检索\n" +
+                                "2. 查看结果中的 evidenceLevel：\n" +
+                                "   - SUFFICIENT → 直接返回结果\n" +
+                                "   - WEAK/NONE → 尝试以下策略：\n" +
+                                "     a. 改写 query 换种说法再次 search_documents\n" +
+                                "     b. 调用 search_meeting_titles 定位会议，再用会议名搜索\n" +
+                                "     c. 结合多次搜索的结果\n" +
+                                "3. 重试上限：最多尝试 3 次（含首次），仍无法获得 SUFFICIENT 证据，\n" +
+                                "   则返回明确提示\"未找到相关内容\"\n" +
+                                "4. 返回最终结果（包括证据等级、引文和检索内容）")
+                        .tools(List.of("search_documents", "search_meeting_titles"))
+                        .steps(8)
+                        .build())
                 .build();
     }
 }
