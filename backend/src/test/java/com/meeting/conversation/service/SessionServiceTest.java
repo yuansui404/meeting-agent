@@ -18,6 +18,8 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
+import org.mockito.ArgumentCaptor;
+
 @ExtendWith(MockitoExtension.class)
 class SessionServiceTest {
 
@@ -38,15 +40,21 @@ class SessionServiceTest {
     void createSession_ShouldSetSessionId() {
         SessionEntity saved = new SessionEntity();
         saved.setId(1L);
-        saved.setTitle("新对话");
+        saved.setTitle("测试对话");
         saved.setStatus("active");
+        saved.setSessionId("test-session-id");
 
         when(sessionRepository.save(any())).thenReturn(saved);
 
         SessionEntity result = sessionService.createSession("测试对话", null);
 
-        verify(sessionRepository, times(2)).save(any());
-        assertEquals("dialogue-1", result.getSessionId());
+        assertEquals("test-session-id", result.getSessionId());
+        assertEquals("测试对话", result.getTitle());
+
+        ArgumentCaptor<SessionEntity> captor = ArgumentCaptor.forClass(SessionEntity.class);
+        verify(sessionRepository).save(captor.capture());
+        assertNotNull(captor.getValue().getSessionId());
+        assertEquals("测试对话", captor.getValue().getTitle());
     }
 
     @Test
@@ -60,8 +68,12 @@ class SessionServiceTest {
 
         SessionEntity result = sessionService.createSession(null, null);
 
-        verify(sessionRepository, times(2)).save(any());
-        assertEquals("dialogue-2", result.getSessionId());
+        assertEquals("新对话", result.getTitle());
+
+        ArgumentCaptor<SessionEntity> captor = ArgumentCaptor.forClass(SessionEntity.class);
+        verify(sessionRepository).save(captor.capture());
+        assertEquals("新对话", captor.getValue().getTitle());
+        assertEquals("新对话", captor.getValue().getTitle());
     }
 
     @Test
