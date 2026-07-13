@@ -54,7 +54,7 @@ public class SearchDocumentsTool implements AgentTool {
             Map<String, Object> input = param.getInput();
             String query = input.getOrDefault("query", "").toString();
             if (query.isBlank()) {
-                return ToolResultBlock.text("{\"evidenceLevel\":\"NONE\",\"topScore\":0.0,\"strategyUsed\":\"\",\"totalCandidates\":0,\"results\":[],\"citations\":[],\"queryUsed\":\"\",\"retried\":false}");
+                return ToolResultBlock.text("{\"evidenceLevel\":\"NONE\",\"topScore\":0.0,\"strategyUsed\":\"\",\"totalCandidates\":0,\"results\":[],\"citations\":[],\"queryUsed\":\"\"}");
             }
 
             String timeRange = null;
@@ -73,8 +73,7 @@ public class SearchDocumentsTool implements AgentTool {
                         "totalCandidates", result.totalCandidates(),
                         "results", List.of(),
                         "citations", result.citations(),
-                        "queryUsed", result.queryUsed(),
-                        "retried", result.retried()
+                        "queryUsed", result.queryUsed()
                 )));
             }
 
@@ -96,7 +95,6 @@ public class SearchDocumentsTool implements AgentTool {
             toolResult.put("results", items);
             toolResult.put("citations", result.citations());
             toolResult.put("queryUsed", result.queryUsed());
-            toolResult.put("retried", result.retried());
 
             return ToolResultBlock.text(JsonUtil.toJson(toolResult));
         });

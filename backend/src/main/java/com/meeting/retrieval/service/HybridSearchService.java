@@ -7,7 +7,6 @@ import com.meeting.document.repository.DocumentChunkRepository;
 import com.meeting.retrieval.algorithm.CitationBuilder;
 import com.meeting.retrieval.algorithm.EvidenceEvaluator;
 import com.meeting.retrieval.algorithm.RrfMerger;
-import com.meeting.retrieval.algorithm.TimeDecayScorer;
 import com.meeting.retrieval.model.ChunkResult;
 import com.meeting.retrieval.model.Citation;
 import com.meeting.retrieval.model.EvidenceLevel;
@@ -18,6 +17,7 @@ import org.springframework.core.task.TaskExecutor;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDate;
+import java.time.temporal.ChronoUnit;
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
 import java.util.stream.Collectors;
@@ -32,7 +32,6 @@ public class HybridSearchService {
     private final QueryPlanningService queryPlanningService;
     private final Reranker reranker;
     private final RrfMerger rrfMerger;
-    private final TimeDecayScorer timeDecayScorer;
     private final EvidenceEvaluator evidenceEvaluator;
     private final CitationBuilder citationBuilder;
     private final RagProperties ragProperties;
@@ -45,7 +44,6 @@ public class HybridSearchService {
             String evidenceLevel,
             List<Citation> citations,
             String queryUsed,
-            boolean retried,
             double topScore,
             String strategyUsed,
             int totalCandidates
@@ -59,7 +57,6 @@ public class HybridSearchService {
             log.info("Query plan: strategy={}, rewritten={}, timeIntent={}, timeRange={}",
                     plan.strategy(), plan.rewrittenQuery(), plan.timeIntent(), plan.timeRange());
 
-            boolean retried = false;
             String actualQuery = plan.rewrittenQuery(); // 读取plan的rewrittenQuery字段
 
             // Step 1: Execute searches (all sub-queries in parallel)
@@ -87,35 +84,21 @@ public class HybridSearchService {
             // Step 4: Time decay (conditionally applied based on query time intent)
             merged = applyDecayWithIntent(merged, plan.timeIntent(), plan.timeRange());
 
-            // Step 5: Expand neighbors (removed document deduplication — same document chunks are complementary, not redundant)
+            // Step 5: Evaluate evidence
+            double finalTopScore = merged.isEmpty() ? 0.0 : merged.get(0).getFinalScore();
+            EvidenceLevel evidenceLevel = evidenceEvaluator.evaluate(merged, vectorResults.size(), ftsResults.size());
+
+            // Step 6: Expand neighbors (same document chunks are complementary, not redundant)
             int totalCandidates = merged.size();
             merged = expandNeighbors(merged);
 
-            // Step 6: Retry if low confidence
-            double topScore = merged.isEmpty() ? 0.0 : merged.get(0).getFinalScore();
-            if (topScore < ragProperties.getEvidence().getThreshold()) {
-                log.info("Low confidence (topScore={}), triggering retry", topScore);
-                String retryQuery = generateRetryQuery(actualQuery);
-                List<ChunkResult> retryMerged = executeSearch(retryQuery);
-                retryMerged = applyDecayWithIntent(retryMerged, plan.timeIntent(), plan.timeRange());
-                totalCandidates = retryMerged.size();
-                double retryTopScore = retryMerged.isEmpty() ? 0.0 : retryMerged.get(0).getFinalScore();
-                if (retryTopScore > topScore) {
-                    merged = retryMerged;
-                    actualQuery = retryQuery;
-                    retried = true;
-                }
-            }
-
-            // Step 8: Evaluate evidence
-            double finalTopScore = merged.isEmpty() ? 0.0 : merged.get(0).getFinalScore();
-            EvidenceLevel evidenceLevel = evidenceEvaluator.evaluate(merged, vectorResults.size(), ftsResults.size());
+            // Step 7: Build citations
             List<Citation> citations = citationBuilder.build(merged);
 
             log.info("Hybrid search complete: query={}, chunks={}, evidence={}, strategy={}",
                     actualQuery, merged.size(), evidenceLevel, plan.strategy());
 
-            return new SearchResult(merged, evidenceLevel.name(), citations, actualQuery, retried, finalTopScore, plan.strategy(), totalCandidates);
+            return new SearchResult(merged, evidenceLevel.name(), citations, actualQuery, finalTopScore, plan.strategy(), totalCandidates);
         } finally {
             TtlMdcAdapter.remove("layer");
         }
@@ -129,23 +112,36 @@ public class HybridSearchService {
         return rrfMerger.merge(vectorF.join(), ftsF.join(), ragProperties.getRetrieval().getRrfK());
     }
 
+    /**
+     * 将 chunk 的原始分数（RRF 或 Reranker 概率）归一化到 [0, 1] 区间。
+     * Reranker 路径：finalScore 已经是 [-1, 1]，转换回 [0, 1]。
+     * RRF 路径：rrfScore / 理论最大值 (2/(k+1))，上限 1.0。
+     */
+    private double score01ForChunk(ChunkResult r) {
+        if (ragProperties.getRetrieval().isRerankEnabled()) {
+            double s = r.getFinalScore();
+            return Math.min(Math.max((s + 1.0) / 2.0, 0.0), 1.0);
+        }
+        double maxRrf = 2.0 / (ragProperties.getRetrieval().getRrfK() + 1);
+        return Math.min(r.getRrfScore() / maxRrf, 1.0);
+    }
+
     private List<ChunkResult> applyTimeDecay(List<ChunkResult> chunks) {
         if (chunks.isEmpty()) return chunks;
 
-        if (!ragProperties.getTimeDecay().isEnabled()) {
-            for (ChunkResult r : chunks) {
-                r.setFinalScore(r.getRrfScore());
-            }
-            return chunks;
-        }
-
-        var config = ragProperties.getTimeDecay();
         for (ChunkResult r : chunks) {
-            r.setFinalScore(timeDecayScorer.apply(r.getRrfScore(), r.getMeetingDate(),
-                    new TimeDecayScorer.TimeDecayConfig(
-                            true, config.getRecentDays(), config.getRecentWeight(),
-                            config.getNormalWeight(), config.getOldWeight(), config.getArchiveWeight()
-                    )));
+            double base01 = score01ForChunk(r);
+            if (ragProperties.getTimeDecay().isEnabled() && r.getMeetingDate() != null) {
+                var config = ragProperties.getTimeDecay();
+                long daysOld = ChronoUnit.DAYS.between(r.getMeetingDate(), LocalDate.now());
+                double factor;
+                if (daysOld <= config.getRecentDays()) factor = config.getRecentWeight();
+                else if (daysOld <= 90)               factor = config.getNormalWeight();
+                else if (daysOld <= 365)              factor = config.getOldWeight();
+                else                                  factor = config.getArchiveWeight();
+                base01 = Math.min(base01 * factor, 1.0);
+            }
+            r.setFinalScore(2.0 * base01 - 1.0);
         }
         return chunks;
     }
@@ -153,24 +149,20 @@ public class HybridSearchService {
     private List<ChunkResult> applyDecayWithIntent(List<ChunkResult> chunks,
                                                     QueryPlanningService.TimeIntent intent,
                                                     String timeRange) {
+        if (chunks.isEmpty()) return chunks;
         return switch (intent) {
             case RECENT -> applyTimeDecay(chunks);
             case HISTORICAL, NEUTRAL, RANGE -> {
-                // Skip time decay, preserve semantic ranking (RRF/Rerank score).
-                // Historical queries should not be penalized for age.
-                // Range queries need structured date parsing (future work).
-                // Neutral queries have no time preference.
-                if (chunks.isEmpty()) yield chunks;
+                // Preserve semantic ranking, map to [-1, 1].
+                // Reranker: finalScore already in [-1, 1], round-trip preserves it.
+                // RRF: normalize to [-1, 1] via max possible RRF.
                 for (ChunkResult r : chunks) {
-                    r.setFinalScore(r.getRrfScore());
+                    double base01 = score01ForChunk(r);
+                    r.setFinalScore(2.0 * base01 - 1.0);
                 }
                 yield chunks;
             }
         };
-    }
-
-    String generateRetryQuery(String originalQuery) {
-        return originalQuery + " 内容 详情 决定";
     }
 
     List<ChunkResult> expandNeighbors(List<ChunkResult> results) {
