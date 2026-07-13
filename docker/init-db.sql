@@ -118,3 +118,45 @@ CREATE TABLE IF NOT EXISTS profile_metadata (
     created_at TIMESTAMP NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
+
+-- ============================================================
+-- RAG 评估系统
+-- ============================================================
+
+-- 测试用例
+CREATE TABLE IF NOT EXISTS eval_test_case (
+    id SERIAL PRIMARY KEY,
+    question TEXT NOT NULL,
+    ground_truth_doc_ids BIGINT[] NOT NULL,
+    ground_truth_answer TEXT,
+    topic VARCHAR(100),
+    query_type VARCHAR(50) DEFAULT 'fact',
+    difficulty VARCHAR(20) DEFAULT 'Medium',
+    notes TEXT,
+    created_at TIMESTAMP DEFAULT NOW()
+);
+
+-- 评估运行记录
+CREATE TABLE IF NOT EXISTS eval_run (
+    id SERIAL PRIMARY KEY,
+    run_name VARCHAR(200) NOT NULL,
+    config JSONB,
+    metrics JSONB,
+    created_at TIMESTAMP DEFAULT NOW()
+);
+
+-- 逐条评估结果
+CREATE TABLE IF NOT EXISTS eval_result (
+    id SERIAL PRIMARY KEY,
+    run_id INT NOT NULL REFERENCES eval_run(id) ON DELETE CASCADE,
+    test_case_id INT NOT NULL REFERENCES eval_test_case(id),
+    ndcg_3 DOUBLE PRECISION,
+    precision_3 DOUBLE PRECISION,
+    recall_3 DOUBLE PRECISION,
+    mrr DOUBLE PRECISION,
+    latency_ms INT,
+    evidence_level VARCHAR(20),
+    total_candidates INT,
+    retrieved_doc_ids BIGINT[],
+    details JSONB
+);
