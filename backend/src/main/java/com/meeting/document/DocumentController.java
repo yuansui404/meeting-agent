@@ -22,7 +22,6 @@ import org.springframework.web.multipart.MultipartFile;
 
 import java.nio.file.Path;
 import java.util.List;
-import java.util.Map;
 
 @RestController
 @RequestMapping("/api/document")
@@ -88,21 +87,9 @@ public class DocumentController {
                 .body(resource);
     }
 
-    @PostMapping("/{id}/style-exemplar")
-    public ApiResponse<DocumentEntity> setStyleExemplar(
-            @PathVariable Long id,
-            @RequestBody Map<String, Object> body) {
-        DocumentEntity doc = documentService.getById(id);
-        Boolean exemplar = (Boolean) body.getOrDefault("styleExemplar", false);
-        String tags = (String) body.get("styleTags");
-        doc.setStyleExemplar(exemplar);
-        doc.setStyleTags(tags);
-        documentRepository.save(doc);
-        return ApiResponse.ok(doc);
-    }
-
-    @GetMapping("/style-exemplars")
-    public ApiResponse<List<DocumentEntity>> listStyleExemplars() {
-        return ApiResponse.ok(documentRepository.findByStyleExemplarTrue());
+    @GetMapping("/search")
+    public ApiResponse<List<DocumentEntity>> searchByTitle(@RequestParam String keyword,
+                                                           @RequestParam(defaultValue = "20") int limit) {
+        return ApiResponse.ok(documentRepository.searchByTitleKeyword(keyword, limit));
     }
 }

@@ -53,7 +53,7 @@ rag:
     vector-topk: 20
     fts-topk: 20
     rrf-k: 60
-    rerank-enabled: false
+    rerank-enabled: true
     rerank-topk: 5
   evidence:
     threshold: 0.35
@@ -106,7 +106,7 @@ rag:
     vector-topk: 20
     fts-topk: 20
     rrf-k: 60
-    rerank-enabled: false
+    rerank-enabled: true
     rerank-topk: 5
   evidence:
     threshold: 0.35

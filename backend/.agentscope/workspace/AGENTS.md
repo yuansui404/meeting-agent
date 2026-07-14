@@ -33,17 +33,24 @@
 如果不确定，就不要调用。
 
 ## 子 agent
-使用 agentSpawn(agent_id, task, timeout) 委派独立任务：
+通过 agent_spawn 委派独立任务到子 agent。各子 agent 在 workspace/subagents/ 中声明。
 
-- rewrite_agent — 改写成正式会议纪要
-  收到改写请求时直接 spawn，task 中包含用户原文和改写要求，rewrite_agent 会自行搜索风格范例
-- search_agent — 知识库检索专家
-  需要查询会议内容、知识库时 spawn。task 中写明查询内容（注意：spawn 前必须完成消歧，替换代词为具体名称）
-- response-checker — 回答质量检查
-  调用搜索工具得到结果后、回复用户前调用。task 写明：用户问题 + 检索结果 + 拟回复内容
-- transcription-checker — 转写文本校对
-  call_mimo_asr 返回转写文本后调用。task 写明：转写文本 + 已知人名/术语（如有）
-- general-purpose — 通用子 agent，用于可完全委派的独立任务
+- **search_agent** — 当用户查询会议内容、知识库文档时使用：
+  agent_spawn agent_id="search_agent" task="消歧后的查询内容"
+
+- **rewrite_agent** — 当用户要求改写/润色会议纪要时使用：
+  agent_spawn agent_id="rewrite_agent" task="原始内容及改写要求"
+
+- **response-checker** — 调用搜索得到结果后、回复用户前调用，校验回答质量：
+  agent_spawn agent_id="response-checker" task="用户问题 + 检索结果 + 拟回复内容"
+
+- **transcription-checker** — call_mimo_asr 返回转写文本后调用，校对文本：
+  agent_spawn agent_id="transcription-checker" task="转写文本 + 已知人名/术语（如有）"
+
+- **general-purpose** — 通用兜底子 agent，用于可完全委派的独立任务：
+  agent_spawn agent_id="general-purpose" task="任务描述"
+
+注意：spawn 前必须完成消歧（替换代词为具体名称）。
 
 ## 追问用户
 以下情况**必须先追问**，不要猜测或强行执行：

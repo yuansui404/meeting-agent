@@ -73,8 +73,7 @@ public class DialoguePersistenceService {
                     AgentResponseMetadata metadata = new AgentResponseMetadata(
                             "chat",
                             (thinkingText != null && !thinkingText.isEmpty()) ? thinkingText : null,
-                            (toolCalls != null && !toolCalls.isEmpty()) ? toolCalls : null,
-                            null
+                            (toolCalls != null && !toolCalls.isEmpty()) ? toolCalls : null
                     );
                     if (metadata.thinking() != null || metadata.toolCalls() != null) {
                         asstMsg.setMetadata(metadata);

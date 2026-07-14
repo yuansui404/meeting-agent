@@ -23,4 +23,7 @@ public class ChunkResult {
     private Integer vectorRank;
     private Integer ftsRank;
     private LocalDate meetingDate; // 会议日期（从分块metadata解析，用于时间衰减）
+    private String participants;    // 与会人
+    private String topic;           // 段落主题
+    private String sectionHeading;  // 段落所属标题
 }

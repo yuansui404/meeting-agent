@@ -27,7 +27,7 @@ public class SearchDocumentsTool implements AgentTool {
 
     @Override
     public String getDescription() {
-        return "搜索知识库中的文档/文件内容。支持语义搜索+全文检索融合，返回带证据等级(evidenceLevel)和引文(citations)的结构化结果。当用户查询文档中的具体内容时使用。支持可选参数 timeRange 限定时间范围，如\"最近30天\"。";
+        return "搜索知识库中的文档/文件内容。支持语义搜索+全文检索融合，返回带证据等级(evidenceLevel)和引文(citations)的结构化结果。当用户查询文档中的具体内容时使用。";
     }
 
     @Override
@@ -36,10 +36,6 @@ public class SearchDocumentsTool implements AgentTool {
         properties.put("query", Map.of(
                 "type", "string",
                 "description", "搜索关键词，尽量简洁准确。注意：如果用户问题中包含代词（它、他、她、这、那、该等），请先结合对话历史替换为具体的人名/会议名/主题，再传入此参数"
-        ));
-        properties.put("timeRange", Map.of(
-                "type", "string",
-                "description", "可选，时间范围限定，如\"最近30天\"、\"最近90天\"、\"今年\"，不传则不限时间"
         ));
         return Map.of(
                 "type", "object",
@@ -54,21 +50,14 @@ public class SearchDocumentsTool implements AgentTool {
             Map<String, Object> input = param.getInput();
             String query = input.getOrDefault("query", "").toString();
             if (query.isBlank()) {
-                return ToolResultBlock.text("{\"evidenceLevel\":\"NONE\",\"topScore\":0.0,\"strategyUsed\":\"\",\"totalCandidates\":0,\"results\":[],\"citations\":[],\"queryUsed\":\"\"}");
+                return ToolResultBlock.text("{\"evidenceLevel\":\"NONE\",\"strategyUsed\":\"\",\"totalCandidates\":0,\"results\":[],\"citations\":[],\"queryUsed\":\"\"}");
             }
 
-            String timeRange = null;
-            Object timeRangeObj = input.get("timeRange");
-            if (timeRangeObj instanceof String s && !s.isBlank()) {
-                timeRange = s;
-            }
-
-            HybridSearchService.SearchResult result = hybridSearchService.search(query, timeRange);
+            HybridSearchService.SearchResult result = hybridSearchService.search(query);
 
             if (result.chunks().isEmpty()) {
                 return ToolResultBlock.text(JsonUtil.toJson(Map.of(
                         "evidenceLevel", result.evidenceLevel(),
-                        "topScore", result.topScore(),
                         "strategyUsed", result.strategyUsed(),
                         "totalCandidates", result.totalCandidates(),
                         "results", List.of(),
@@ -84,12 +73,14 @@ public class SearchDocumentsTool implements AgentTool {
                 item.put("content", chunk.getContent() != null ? chunk.getContent() : "");
                 item.put("score", Math.round(chunk.getFinalScore() * 100.0) / 100.0);
                 item.put("speaker", chunk.getSpeaker() != null ? chunk.getSpeaker() : "");
+                item.put("participants", chunk.getParticipants() != null ? chunk.getParticipants() : "");
+                item.put("topic", chunk.getTopic() != null ? chunk.getTopic() : "");
+                item.put("sectionHeading", chunk.getSectionHeading() != null ? chunk.getSectionHeading() : "");
                 items.add(item);
             }
 
             Map<String, Object> toolResult = new LinkedHashMap<>();
             toolResult.put("evidenceLevel", result.evidenceLevel());
-            toolResult.put("topScore", result.topScore());
             toolResult.put("strategyUsed", result.strategyUsed());
             toolResult.put("totalCandidates", result.totalCandidates());
             toolResult.put("results", items);

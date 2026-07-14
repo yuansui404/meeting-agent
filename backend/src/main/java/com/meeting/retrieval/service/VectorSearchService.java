@@ -43,6 +43,9 @@ public class VectorSearchService {
                     .speaker(hit.speaker())
                     .fileName(parsed.fileName())
                     .meetingDate(parsed.meetingDate())
+                    .participants(parsed.participants())
+                    .topic(parsed.topic())
+                    .sectionHeading(parsed.sectionHeading())
                     .vectorScore(hit.similarityScore())
                     .vectorRank(i + 1)
                     .build());

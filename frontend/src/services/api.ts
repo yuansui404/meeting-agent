@@ -95,12 +95,8 @@ export interface RagDocument {
   fileSize: number;
   meetingDate: string | null;
   status: string;
-  chunkCount: number;
-  transcription?: string | null;
-  styleExemplar?: boolean;
   styleTags?: string | null;
   participants?: string | null;
-  duration?: number | null;
   mdFilePath?: string | null;
   createdAt: string;
   updatedAt: string;
@@ -133,20 +129,10 @@ export const uploadDocument = (file: File) => {
   return api.post<{ success: boolean; data: RagDocument }>('/document/upload', formData);
 };
 
-// 标记文档为风格范例
-export const setDocumentStyleExemplar = (id: number, styleExemplar: boolean, styleTags?: string) =>
-  api.post(`/document/${id}/style-exemplar`, { styleExemplar, styleTags });
-
-// 获取风格范例列表
-export const listStyleExemplars = () =>
-  api.get<{ success: boolean; data: { id: number; title: string; styleTags: string }[] }>('/document/style-exemplars');
+export const searchDocumentsByTitle = (keyword: string, limit = 20) =>
+  api.get<{ success: boolean; data: RagDocument[] }>('/document/search', { params: { keyword, limit } });
 
 // 搜索文档
-export const searchDocuments = (query: string, timeRange?: string) =>
-  api.get<{ success: boolean; data: { query: string; evidenceLevel: string; results: any[]; citations: any[] } }>('/search', {
-    params: { query, timeRange },
-  });
-
 // ============================================================
 // 流式对话（RAG + 改写路由）
 // ============================================================

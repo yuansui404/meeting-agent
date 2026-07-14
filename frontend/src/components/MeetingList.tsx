@@ -102,7 +102,7 @@ const MeetingList: React.FC<Props> = ({ meetings, compact }) => {
                 overflow: 'auto',
                 fontSize: 13,
               }}>
-                {detail.transcription || '暂无转写内容'}
+                {(detail as any).transcription || '暂无转写内容'}
               </div>
             </div>
           </div>

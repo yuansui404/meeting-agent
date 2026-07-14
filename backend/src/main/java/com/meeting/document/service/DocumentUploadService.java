@@ -94,7 +94,6 @@ public class DocumentUploadService {
             // 提取的元数据写入 DocumentEntity
             if (meta.containsKey("meeting_date")) doc.setMeetingDate((LocalDate) meta.get("meeting_date"));
             if (meta.containsKey("participants")) doc.setParticipants((String) meta.get("participants"));
-            if (meta.containsKey("duration")) doc.setDuration((Integer) meta.get("duration"));
 
             // 保存清洗后的 markdown 到磁盘
             String mdPath = saveMarkdownFile(doc.getFilePath(), text);
@@ -102,7 +101,6 @@ public class DocumentUploadService {
                 doc.setMdFilePath(mdPath);
             }
 
-            doc.setTranscription(text);
             doc.setStatus("COMPLETED");
             documentRepository.save(doc);
 

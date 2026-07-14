@@ -25,8 +25,7 @@ public interface DocumentChunkRepository extends JpaRepository<DocumentChunkEnti
             + "dc.speaker, "
             + "1 - (dc.embedding <=> CAST(:embedding AS vector)) AS similarityScore "
             + "FROM document_chunk dc "
-            + "JOIN document d ON dc.document_id = d.id "
-            + "WHERE d.style_exemplar = true AND dc.embedding IS NOT NULL "
+            + "WHERE dc.embedding IS NOT NULL "
             + "ORDER BY 1 - (dc.embedding <=> CAST(:embedding AS vector)) DESC "
             + "LIMIT :topK", nativeQuery = true)
     List<VectorSearchHit> styleExemplarSearch(@Param("embedding") String embedding, @Param("topK") int topK);

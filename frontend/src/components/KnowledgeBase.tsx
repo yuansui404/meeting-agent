@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Typography, Button, List, Spin, message as antMsg, Tooltip, Space, Pagination } from 'antd';
+import { Typography, Button, List, Spin, message as antMsg, Tooltip, Space, Pagination, Tabs } from 'antd';
 import {
   FileTextOutlined,
   DatabaseOutlined,
@@ -12,11 +12,10 @@ import {
   CloseOutlined,
   DownloadOutlined,
   EyeOutlined,
-  StarOutlined,
-  StarFilled,
 } from '@ant-design/icons';
-import { RagDocument, listDocuments, deleteDocument, uploadDocument, getDocumentFileUrl, getDocumentTextContent, getDocument, setDocumentStyleExemplar } from '../services/api';
+import { RagDocument, listDocuments, deleteDocument, uploadDocument, getDocumentFileUrl, getDocumentTextContent, getDocument } from '../services/api';
 import PreviewDrawer from './PreviewDrawer';
+import TemplateManagement from './TemplateManagement';
 
 const { Text } = Typography;
 
@@ -34,6 +33,7 @@ const KnowledgeBase: React.FC<Props> = ({ visible, onClose }) => {
   const [page, setPage] = useState(1);
   const [previewFile, setPreviewFile] = useState<RagDocument | null>(null);
   const [previewContent, setPreviewContent] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState<string>('documents');
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -89,17 +89,12 @@ const KnowledgeBase: React.FC<Props> = ({ visible, onClose }) => {
   const handlePreview = async (doc: RagDocument) => {
     setPreviewFile(doc);
     setPreviewContent(null);
-    // Pre-fetch text content as fallback for non-PDF/DOCX formats
+    // Pre-fetch text content for preview
     try {
       const res = await getDocumentTextContent(doc.id);
       setPreviewContent(res.data?.data?.content || null);
     } catch {
-      try {
-        const detail = await getDocument(doc.id);
-        setPreviewContent(detail.data?.data?.transcription || null);
-      } catch {
-        setPreviewContent(null);
-      }
+      setPreviewContent(null);
     }
   };
 
@@ -143,195 +138,179 @@ const KnowledgeBase: React.FC<Props> = ({ visible, onClose }) => {
       height: '100%', display: 'flex', flexDirection: 'column',
       background: '#fafafa', width: 280,
     }}>
-      {/* Header */}
+      {/* Tab bar */}
       <div style={{
-        padding: '12px 12px 8px',
+        padding: '0 12px',
+        background: '#fff',
         borderBottom: '1px solid #f0f0f0',
         display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-        background: '#fff',
       }}>
-        <Space size={6}>
-          <DatabaseOutlined style={{ color: '#1677ff', fontSize: 16 }} />
-          <Text strong style={{ fontSize: 13 }}>知识库</Text>
-          {!loading && <Text type="secondary" style={{ fontSize: 11 }}>({documents.length})</Text>}
-        </Space>
-        <Space size={2}>
-          <Tooltip title="刷新">
-            <Button type="text" size="small" icon={<ReloadOutlined />} onClick={loadDocuments} />
-          </Tooltip>
-          <Tooltip title="关闭">
-            <Button type="text" size="small" icon={<CloseOutlined />} onClick={onClose} />
-          </Tooltip>
-        </Space>
-      </div>
-
-      {/* Upload area */}
-      <div style={{ padding: '8px 12px', borderBottom: '1px solid #f0f0f0', background: '#fff' }}>
-        <input
-          ref={fileInputRef}
-          type="file"
-          accept=".txt,.md,.pdf,.doc,.docx"
-          onChange={(e) => {
-            const file = e.target.files?.[0];
-            if (file) handleUpload(file);
-            e.target.value = '';
-          }}
-          style={{ display: 'none' }}
-        />
-        <Button
-          type="dashed"
-          block
-          icon={<UploadOutlined />}
-          onClick={() => fileInputRef.current?.click()}
-          loading={uploading}
+        <Tabs
           size="small"
-          style={{ borderRadius: 6, fontSize: 12, height: 32 }}
+          activeKey={activeTab}
+          onChange={setActiveTab}
+          style={{ marginBottom: 0, flex: 1 }}
+          tabBarStyle={{ marginBottom: 0 }}
         >
-          上传到知识库
-        </Button>
-        <Text type="secondary" style={{ fontSize: 10, display: 'block', marginTop: 4, textAlign: 'center' }}>
-          支持 txt、md、pdf、doc、docx（自动向量化）
-        </Text>
+          <Tabs.TabPane tab="文档" key="documents" />
+          <Tabs.TabPane tab="模板" key="templates" />
+        </Tabs>
+        <Tooltip title="关闭">
+          <Button type="text" size="small" icon={<CloseOutlined />} onClick={onClose} style={{ flexShrink: 0 }} />
+        </Tooltip>
       </div>
 
-      {/* Document list */}
-      <div style={{ flex: 1, overflow: 'auto', padding: '4px 8px' }}>
-        {loading ? (
-          <div style={{ textAlign: 'center', paddingTop: 40 }}>
-            <Spin size="small" />
-          </div>
-        ) : documents.length === 0 ? (
-          <div style={{ textAlign: 'center', paddingTop: 40, color: '#999', fontSize: 12 }}>
-            <DatabaseOutlined style={{ fontSize: 28, display: 'block', marginBottom: 8, opacity: 0.3 }} />
-            知识库暂无内容
-          </div>
-        ) : (
-          <>
-            <List
-              dataSource={pageItems}
-              split={false}
-              renderItem={(doc) => {
-                const fileName = doc.title || '';
-                const fileUrl = getDocumentFileUrl(doc.id);
-                return (
-                  <List.Item
-                    style={{
-                      padding: '8px 10px',
-                      borderRadius: 8,
-                      marginBottom: 4,
-                      background: '#fff',
-                      border: '1px solid #f0f0f0',
-                      display: 'block',
-                      cursor: 'pointer',
-                    }}
-                    onClick={() => handlePreview(doc)}
-                  >
-                    {/* Title row */}
-                    <div style={{ display: 'flex', alignItems: 'flex-start', gap: 6, marginBottom: 6 }}>
-                      <div style={{ fontSize: 16, marginTop: 1, flexShrink: 0 }}>
-                        {getFileIcon(fileName)}
-                      </div>
-                      <div style={{ flexShrink: 0, marginTop: 2 }}>
-                        <Tooltip title={doc.styleExemplar ? '取消风格参考标记' : '标记为风格参考'}>
-                          <span
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              const newVal = !doc.styleExemplar;
-                              setDocumentStyleExemplar(doc.id, newVal).then(() => {
-                                setDocuments(prev => prev.map(d =>
-                                  d.id === doc.id ? { ...d, styleExemplar: newVal } : d
-                                ));
-                              }).catch(() => antMsg.error('标记失败'));
-                            }}
-                            style={{ cursor: 'pointer', fontSize: 14, lineHeight: 1 }}
-                          >
-                            {doc.styleExemplar ? (
-                              <StarFilled style={{ color: '#fadb14' }} />
-                            ) : (
-                              <StarOutlined style={{ color: '#d9d9d9' }} />
-                            )}
-                          </span>
-                        </Tooltip>
-                      </div>
-                      <div style={{ flex: 1, minWidth: 0 }}>
-                        <Text style={{ fontSize: 12, fontWeight: 500, lineHeight: '18px' }} ellipsis={{ tooltip: fileName }}>
-                          {fileName}
-                        </Text>
-                      </div>
-                      <Tooltip title="删除">
-                        <Button
-                          type="text"
-                          size="small"
-                          danger
-                          icon={<DeleteOutlined />}
-                          onClick={(e) => { e.stopPropagation(); handleDelete(doc); }}
-                          style={{ flexShrink: 0, width: 22, height: 22, minWidth: 22, padding: 0, fontSize: 11 }}
-                        />
-                      </Tooltip>
-                    </div>
-
-                    {/* Detail fields */}
-                    <div style={{ paddingLeft: 22 }}>
-                      {renderDetailRow('会议时间', formatDateTime(doc.meetingDate || doc.createdAt), <CalendarOutlined />)}
-                      {renderDetailRow('导入', formatDateTime(doc.updatedAt), <ClockCircleOutlined />)}
-                      {renderDetailRow('大小', formatFileSize(doc.fileSize))}
-                      {renderDetailRow('路径', doc.filePath || '-', <LinkOutlined />)}
-                    </div>
-
-                    {/* Actions */}
-                    <div style={{ marginTop: 6, paddingLeft: 22, display: 'flex', gap: 8 }}>
-                      <Button
-                        type="link"
-                        size="small"
-                        icon={<EyeOutlined />}
-                        onClick={(e) => { e.stopPropagation(); handlePreview(doc); }}
-                        style={{ fontSize: 11, padding: 0, height: 20 }}
-                      >
-                        预览
-                      </Button>
-                      <Button
-                        type="link"
-                        size="small"
-                        icon={<DownloadOutlined />}
-                        href={fileUrl}
-                        target="_blank"
-                        onClick={(e) => e.stopPropagation()}
-                        style={{ fontSize: 11, padding: 0, height: 20 }}
-                      >
-                        下载原文
-                      </Button>
-                    </div>
-                  </List.Item>
-                );
+      {activeTab === 'documents' ? (
+        <>
+          {/* Upload area */}
+          <div style={{ padding: '8px 12px', borderBottom: '1px solid #f0f0f0', background: '#fff' }}>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".txt,.md,.pdf,.doc,.docx"
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                if (file) handleUpload(file);
+                e.target.value = '';
               }}
+              style={{ display: 'none' }}
             />
-            {documents.length > PAGE_SIZE && (
-              <div style={{ textAlign: 'center', padding: '8px 0' }}>
-                <Pagination
-                  size="small"
-                  current={page}
-                  total={documents.length}
-                  pageSize={PAGE_SIZE}
-                  onChange={setPage}
-                  showSizeChanger={false}
-                  showTotal={(total) => `共 ${total} 项`}
-                />
-              </div>
-            )}
-          </>
-        )}
-      </div>
+            <Button
+              type="dashed"
+              block
+              icon={<UploadOutlined />}
+              onClick={() => fileInputRef.current?.click()}
+              loading={uploading}
+              size="small"
+              style={{ borderRadius: 6, fontSize: 12, height: 32 }}
+            >
+              上传到知识库
+            </Button>
+            <Text type="secondary" style={{ fontSize: 10, display: 'block', marginTop: 4, textAlign: 'center' }}>
+              支持 txt、md、pdf、doc、docx（自动向量化）
+            </Text>
+          </div>
 
-      {/* Preview Drawer */}
-      <PreviewDrawer
-        open={!!previewFile}
-        onClose={() => { setPreviewFile(null); setPreviewContent(null); }}
-        title={previewFile?.title || '文件预览'}
-        fileUrl={previewFile ? getDocumentFileUrl(previewFile.id) : ''}
-        fileType={previewFile?.fileType || ''}
-        textContent={previewContent || undefined}
-        width={560}
-      />
+          {/* Document list */}
+          <div style={{ flex: 1, overflow: 'auto', padding: '4px 8px' }}>
+            {loading ? (
+              <div style={{ textAlign: 'center', paddingTop: 40 }}>
+                <Spin size="small" />
+              </div>
+            ) : documents.length === 0 ? (
+              <div style={{ textAlign: 'center', paddingTop: 40, color: '#999', fontSize: 12 }}>
+                <DatabaseOutlined style={{ fontSize: 28, display: 'block', marginBottom: 8, opacity: 0.3 }} />
+                知识库暂无内容
+              </div>
+            ) : (
+              <>
+                <List
+                  dataSource={pageItems}
+                  split={false}
+                  renderItem={(doc) => {
+                    const fileName = doc.title || '';
+                    const fileUrl = getDocumentFileUrl(doc.id);
+                    return (
+                      <List.Item
+                        style={{
+                          padding: '8px 10px',
+                          borderRadius: 8,
+                          marginBottom: 4,
+                          background: '#fff',
+                          border: '1px solid #f0f0f0',
+                          display: 'block',
+                          cursor: 'pointer',
+                        }}
+                        onClick={() => handlePreview(doc)}
+                      >
+                        {/* Title row */}
+                        <div style={{ display: 'flex', alignItems: 'flex-start', gap: 6, marginBottom: 6 }}>
+                          <div style={{ fontSize: 16, marginTop: 1, flexShrink: 0 }}>
+                            {getFileIcon(fileName)}
+                          </div>
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <Text style={{ fontSize: 12, fontWeight: 500, lineHeight: '18px' }} ellipsis={{ tooltip: fileName }}>
+                              {fileName}
+                            </Text>
+                          </div>
+                          <Tooltip title="删除">
+                            <Button
+                              type="text"
+                              size="small"
+                              danger
+                              icon={<DeleteOutlined />}
+                              onClick={(e) => { e.stopPropagation(); handleDelete(doc); }}
+                              style={{ flexShrink: 0, width: 22, height: 22, minWidth: 22, padding: 0, fontSize: 11 }}
+                            />
+                          </Tooltip>
+                        </div>
+
+                        {/* Detail fields */}
+                        <div style={{ paddingLeft: 22 }}>
+                          {renderDetailRow('会议时间', formatDateTime(doc.meetingDate || doc.createdAt), <CalendarOutlined />)}
+                          {renderDetailRow('导入', formatDateTime(doc.updatedAt), <ClockCircleOutlined />)}
+                          {renderDetailRow('大小', formatFileSize(doc.fileSize))}
+                          {renderDetailRow('路径', doc.filePath || '-', <LinkOutlined />)}
+                        </div>
+
+                        {/* Actions */}
+                        <div style={{ marginTop: 6, paddingLeft: 22, display: 'flex', gap: 8 }}>
+                          <Button
+                            type="link"
+                            size="small"
+                            icon={<EyeOutlined />}
+                            onClick={(e) => { e.stopPropagation(); handlePreview(doc); }}
+                            style={{ fontSize: 11, padding: 0, height: 20 }}
+                          >
+                            预览
+                          </Button>
+                          <Button
+                            type="link"
+                            size="small"
+                            icon={<DownloadOutlined />}
+                            href={fileUrl}
+                            target="_blank"
+                            onClick={(e) => e.stopPropagation()}
+                            style={{ fontSize: 11, padding: 0, height: 20 }}
+                          >
+                            下载原文
+                          </Button>
+                        </div>
+                      </List.Item>
+                    );
+                  }}
+                />
+                {documents.length > PAGE_SIZE && (
+                  <div style={{ textAlign: 'center', padding: '8px 0' }}>
+                    <Pagination
+                      size="small"
+                      current={page}
+                      total={documents.length}
+                      pageSize={PAGE_SIZE}
+                      onChange={setPage}
+                      showSizeChanger={false}
+                      showTotal={(total) => `共 ${total} 项`}
+                    />
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+
+          {/* Preview Drawer */}
+          <PreviewDrawer
+            open={!!previewFile}
+            onClose={() => { setPreviewFile(null); setPreviewContent(null); }}
+            title={previewFile?.title || '文件预览'}
+            fileUrl={previewFile ? getDocumentFileUrl(previewFile.id) : ''}
+            fileType={previewFile?.fileType || ''}
+            textContent={previewContent || undefined}
+            width={560}
+          />
+        </>
+      ) : (
+        <TemplateManagement visible={visible} onClose={onClose} />
+      )}
     </div>
   );
 };

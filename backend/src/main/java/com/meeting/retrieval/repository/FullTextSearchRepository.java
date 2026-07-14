@@ -44,6 +44,9 @@ public class FullTextSearchRepository {
                             .speaker(rs.getString("speaker"))
                             .fileName(parsed.fileName())
                             .meetingDate(parsed.meetingDate())
+                            .participants(parsed.participants())
+                            .topic(parsed.topic())
+                            .sectionHeading(parsed.sectionHeading())
                             .ftsScore(rs.getDouble("score"))
                             .ftsRank(rowNum + 1)
                             .build();

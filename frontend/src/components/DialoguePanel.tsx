@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Input, Button, Typography, Spin, message as antMsg, Modal, Dropdown, Tag } from 'antd';
+import { Input, Button, Typography, Spin, message as antMsg, Dropdown, Tag } from 'antd';
 import type { MenuProps } from 'antd';
 import {
   SendOutlined,
@@ -24,7 +24,6 @@ import {
   getDialogue,
   streamChat,
   uploadFile,
-  searchDocuments,
   UploadedFile,
   listDialogueMeetings,
   deleteDocument,
@@ -96,11 +95,7 @@ const DialoguePanel: React.FC<Props> = ({ activeDialogue, onDialogueUpdated, onS
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const [thinkingText, setThinkingText] = useState('');
   const [toolCalls, setToolCalls] = useState<ToolCallDisplay[]>([]);
-  const [searchVisible, setSearchVisible] = useState(false);
-  const [searchResults, setSearchResults] = useState<any[]>([]);
-  const [searchQuery, setSearchQuery] = useState('');
-  const [searching, setSearching] = useState(false);
-  const [uploadingFiles, setUploadingFiles] = useState<{ name: string; id?: number }[]>([]);
+    const [uploadingFiles, setUploadingFiles] = useState<{ name: string; id?: number }[]>([]);
   const [uploadAccept, setUploadAccept] = useState('');
   const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>([]);
   const [pendingFileCards, setPendingFileCards] = useState<PendingFileCard[]>([]);
@@ -431,30 +426,7 @@ const DialoguePanel: React.FC<Props> = ({ activeDialogue, onDialogueUpdated, onS
     setTimeout(() => fileInputRef.current?.click(), 0);
   };
 
-  const handleSearch = async (query: string) => {
-    if (!query.trim()) return;
-    setSearchQuery(query);
-    setSearching(true);
-    try {
-      const res = await searchDocuments(query);
-      setSearchResults(res.data?.data?.results || []);
-    } catch {
-      setSearchResults([]);
-    } finally {
-      setSearching(false);
-    }
-  };
-
-  const highlight = (text: string, keyword: string) => {
-    if (!keyword.trim()) return text;
-    const parts = text.split(new RegExp(`(${keyword.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi'));
-    return parts.map((part, i) =>
-      part.toLowerCase() === keyword.toLowerCase()
-        ? <Text type="warning" key={i}>{part}</Text>
-        : part
-    );
-  };
-
+  
   const handleFilePreview = useCallback(async (file: UploadedFile) => {
     setPreviewFile(file);
     setPreviewContent(null);
@@ -817,46 +789,6 @@ const DialoguePanel: React.FC<Props> = ({ activeDialogue, onDialogueUpdated, onS
         width={440}
       />
 
-      {/* Search Modal */}
-      <Modal
-        title="搜索会议内容"
-        open={searchVisible}
-        onCancel={() => { setSearchVisible(false); setSearchResults([]); setSearchQuery(''); }}
-        footer={null}
-        width={700}
-      >
-        <Input.Search
-          placeholder="输入关键词搜索会议内容..."
-          onSearch={handleSearch}
-          loading={searching}
-          size="large"
-          style={{ marginBottom: 16 }}
-        />
-        {searchResults.length > 0 && (
-          <div style={{ maxHeight: 400, overflow: 'auto' }}>
-            {searchResults.map((item: any, idx: number) => (
-              <div key={idx} style={{ padding: '10px 0', borderBottom: '1px solid #f0f0f0' }}>
-                <Text strong style={{ fontSize: 14 }}>
-                  {highlight(item.source || '', searchQuery)}
-                  {item.score != null && (
-                    <Text style={{ fontSize: 11, marginLeft: 6 }} type="secondary">
-                      {(item.score * 100).toFixed(0)}% 匹配
-                    </Text>
-                  )}
-                </Text>
-                <div style={{ fontSize: 13, color: 'var(--text-tertiary)', marginTop: 4, whiteSpace: 'pre-wrap' }}>
-                  {item.content
-                    ? highlight(item.content.substring(0, 200), searchQuery)
-                    : ''}
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-        {searchQuery && !searching && searchResults.length === 0 && (
-          <Text type="secondary">未找到相关结果</Text>
-        )}
-      </Modal>
     </div>
   );
 };

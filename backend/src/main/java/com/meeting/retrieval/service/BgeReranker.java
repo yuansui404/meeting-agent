@@ -134,7 +134,7 @@ public class BgeReranker implements Reranker {
             for (int i = 0; i < batchSize; i++) {
                 float e0 = (float) Math.exp(logits[i][0]);
                 float e1 = (float) Math.exp(logits[i][1]);
-                scores[i] = e1 / (e0 + e1);
+                scores[i] = 2.0f * e1 / (e0 + e1) - 1.0f;
             }
             return scores;
 

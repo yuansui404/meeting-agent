@@ -12,17 +12,21 @@ public final class ChunkMetadataParser {
     private ChunkMetadataParser() {}
 
     public static ParsedMetadata parse(String metadataJson, ObjectMapper objectMapper) {
-        if (metadataJson == null) return new ParsedMetadata("", null);
+        if (metadataJson == null) return new ParsedMetadata("", null, "", "", "");
         try {
             JsonNode meta = objectMapper.readTree(metadataJson);
             String fileName = meta.has("document_title") ? meta.get("document_title").asText() : "";
             LocalDate meetingDate = meta.has("meeting_date") ? LocalDate.parse(meta.get("meeting_date").asText()) : null;
-            return new ParsedMetadata(fileName, meetingDate);
+            String participants = meta.has("participants") ? meta.get("participants").asText() : "";
+            String topic = meta.has("topic") ? meta.get("topic").asText() : "";
+            String sectionHeading = meta.has("section_heading") ? meta.get("section_heading").asText() : "";
+            return new ParsedMetadata(fileName, meetingDate, participants, topic, sectionHeading);
         } catch (Exception e) {
             log.warn("Failed to parse chunk metadata: {}", e.getMessage());
-            return new ParsedMetadata("", null);
+            return new ParsedMetadata("", null, "", "", "");
         }
     }
 
-    public record ParsedMetadata(String fileName, LocalDate meetingDate) {}
+    public record ParsedMetadata(String fileName, LocalDate meetingDate,
+                                 String participants, String topic, String sectionHeading) {}
 }

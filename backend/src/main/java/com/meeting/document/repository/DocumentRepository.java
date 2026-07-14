@@ -15,7 +15,6 @@ import java.util.List;
 public interface DocumentRepository extends JpaRepository<DocumentEntity, Long> {
     List<DocumentEntity> findByStatusOrderByCreatedAtDesc(String status);
     Page<DocumentEntity> findAllByOrderByCreatedAtDesc(Pageable pageable);
-    List<DocumentEntity> findByStyleExemplarTrue();
     DocumentEntity findByFilePath(String filePath);
 
     @Query(value = "SELECT * FROM document WHERE title ILIKE '%' || :keyword || '%' ORDER BY created_at DESC LIMIT :limit", nativeQuery = true)

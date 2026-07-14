@@ -89,7 +89,6 @@ public class ChunkService {
                 chunkRepository.saveAll(chunks);
 
                 doc.setStatus("COMPLETED");
-                doc.setChunkCount(segments.size());
             });
 
             log.info("Document {} ETL completed, {} chunks", documentId, segments.size());

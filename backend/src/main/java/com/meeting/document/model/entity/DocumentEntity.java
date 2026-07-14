@@ -36,22 +36,11 @@ public class DocumentEntity {
     @Column(length = 20)
     private String status;
 
-    @Column(name = "chunk_count")
-    private Integer chunkCount;
-
-    @Column(columnDefinition = "TEXT")
-    private String transcription;
-
-    @Column(name = "style_exemplar")
-    private Boolean styleExemplar = false;
-
     @Column(name = "style_tags", length = 500)
     private String styleTags;
 
     @Column(columnDefinition = "TEXT")
     private String participants;
-
-    private Integer duration;
 
     @Column(name = "md_file_path", length = 500)
     private String mdFilePath;
@@ -71,8 +60,7 @@ public class DocumentEntity {
         createdAt = LocalDateTime.now();
         updatedAt = LocalDateTime.now();
         if (status == null) status = "UPLOADED";
-        if (chunkCount == null) chunkCount = 0;
-    }
+            }
 
     @PreUpdate
     protected void onUpdate() {

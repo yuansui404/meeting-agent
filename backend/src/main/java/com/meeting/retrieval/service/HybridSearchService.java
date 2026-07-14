@@ -7,9 +7,11 @@ import com.meeting.document.repository.DocumentChunkRepository;
 import com.meeting.retrieval.algorithm.CitationBuilder;
 import com.meeting.retrieval.algorithm.EvidenceEvaluator;
 import com.meeting.retrieval.algorithm.RrfMerger;
+import com.meeting.retrieval.model.ChunkMetadataParser;
 import com.meeting.retrieval.model.ChunkResult;
 import com.meeting.retrieval.model.Citation;
 import com.meeting.retrieval.model.EvidenceLevel;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -36,6 +38,7 @@ public class HybridSearchService {
     private final CitationBuilder citationBuilder;
     private final RagProperties ragProperties;
     private final DocumentChunkRepository chunkRepository;
+    private final ObjectMapper objectMapper;
     @Qualifier("llmTaskExecutor")
     private final TaskExecutor taskExecutor;
 
@@ -44,12 +47,11 @@ public class HybridSearchService {
             String evidenceLevel,
             List<Citation> citations,
             String queryUsed,
-            double topScore,
             String strategyUsed,
             int totalCandidates
     ) {}
 
-    public SearchResult search(String query, String timeRange) {
+    public SearchResult search(String query) {
         // 日志用
         TtlMdcAdapter.setLayer("RETRIEVAL");
         try {
@@ -85,12 +87,15 @@ public class HybridSearchService {
             merged = applyDecayWithIntent(merged, plan.timeIntent(), plan.timeRange());
 
             // Step 5: Evaluate evidence
-            double finalTopScore = merged.isEmpty() ? 0.0 : merged.get(0).getFinalScore();
             EvidenceLevel evidenceLevel = evidenceEvaluator.evaluate(merged, vectorResults.size(), ftsResults.size());
 
-            // Step 6: Expand neighbors (same document chunks are complementary, not redundant)
+            // Step 6: Expand neighbors only when evidence is at least PARTIAL
+            // Hits are reliable → neighbors add useful context.
+            // WEAK/NONE → hits themselves are unreliable, skip to avoid amplifying noise.
             int totalCandidates = merged.size();
-            merged = expandNeighbors(merged);
+            if (evidenceLevel.ordinal() >= EvidenceLevel.PARTIAL.ordinal()) {
+                merged = expandNeighbors(merged);
+            }
 
             // Step 7: Build citations
             List<Citation> citations = citationBuilder.build(merged);
@@ -98,18 +103,10 @@ public class HybridSearchService {
             log.info("Hybrid search complete: query={}, chunks={}, evidence={}, strategy={}",
                     actualQuery, merged.size(), evidenceLevel, plan.strategy());
 
-            return new SearchResult(merged, evidenceLevel.name(), citations, actualQuery, finalTopScore, plan.strategy(), totalCandidates);
+            return new SearchResult(merged, evidenceLevel.name(), citations, actualQuery, plan.strategy(), totalCandidates);
         } finally {
             TtlMdcAdapter.remove("layer");
         }
-    }
-
-    private List<ChunkResult> executeSearch(String query) {
-        CompletableFuture<List<ChunkResult>> vectorF = CompletableFuture.supplyAsync(() ->
-                vectorSearchService.search(query, ragProperties.getRetrieval().getVectorTopk()), taskExecutor);
-        CompletableFuture<List<ChunkResult>> ftsF = CompletableFuture.supplyAsync(() ->
-                fullTextSearchService.search(query, ragProperties.getRetrieval().getFtsTopk()), taskExecutor);
-        return rrfMerger.merge(vectorF.join(), ftsF.join(), ragProperties.getRetrieval().getRrfK());
     }
 
     /**
@@ -195,12 +192,18 @@ public class HybridSearchService {
                 if (Math.abs(n.getChunkIndex() - r.getChunkIndex()) <= 1
                         && !seenIds.contains(n.getId())) {
                     seenIds.add(n.getId());
+                    var parsed = ChunkMetadataParser.parse(n.getMetadata(), objectMapper);
                     expanded.add(ChunkResult.builder()
                             .chunkId(n.getId())
                             .documentId(n.getDocumentId())
                             .content(n.getContent())
                             .chunkIndex(n.getChunkIndex())
                             .speaker(n.getSpeaker())
+                            .fileName(parsed.fileName())
+                            .meetingDate(parsed.meetingDate())
+                            .participants(parsed.participants())
+                            .topic(parsed.topic())
+                            .sectionHeading(parsed.sectionHeading())
                             .build());
                 }
             }

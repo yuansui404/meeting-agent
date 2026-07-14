@@ -1,18 +1,18 @@
 import React, { useState } from 'react';
 import { Input, List, Typography, Space } from 'antd';
-import { SearchOutlined } from '@ant-design/icons';
-import { searchDocuments, Dialogue } from '../services/api';
+import { SearchOutlined, FileTextOutlined } from '@ant-design/icons';
+import { searchDocumentsByTitle, RagDocument } from '../services/api';
 
 const { Text } = Typography;
 
 interface Props {
-  dialogues: Dialogue[];
+  dialogues: never[];
   compact?: boolean;
 }
 
-const SearchPanel: React.FC<Props> = ({ dialogues, compact }) => {
+const SearchPanel: React.FC<Props> = ({ compact }) => {
   const [query, setQuery] = useState('');
-  const [results, setResults] = useState<any[]>([]);
+  const [results, setResults] = useState<RagDocument[]>([]);
   const [searched, setSearched] = useState(false);
   const [loading, setLoading] = useState(false);
 
@@ -22,8 +22,8 @@ const SearchPanel: React.FC<Props> = ({ dialogues, compact }) => {
     setSearched(true);
     setLoading(true);
     try {
-      const res = await searchDocuments(value);
-      setResults(res.data?.data?.results || []);
+      const res = await searchDocumentsByTitle(value);
+      setResults(res.data?.data || []);
     } catch {
       setResults([]);
     } finally {
@@ -45,7 +45,7 @@ const SearchPanel: React.FC<Props> = ({ dialogues, compact }) => {
     <div style={{ padding: compact ? '8px 16px' : 0 }}>
       <Space.Compact style={{ width: '100%', marginBottom: 12 }}>
         <Input
-          placeholder="搜索文档内容..."
+          placeholder="搜索文档标题..."
           prefix={<SearchOutlined />}
           onPressEnter={(e) => handleSearch((e.target as HTMLInputElement).value)}
           style={{ flex: 1, fontSize: compact ? 13 : 14 }}
@@ -56,26 +56,22 @@ const SearchPanel: React.FC<Props> = ({ dialogues, compact }) => {
         <List
           dataSource={results}
           loading={loading}
-          locale={{ emptyText: `未找到相关结果` }}
-          renderItem={(item: any, idx: number) => (
-            <List.Item key={idx} style={{ padding: '6px 0', border: 'none' }}>
+          locale={{ emptyText: `未找到相关文档` }}
+          renderItem={(item: RagDocument) => (
+            <List.Item style={{ padding: '6px 0', border: 'none' }}>
               <List.Item.Meta
+                avatar={<FileTextOutlined style={{ fontSize: 18, color: '#999' }} />}
                 title={
                   <Text style={{ fontSize: 13 }} strong>
-                    {highlight(item.source || '', query)}
-                    {item.score != null && (
-                      <Text style={{ fontSize: 11, marginLeft: 6 }} type="secondary">
-                        {(item.score * 100).toFixed(0)}% 匹配
-                      </Text>
-                    )}
+                    {highlight(item.title, query)}
                   </Text>
                 }
                 description={
-                  <Text style={{ fontSize: 12, whiteSpace: 'pre-wrap', display: 'block' }} ellipsis>
-                    {item.content
-                      ? highlight(item.content.substring(0, 100), query)
-                      : ''}
-                  </Text>
+                  item.meetingDate && (
+                    <Text style={{ fontSize: 11 }} type="secondary">
+                      {item.meetingDate}
+                    </Text>
+                  )
                 }
               />
             </List.Item>
