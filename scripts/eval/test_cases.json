@@ -1,0 +1,92 @@
+[
+  {
+    "id": 11,
+    "question": "工业互联网的业务规划是什么？",
+    "groundTruthDocIds": [12],
+    "groundTruthAnswer": "2026年工业互联网业务规划方向",
+    "topic": "战略",
+    "queryType": "fact",
+    "difficulty": "Easy"
+  },
+  {
+    "id": 12,
+    "question": "2026年工业互联网有哪些重点方向？",
+    "groundTruthDocIds": [12],
+    "groundTruthAnswer": "2026年工业互联网重点发展方向",
+    "topic": "战略",
+    "queryType": "summary",
+    "difficulty": "Medium"
+  },
+  {
+    "id": 13,
+    "question": "工业互联网的目标市场是什么？",
+    "groundTruthDocIds": [12],
+    "groundTruthAnswer": "工业互联网目标市场定位",
+    "topic": "战略",
+    "queryType": "fact",
+    "difficulty": "Easy"
+  },
+  {
+    "id": 14,
+    "question": "工业互联网业务的竞争优势是什么？",
+    "groundTruthDocIds": [12],
+    "groundTruthAnswer": "工业互联网竞争优势分析",
+    "topic": "战略",
+    "queryType": "fact",
+    "difficulty": "Medium"
+  },
+  {
+    "id": 15,
+    "question": "工业互联网的预期收益和投入成本是多少？",
+    "groundTruthDocIds": [12],
+    "groundTruthAnswer": "工业互联网投入产出分析",
+    "topic": "战略",
+    "queryType": "fact",
+    "difficulty": "Medium"
+  },
+  {
+    "id": 16,
+    "question": "谁负责工业互联网项目的推进？",
+    "groundTruthDocIds": [12],
+    "groundTruthAnswer": "项目组织架构和负责人",
+    "topic": "战略",
+    "queryType": "fact",
+    "difficulty": "Easy"
+  },
+  {
+    "id": 17,
+    "question": "工业互联网项目的时间规划是怎样的？",
+    "groundTruthDocIds": [12],
+    "groundTruthAnswer": "工业互联网项目里程碑计划",
+    "topic": "战略",
+    "queryType": "summary",
+    "difficulty": "Medium"
+  },
+  {
+    "id": 18,
+    "question": "工业互联网业务汇报中提到了哪些技术方案？",
+    "groundTruthDocIds": [12],
+    "groundTruthAnswer": "工业互联网技术方案选型",
+    "topic": "技术",
+    "queryType": "fact",
+    "difficulty": "Medium"
+  },
+  {
+    "id": 19,
+    "question": "工业互联网的市场规模预测是多少？",
+    "groundTruthDocIds": [12],
+    "groundTruthAnswer": "工业互联网市场规模数据",
+    "topic": "战略",
+    "queryType": "fact",
+    "difficulty": "Hard"
+  },
+  {
+    "id": 20,
+    "question": "工业互联网汇报会议有哪些人参加？",
+    "groundTruthDocIds": [12],
+    "groundTruthAnswer": "工业互联网汇报会议参会人员",
+    "topic": "战略",
+    "queryType": "fact",
+    "difficulty": "Easy"
+  }
+]
