@@ -25,6 +25,18 @@ import java.time.LocalDateTime;
         """,
     resultSetMapping = "VectorSearchHitMapping"
 )
+@NamedNativeQuery(
+    name = "DocumentChunkEntity.styleExemplarSearch",
+    query = """
+        SELECT id, document_id, content, chunk_index, speaker, metadata,
+               1 - (embedding <=> CAST(:embedding AS vector)) AS similarity
+        FROM document_chunk
+        WHERE embedding IS NOT NULL
+        ORDER BY 1 - (embedding <=> CAST(:embedding AS vector)) DESC
+        LIMIT :topK
+        """,
+    resultSetMapping = "VectorSearchHitMapping"
+)
 @SqlResultSetMapping(
     name = "VectorSearchHitMapping",
     classes = @ConstructorResult(

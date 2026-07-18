@@ -174,7 +174,7 @@ public class ProfileService {
         return sb.toString();
     }
 
-    /** Build file index from DB metadata (enabled only). Injected into user message for Agent awareness. */
+    /** Build file index from DB metadata (enabled only), filtering out files that don't exist on disk. */
     public String buildFileIndex() {
         List<ProfileMetadataEntity> metas = metadataRepo.findAllByEnabledTrueOrderByFilenameAsc();
         if (metas.isEmpty()) return "";
@@ -182,6 +182,8 @@ public class ProfileService {
         StringBuilder sb = new StringBuilder();
         sb.append("=== 可用的用户画像文件 ===\n");
         for (ProfileMetadataEntity meta : metas) {
+            Path file = profileDir.resolve(meta.getFilename());
+            if (!Files.exists(file)) continue;
             sb.append("- ").append(meta.getFilename());
             if (meta.getDescription() != null && !meta.getDescription().isBlank()) {
                 sb.append(" — ").append(meta.getDescription());

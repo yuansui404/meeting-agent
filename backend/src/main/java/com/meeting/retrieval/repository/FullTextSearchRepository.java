@@ -21,9 +21,9 @@ public class FullTextSearchRepository {
     public List<ChunkResult> search(String query, int topK) {
         String sql = """
             SELECT c.id, c.document_id, c.content, c.chunk_index, c.speaker, c.metadata,
-                   ts_rank(c.content_tsv, plainto_tsquery('chinese', ?)) AS score
+                   ts_rank(c.content_tsv, to_tsquery('chinese', replace(plainto_tsquery('chinese', ?)::text, ' & ', ' | '))) AS score
             FROM document_chunk c
-            WHERE c.content_tsv @@ plainto_tsquery('chinese', ?)
+            WHERE c.content_tsv @@ to_tsquery('chinese', replace(plainto_tsquery('chinese', ?)::text, ' & ', ' | '))
             ORDER BY score DESC
             LIMIT ?
             """;

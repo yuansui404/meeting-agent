@@ -106,6 +106,22 @@ public class SessionService {
         return sessionRepository.save(entity);
     }
 
+    /**
+     * 如果对话标题仍是默认的"新对话"，则自动取用户第一条消息的前 maxLen 字作为标题。
+     */
+    @Transactional
+    public void autoTitleIfNeeded(Long id, String firstMessage) {
+        SessionEntity entity = sessionRepository.findById(id).orElse(null);
+        if (entity == null) return;
+        if (!"新对话".equals(entity.getTitle())) return;
+
+        String title = firstMessage.length() > 20
+                ? firstMessage.substring(0, 20) + "..."
+                : firstMessage;
+        entity.setTitle(title);
+        sessionRepository.save(entity);
+    }
+
     public List<FileMetadata> extractFilesFromState(Long sessionId) {
         SessionEntity session = sessionRepository.findById(sessionId)
                 .orElseThrow(() -> new IllegalArgumentException("Session not found: " + sessionId));

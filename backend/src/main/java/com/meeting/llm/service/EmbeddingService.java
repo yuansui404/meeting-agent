@@ -6,6 +6,8 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestClient;
 
+import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 
@@ -63,6 +65,24 @@ public class EmbeddingService {
     }
 
     /**
+     * Batch embedding — sends all texts in a single API call.
+     * Much faster than calling generateEmbedding() in a loop.
+     */
+    public List<float[]> generateEmbeddings(List<String> texts) {
+        if (texts.isEmpty()) {
+            return List.of();
+        }
+        if (restClient == null) {
+            log.warn("Embedding API key not configured, falling back to simple embedding");
+            return texts.stream().map(this::generateSimpleEmbedding).toList();
+        }
+        return switch (embeddingProps.provider()) {
+            case "openai", "deepseek" -> callEmbeddingApiBatch(texts);
+            default -> texts.stream().map(this::generateSimpleEmbedding).toList();
+        };
+    }
+
+    /**
      * Call OpenAI-compatible embedding API (works with OpenAI, DeepSeek, and other compatible providers).
      */
     @SuppressWarnings("unchecked")
@@ -97,6 +117,52 @@ public class EmbeddingService {
             return embedding;
         } catch (Exception e) {
             log.error("Embedding API call failed (provider={}): {}", embeddingProps.provider(), e.getMessage(), e);
+            throw e;
+        }
+    }
+
+    /**
+     * Batch variant — sends multiple texts in one API call.
+     */
+    @SuppressWarnings("unchecked")
+    private List<float[]> callEmbeddingApiBatch(List<String> texts) {
+        log.debug("Batch embedding {} texts: provider={}, model={}", texts.size(), embeddingProps.provider(), embeddingProps.model());
+        try {
+            Map<String, Object> request = Map.of(
+                    "model", embeddingProps.model(),
+                    "input", texts
+            );
+
+            Map<String, Object> response = restClient.post()
+                    .body(request)
+                    .retrieve()
+                    .body(Map.class);
+
+            if (response == null) {
+                throw new RuntimeException("Embedding API returned null response");
+            }
+
+            List<Map<String, Object>> data = (List<Map<String, Object>>) response.get("data");
+            if (data == null || data.isEmpty()) {
+                throw new RuntimeException("Embedding API returned empty data");
+            }
+
+            // Sort by index to match input order (OpenAI spec guarantees index field)
+            data.sort(Comparator.comparingInt(d -> (int) d.get("index")));
+
+            List<float[]> embeddings = new ArrayList<>(data.size());
+            for (Map<String, Object> entry : data) {
+                List<Double> embeddingList = (List<Double>) entry.get("embedding");
+                float[] embedding = new float[embeddingList.size()];
+                for (int i = 0; i < embeddingList.size(); i++) {
+                    embedding[i] = embeddingList.get(i).floatValue();
+                }
+                embeddings.add(embedding);
+            }
+            log.debug("Generated {} embeddings (dim={})", embeddings.size(), embeddings.getFirst().length);
+            return embeddings;
+        } catch (Exception e) {
+            log.error("Batch embedding API call failed (provider={}): {}", embeddingProps.provider(), e.getMessage(), e);
             throw e;
         }
     }

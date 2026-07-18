@@ -90,8 +90,8 @@ public class FileProcessingService {
         try {
             ProcessBuilder pb = new ProcessBuilder(
                     "ffmpeg", "-i", videoPath.toString(),
-                    "-vn", "-acodec", "pcm_s16le",
-                    "-ar", "16000", "-ac", "1",
+                    "-vn", "-c:a", "libmp3lame",
+                    "-b:a", "32k", "-ar", "16000", "-ac", "1",
                     "-y", audioPath.toString()
             );
             pb.redirectErrorStream(true);
@@ -189,7 +189,7 @@ public class FileProcessingService {
         String name = videoPath.getFileName().toString();
         int dot = name.lastIndexOf('.');
         String baseName = dot >= 0 ? name.substring(0, dot) : name;
-        return videoPath.getParent().resolve(baseName + ".wav");
+        return videoPath.getParent().resolve(baseName + ".mp3");
     }
 
     private static final Set<String> TEXT_FORMATS = Set.of(

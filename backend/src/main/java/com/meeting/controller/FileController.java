@@ -32,7 +32,7 @@ public class FileController {
     private final TranscriptionService transcriptionService;
     private final SessionService sessionService;
 
-    private static final long MAX_FILE_SIZE = 10L * 1024 * 1024;       // 10MB per file
+    private static final long MAX_FILE_SIZE = 100L * 1024 * 1024;       // 100MB per file
     private static final long MAX_TOTAL_SIZE = 100L * 1024 * 1024;     // 100MB total
     private static final int MAX_FILE_COUNT = 10;
 
@@ -44,6 +44,9 @@ public class FileController {
 
         String ext = FileProcessingService.getExtension(file.getOriginalFilename());
         FileMetadata fileMeta = fileProcessingService.saveDialogueFile(file, dialogueId);
+
+        log.info("File uploaded: name={}, size={}, ext={}, dialogueId={}, fileId={}",
+                fileMeta.fileName(), fileMeta.fileSize(), ext, dialogueId, fileMeta.fileId());
 
         if (FileProcessingService.isTranscribable(ext)) {
             transcriptionService.startTranscription(fileMeta.filePath(), fileMeta.fileName(), dialogueId);

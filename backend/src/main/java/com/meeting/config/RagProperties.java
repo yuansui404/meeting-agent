@@ -16,7 +16,6 @@ public class RagProperties {
     public static class Chunk {
         private String strategy = "structural";
         private int size = 512;
-        private int overlap = 128;
     }
 
     @Data

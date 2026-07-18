@@ -6,10 +6,12 @@ import com.meeting.controller.dto.request.UpdateTitleRequest;
 import com.meeting.conversation.service.SessionService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.Map;
 
+@Slf4j
 @RestController
 @RequestMapping("/api")
 @RequiredArgsConstructor
@@ -21,6 +23,7 @@ public class SessionController {
     public ApiResponse<Map<String, Object>> createSession(@Valid @RequestBody CreateSessionRequest request) {
         String title = request.title() != null ? request.title() : "新对话";
         var session = sessionService.createSession(title, request.meetingId());
+        log.info("Dialogue created: id={}, title={}, meetingId={}", session.getId(), title, request.meetingId());
         return ApiResponse.ok(Map.of("dialogueId", session.getId()));
     }
 

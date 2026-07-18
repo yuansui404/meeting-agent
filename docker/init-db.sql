@@ -108,6 +108,18 @@ ALTER TABLE document_chunk ADD COLUMN content_tsv tsvector
 CREATE INDEX IF NOT EXISTS idx_chunk_content_tsv ON document_chunk USING gin (content_tsv);
 
 -- ============================================================
+-- 模板配置表
+-- ============================================================
+CREATE TABLE IF NOT EXISTS template_config (
+    id BIGSERIAL PRIMARY KEY,
+    name VARCHAR(255) NOT NULL,
+    file_path VARCHAR(500) NOT NULL,
+    style_tags VARCHAR(500),
+    created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+-- ============================================================
 -- Profile 元数据表
 -- ============================================================
 CREATE TABLE IF NOT EXISTS profile_metadata (

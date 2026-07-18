@@ -40,9 +40,11 @@ const { TextArea } = Input;
 
 interface Props {
   activeDialogue: Dialogue | null;
+  freshDialogue?: boolean;
   onDialogueUpdated: () => void;
   onStartChat: (message: string) => Promise<Dialogue | null>;
   onCreateDialogue: () => Promise<Dialogue | null>;
+  onDialogueUsed?: () => void;
 }
 
 interface StreamingState {
@@ -86,8 +88,9 @@ interface PendingFileCard {
   uploading: boolean;
 }
 
-const DialoguePanel: React.FC<Props> = ({ activeDialogue, onDialogueUpdated, onStartChat, onCreateDialogue }) => {
+const DialoguePanel: React.FC<Props> = ({ activeDialogue, freshDialogue, onDialogueUpdated, onStartChat, onCreateDialogue, onDialogueUsed }) => {
   const [messages, setMessages] = useState<DisplayMessage[]>([]);
+  const [messagesLoaded, setMessagesLoaded] = useState(false);
   const [input, setInput] = useState('');
   const [sending, setSending] = useState(false);
   const [streaming, setStreaming] = useState<StreamingState>({ content: '', active: false });
@@ -106,13 +109,19 @@ const DialoguePanel: React.FC<Props> = ({ activeDialogue, onDialogueUpdated, onS
   const abortRef = useRef<AbortController | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const streamingContentRef = useRef('');
+  const handleSuggestionClickRef = useRef<(text: string) => Promise<void>>(async () => {});
+
+  const showWelcome = !activeDialogue || freshDialogue || (messagesLoaded && messages.length === 0);
 
   useEffect(() => {
     if (activeDialogue) {
+      setMessagesLoaded(false);
+      setMessages([]);
       loadFiles(activeDialogue.id);
       loadMessages(activeDialogue.id);
     } else {
       setMessages([]);
+      setMessagesLoaded(false);
       setStreaming({ content: '', active: false });
       setUploadedFiles([]);
     }
@@ -179,6 +188,7 @@ const DialoguePanel: React.FC<Props> = ({ activeDialogue, onDialogueUpdated, onS
         })),
       }));
       setMessages(msgs);
+      setMessagesLoaded(true);
       // 最后一条是 user 消息，说明正在生成中
       if (msgs.length > 0 && msgs[msgs.length - 1].role === 'user') {
         setGenerating(true);
@@ -231,6 +241,7 @@ const DialoguePanel: React.FC<Props> = ({ activeDialogue, onDialogueUpdated, onS
   };
 
   const sendMessage = useCallback(async (content: string, dialogueId: number) => {
+    onDialogueUsed?.();
     setSending(true);
     setInput('');
     setGenerating(false);
@@ -312,7 +323,7 @@ const DialoguePanel: React.FC<Props> = ({ activeDialogue, onDialogueUpdated, onS
       setSending(false);
       antMsg.error('发送失败: ' + err.message);
     }
-  }, [onDialogueUpdated, pendingFileCards]);
+  }, [onDialogueUpdated, pendingFileCards, onDialogueUsed]);
 
   const handleSend = useCallback(async () => {
     const content = input.trim();
@@ -321,10 +332,10 @@ const DialoguePanel: React.FC<Props> = ({ activeDialogue, onDialogueUpdated, onS
     if (activeDialogue) {
       await sendMessage(content, activeDialogue.id);
     } else {
-      // Auto-create dialogue and then send
+      console.log('[DialogueCreate] handleSend: 无活跃对话，触发 auto-create, content=' + content);
+      console.trace();
       const newDialogue = await onStartChat(content);
       if (newDialogue) {
-        // Wait for state to settle, then send
         setTimeout(() => sendMessage(content, newDialogue.id), 100);
       }
     }
@@ -338,12 +349,15 @@ const DialoguePanel: React.FC<Props> = ({ activeDialogue, onDialogueUpdated, onS
     if (activeDialogue) {
       await sendMessage(text, activeDialogue.id);
     } else {
+      console.log('[DialogueCreate] handleSuggestionClick: 无活跃对话，触发 auto-create, text=' + text);
+      console.trace();
       const newDialogue = await onStartChat(text);
       if (newDialogue) {
         setTimeout(() => sendMessage(text, newDialogue.id), 100);
       }
     }
   };
+  handleSuggestionClickRef.current = handleSuggestionClick;
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -377,6 +391,8 @@ const DialoguePanel: React.FC<Props> = ({ activeDialogue, onDialogueUpdated, onS
 
     let dialogue = activeDialogue;
     if (!dialogue) {
+      console.log('[DialogueCreate] handleFileUpload: 无活跃对话，触发 auto-create');
+      console.trace();
       dialogue = await onCreateDialogue();
       if (!dialogue) return;
     }
@@ -463,7 +479,7 @@ const DialoguePanel: React.FC<Props> = ({ activeDialogue, onDialogueUpdated, onS
       </div>
       {/* Messages / Welcome area */}
       <div style={{ flex: 1, overflow: 'auto', padding: 0 }}>
-        {activeDialogue ? (
+        {!showWelcome ? (
           <div style={{ maxWidth: 800, margin: '0 auto', padding: '20px 0' }}>
             {messages.map((msg) => (
               <MessageBubble key={msg.id} message={msg} onFilePreview={handleFilePreview} />
@@ -577,7 +593,7 @@ const DialoguePanel: React.FC<Props> = ({ activeDialogue, onDialogueUpdated, onS
                   placeholder="提问..."
                   value={input}
                   onChange={(e) => setInput(e.target.value)}
-                  onPressEnter={handleSend}
+                  onPressEnter={() => handleSendRef.current()}
                   variant="borderless"
                   style={{ flex: 1, fontSize: 15, background: 'transparent' }}
                 />
@@ -606,7 +622,7 @@ const DialoguePanel: React.FC<Props> = ({ activeDialogue, onDialogueUpdated, onS
                     boxShadow: '0 1px 4px rgba(0,0,0,0.04)',
                     fontSize: 14, fontWeight: 500,
                   }}
-                  onClick={() => handleSuggestionClick(s.text)}
+                  onClick={() => handleSuggestionClickRef.current(s.text)}
                 >
                   {s.text}
                 </Button>
@@ -623,9 +639,9 @@ const DialoguePanel: React.FC<Props> = ({ activeDialogue, onDialogueUpdated, onS
 
       {/* Input area */}
       <div style={{
-          borderTop: activeDialogue ? '1px solid var(--border-color)' : 'none',
+          borderTop: !showWelcome ? '1px solid var(--border-color)' : 'none',
           background: 'var(--app-bg)',
-          padding: activeDialogue ? '8px 24px 16px' : '0 24px 16px',
+          padding: !showWelcome ? '8px 24px 16px' : '0 24px 16px',
         }}>
         <div style={{ maxWidth: 800, margin: '0 auto' }}>
           {/* Integrated input container */}
@@ -702,8 +718,8 @@ const DialoguePanel: React.FC<Props> = ({ activeDialogue, onDialogueUpdated, onS
               </div>
             )}
 
-            {/* Text input row — only when in a conversation */}
-            {activeDialogue && (
+            {/* Text input row — only when not in welcome/fresh state */}
+            {!showWelcome && (
             <div style={{
               display: 'flex',
               gap: 8,

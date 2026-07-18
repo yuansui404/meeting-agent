@@ -60,6 +60,24 @@ public class FileContextBuilder {
 
         long size = fm.fileSize() != null ? fm.fileSize() : 0;
         if (size > MAX_FILE_SIZE) {
+            // For large audio/video files, try sidecar transcription file
+            if (FileProcessingService.isTranscribable(fm.ext().toLowerCase())) {
+                Path transcriptionPath = Path.of(fm.filePath() + ".transcription.md");
+                if (Files.exists(transcriptionPath)) {
+                    try {
+                        String transcription = Files.readString(transcriptionPath, StandardCharsets.UTF_8);
+                        if (transcription != null && !transcription.isBlank()) {
+                            String preview = transcription.length() > MAX_PREVIEW_LENGTH
+                                    ? transcription.substring(0, MAX_PREVIEW_LENGTH) + "..."
+                                    : transcription;
+                            sb.append("【来源：").append(fm.fileName()).append(" — 录音转写】\n").append(preview).append("\n\n");
+                            return;
+                        }
+                    } catch (IOException e) {
+                        log.warn("Failed to read transcription sidecar file: {}", transcriptionPath);
+                    }
+                }
+            }
             sb.append("【来源：").append(fm.fileName()).append("】（文件过大，跳过内容提取）\n");
             return;
         }
@@ -98,6 +116,7 @@ public class FileContextBuilder {
             }
             return null;
         } catch (Exception e) {
+            log.warn("Failed to extract file content: {} (ext={})", filePath, ext, e);
             return null;
         }
     }

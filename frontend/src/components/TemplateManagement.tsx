@@ -15,8 +15,8 @@ import {
   listTemplates,
   deleteTemplate,
   getTemplateDownloadUrl,
-  getTemplatePreview,
 } from '../services/template';
+import { getFileBlob } from '../services/api';
 
 const { Text } = Typography;
 
@@ -109,8 +109,12 @@ const TemplateManagement: React.FC<Props> = ({ visible, onClose }) => {
     setPreviewModalOpen(true);
     setPreviewLoading(true);
     try {
-      const res = await getTemplatePreview(tpl.id);
-      setPreviewContent(res.data?.data || null);
+      const url = getTemplateDownloadUrl(tpl.id);
+      const blob = await getFileBlob(url);
+      const arrayBuffer = await blob.arrayBuffer();
+      const mammoth = await import('mammoth');
+      const result = await mammoth.convertToHtml({ arrayBuffer });
+      setPreviewContent(result.value);
     } catch {
       setPreviewContent(null);
     }
@@ -350,7 +354,7 @@ const TemplateManagement: React.FC<Props> = ({ visible, onClose }) => {
         open={previewModalOpen}
         onCancel={() => { setPreviewModalOpen(false); setPreviewContent(null); }}
         footer={null}
-        width={640}
+        width={720}
         destroyOnClose
       >
         {previewLoading ? (
@@ -358,19 +362,20 @@ const TemplateManagement: React.FC<Props> = ({ visible, onClose }) => {
             <Spin size="small" />
           </div>
         ) : previewContent ? (
-          <div style={{
-            maxHeight: 480,
-            overflow: 'auto',
-            background: '#f5f5f5',
-            padding: 16,
-            borderRadius: 6,
-            fontSize: 13,
-            lineHeight: 1.7,
-            whiteSpace: 'pre-wrap',
-            wordBreak: 'break-word',
-          }}>
-            {previewContent}
-          </div>
+          <>
+            <style>{`
+              .docx-preview table { border-collapse: collapse; width: 100%; margin: 12px 0; font-size: 13px; }
+              .docx-preview table td, .docx-preview table th { border: 1px solid #d0d0d0; padding: 8px 10px; text-align: left; vertical-align: top; }
+              .docx-preview table th { background: #f0f0f0; font-weight: 600; }
+              .docx-preview p { margin: 0 0 8px 0; }
+              .docx-preview h1, .docx-preview h2, .docx-preview h3,
+              .docx-preview h4, .docx-preview h5, .docx-preview h6 { margin: 16px 0 8px 0; }
+            `}</style>
+            <div className="docx-preview" style={{
+              maxHeight: 480, overflow: 'auto', padding: 16, borderRadius: 6,
+              fontSize: 14, lineHeight: 1.8, wordBreak: 'break-word',
+            }} dangerouslySetInnerHTML={{ __html: previewContent }} />
+          </>
         ) : (
           <Empty description="无法加载预览内容" />
         )}

@@ -32,6 +32,7 @@ public class DocumentUploadService {
     private final ChunkService chunkService;
     private final FileProperties fileProperties;
     private final MeetingMinutesPreprocessor meetingMinutesPreprocessor;
+    private final AttendeeProfileUpdater attendeeProfileUpdater;
 
     private Path getUploadDir() {
         return Paths.get(fileProperties.uploadDir(), "rag-documents");
@@ -105,6 +106,9 @@ public class DocumentUploadService {
             documentRepository.save(doc);
 
             chunkService.processDocument(documentId, result.cleanedText());
+
+            // 提取与会人并增量更新用户画像
+            attendeeProfileUpdater.updateFromDocument(result, doc);
         } catch (Exception e) {
             log.error("Async document processing failed for id={}", documentId, e);
             // Mark as failed

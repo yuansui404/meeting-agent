@@ -87,7 +87,7 @@ public class HybridSearchService {
             merged = applyDecayWithIntent(merged, plan.timeIntent(), plan.timeRange());
 
             // Step 5: Evaluate evidence
-            EvidenceLevel evidenceLevel = evidenceEvaluator.evaluate(merged, vectorResults.size(), ftsResults.size());
+            EvidenceLevel evidenceLevel = evidenceEvaluator.evaluate(merged, vectorResults, ftsResults);
 
             // Step 6: Expand neighbors only when evidence is at least PARTIAL
             // Hits are reliable → neighbors add useful context.

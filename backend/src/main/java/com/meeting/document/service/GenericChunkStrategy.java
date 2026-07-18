@@ -69,8 +69,13 @@ public class GenericChunkStrategy implements ChunkStrategy {
                 current.append(tableBuffer);
                 tableBuffer.setLength(0);
                 if (current.length() >= triggerSize) {
-                    flushCurrentBuffer(current, config, triggerSize, currentTopic,
-                            lastSectionHeading, documentTitle, segments, chunkIndex, currentSpeaker);
+                    String content = current.toString();
+                    int splitAt = findSentenceBoundary(content, triggerSize);
+                    if (splitAt > 0) {
+                        segments.add(buildSegment(content.substring(0, splitAt), chunkIndex++, currentSpeaker,
+                                currentTopic, lastSectionHeading, documentTitle));
+                        current = new StringBuilder(content.substring(splitAt));
+                    }
                     chunkIndex = segments.size();
                 }
             }
@@ -88,11 +93,6 @@ public class GenericChunkStrategy implements ChunkStrategy {
                         segments.add(buildSegment(current.toString(), chunkIndex++, currentSpeaker,
                                 currentTopic, lastSectionHeading, documentTitle));
                         current = new StringBuilder();
-                        if (config.getOverlap() > 0 && !segments.isEmpty()) {
-                            String prevContent = segments.get(segments.size() - 1).getContent();
-                            int overlapStart = findOverlapStart(prevContent, config.getOverlap());
-                            current.append("[overlap]").append(prevContent.substring(overlapStart)).append("\n");
-                        }
                     }
                 }
 
@@ -187,7 +187,6 @@ public class GenericChunkStrategy implements ChunkStrategy {
             String trimmed = line.trim();
             if (trimmed.isEmpty()) continue;
             if (trimmed.startsWith("#")) continue;
-            if (trimmed.startsWith("[overlap]")) continue;
             return true;
         }
         return false;
@@ -221,35 +220,5 @@ public class GenericChunkStrategy implements ChunkStrategy {
             }
         }
         return near;
-    }
-
-    private int findOverlapStart(String text, int overlapLength) {
-        int desired = text.length() - overlapLength;
-        if (desired <= 0) return 0;
-        int start = Math.max(0, desired);
-        for (int i = start; i < Math.min(text.length(), desired + 200); i++) {
-            char c = text.charAt(i);
-            if (c == '。' || c == '！' || c == '？' || c == '\n') {
-                return i + 1;
-            }
-        }
-        return start;
-    }
-
-    private void flushCurrentBuffer(StringBuilder current, RagProperties.Chunk config, int triggerSize,
-                                     String currentTopic, String lastSectionHeading, String documentTitle,
-                                     List<ChunkSegment> segments, int chunkIndex, String currentSpeaker) {
-        String content = current.toString();
-        int splitAt = findSentenceBoundary(content, triggerSize);
-        if (splitAt > 0) {
-            segments.add(buildSegment(content.substring(0, splitAt), chunkIndex, currentSpeaker,
-                    currentTopic, lastSectionHeading, documentTitle));
-            current.setLength(0);
-            if (config.getOverlap() > 0 && !segments.isEmpty()) {
-                String prevContent = segments.get(segments.size() - 1).getContent();
-                int overlapStart = findOverlapStart(prevContent, config.getOverlap());
-                current.append("[overlap]").append(prevContent.substring(overlapStart)).append("\n");
-            }
-        }
     }
 }

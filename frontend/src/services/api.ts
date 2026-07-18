@@ -4,6 +4,16 @@ export const api = axios.create({
   baseURL: process.env.REACT_APP_API_URL || 'http://localhost:8080/api',
 });
 
+// 拦截所有对话创建请求，用于排查"新对话"被自动创建的问题
+api.interceptors.request.use(config => {
+  if (config.method === 'post' && config.url === '/dialogue') {
+    console.log('[DialogueCreate] axios POST /dialogue intercepted');
+    console.log('  body:', JSON.stringify(config.data));
+    console.trace();
+  }
+  return config;
+});
+
 export interface Dialogue {
   id: number;
   title: string;

@@ -39,12 +39,14 @@ public class DocxExportService {
         try (XWPFDocument doc = new XWPFDocument(Files.newInputStream(templatePath))) {
             // 替换段落文本
             List<XWPFParagraph> paragraphs = doc.getParagraphs();
+            boolean found = false;
             for (XWPFParagraph para : paragraphs) {
                 List<XWPFRun> runs = para.getRuns();
                 if (runs != null) {
                     for (XWPFRun run : runs) {
                         if (run.text() != null && run.text().contains("{{content}}")) {
                             run.setText(run.text().replace("{{content}}", content), 0);
+                            found = true;
                         }
                     }
                 }
@@ -64,9 +66,17 @@ public class DocxExportService {
                             XWPFParagraph newPara = cell.addParagraph();
                             XWPFRun newRun = newPara.createRun();
                             newRun.setText(cellText.replace("{{content}}", content));
+                            found = true;
                         }
                     }
                 }
+            }
+
+            // 如果模板中没有 {{content}} 占位符，在文档末尾追加内容
+            if (!found) {
+                XWPFParagraph newPara = doc.createParagraph();
+                XWPFRun newRun = newPara.createRun();
+                newRun.setText(content);
             }
 
             // 写入输出文件

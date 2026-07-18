@@ -17,8 +17,8 @@ spring:
       enabled: true
   servlet:
     multipart:
-      max-file-size: 10MB
-      max-request-size: 10MB
+      max-file-size: 100MB
+      max-request-size: 100MB
   application:
     name: meeting-agent
   cloud:
@@ -48,7 +48,6 @@ rag:
   chunk:
     strategy: structural
     size: 512
-    overlap: 128
   retrieval:
     vector-topk: 20
     fts-topk: 20
@@ -101,7 +100,6 @@ rag:
   chunk:
     strategy: structural
     size: 512
-    overlap: 128
   retrieval:
     vector-topk: 20
     fts-topk: 20

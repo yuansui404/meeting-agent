@@ -21,8 +21,7 @@ public class RagConfigController {
         Map<String, Object> config = new LinkedHashMap<>();
         config.put("chunk", toMap(
                 "strategy", ragProperties.getChunk().getStrategy(),
-                "size", ragProperties.getChunk().getSize(),
-                "overlap", ragProperties.getChunk().getOverlap()
+                "size", ragProperties.getChunk().getSize()
         ));
         config.put("retrieval", toMap(
                 "vectorTopk", ragProperties.getRetrieval().getVectorTopk(),

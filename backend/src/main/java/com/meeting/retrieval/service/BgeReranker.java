@@ -32,10 +32,10 @@ public class BgeReranker implements Reranker {
     private final boolean useTokenTypeIds;
 
     public BgeReranker() {
+        String modelDir = System.getenv("BGE_MODEL_DIR") != null
+                ? System.getenv("BGE_MODEL_DIR")
+                : "/models/bge-reranker";
         try {
-            String modelDir = System.getenv("BGE_MODEL_DIR") != null
-                    ? System.getenv("BGE_MODEL_DIR")
-                    : "/models/bge-reranker";
 
             this.env = OrtEnvironment.getEnvironment();
             OrtSession.SessionOptions options = new OrtSession.SessionOptions();
@@ -46,11 +46,13 @@ public class BgeReranker implements Reranker {
             this.useTokenTypeIds = session.getInputInfo().containsKey("token_type_ids");
 
             this.tokenizer = HuggingFaceTokenizer.newInstance(
-                    Paths.get(modelDir, "tokenizer.json").toString());
+                    Paths.get(modelDir, "tokenizer.json"));
             log.info("BGE Reranker loaded from {}, token_type_ids={}",
                     modelDir, useTokenTypeIds);
         } catch (Exception e) {
-            throw new RuntimeException("Failed to load BGE Reranker model from /models/bge-reranker", e);
+            log.error("Failed to load BGE Reranker model from {}: {}",
+                    modelDir, e.getMessage(), e);
+            throw new RuntimeException("Failed to load BGE Reranker model from " + modelDir, e);
         }
     }
 
@@ -129,12 +131,26 @@ public class BgeReranker implements Reranker {
             OrtSession.Result output = session.run(inputs);
             float[][] logits = (float[][]) output.get("logits").orElseThrow().getValue();
 
-            // Softmax to get relevance probability for class 1
+            // Detect model output format: single logit (sigmoid) vs dual logit (softmax)
             float[] scores = new float[batchSize];
-            for (int i = 0; i < batchSize; i++) {
-                float e0 = (float) Math.exp(logits[i][0]);
-                float e1 = (float) Math.exp(logits[i][1]);
-                scores[i] = 2.0f * e1 / (e0 + e1) - 1.0f;
+            int numLogits = logits[0].length;
+            if (numLogits == 1) {
+                log.debug("BGE reranker single-logit sigmoid scoring (logits[0].length=1)");
+                for (int i = 0; i < batchSize; i++) {
+                    scores[i] = 2.0f / (1.0f + (float) Math.exp(-logits[i][0])) - 1.0f;
+                }
+            } else if (numLogits == 2) {
+                log.debug("BGE reranker dual-logit softmax scoring (logits[0].length=2)");
+                for (int i = 0; i < batchSize; i++) {
+                    float e0 = (float) Math.exp(logits[i][0]);
+                    float e1 = (float) Math.exp(logits[i][1]);
+                    scores[i] = 2.0f * e1 / (e0 + e1) - 1.0f;
+                }
+            } else {
+                log.warn("Unexpected BGE reranker logits dimension: {} (expected 1 or 2), falling back to RRF scores", numLogits);
+                for (int i = 0; i < batchSize; i++) {
+                    scores[i] = (float) batch.get(i).getRrfScore();
+                }
             }
             return scores;
 

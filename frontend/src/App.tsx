@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Layout, Typography, Button, List, message as antMsg, Space, Modal, Input, ConfigProvider, theme } from 'antd';
 import {
   PlusOutlined,
@@ -29,9 +29,11 @@ const App: React.FC = () => {
   const [activeDialogue, setActiveDialogue] = useState<Dialogue | null>(null);
   const dialoguesLoadedRef = React.useRef(false);
   const [creating, setCreating] = useState(false);
+  const creatingRef = useRef(false);
   const [renameModal, setRenameModal] = useState<{ visible: boolean; dialogue: Dialogue | null; value: string }>({
     visible: false, dialogue: null, value: '',
   });
+  const [freshDialogue, setFreshDialogue] = useState(false);
 
   const [isDark, setIsDark] = useState(() => {
     return localStorage.getItem('theme-dark') === 'true';
@@ -83,53 +85,70 @@ const App: React.FC = () => {
   }, [activeDialogue]);
 
   const handleNewDialogue = async () => {
-    if (!activeDialogue) {
-      antMsg.info('已经处于新对话中');
+    if (!activeDialogue || freshDialogue) {
+      antMsg.info('已经是新对话中了');
       return;
     }
-    if (creating) return;
+    if (creatingRef.current) return;
+    creatingRef.current = true;
     setCreating(true);
     try {
+      console.log('[DialogueCreate] handleNewDialogue: 新建对话按钮');
+      console.trace();
       const res = await createDialogue('新对话');
+      const data = (res.data as any)?.data || res.data;
       const newDialogue: Dialogue = {
-        id: (res.data as any)?.data?.dialogueId || res.data.dialogueId,
+        id: data.dialogueId || data.id,
         title: '新对话',
         status: 'active',
-        updatedAt: new Date().toISOString(),
+        updatedAt: data.updatedAt || new Date().toISOString(),
         meetingId: null,
       };
       setActiveDialogue(newDialogue);
+      setFreshDialogue(true);
       refreshDialogues();
     } catch {
       antMsg.error('创建对话失败');
     } finally {
+      creatingRef.current = false;
       setCreating(false);
     }
   };
 
   const handleSelectDialogue = (d: Dialogue) => {
     setActiveDialogue(d);
+    setFreshDialogue(false);
+  };
+
+  const handleDialogueUsed = () => {
+    setFreshDialogue(false);
   };
 
   const handleStartChat = async (message: string): Promise<Dialogue | null> => {
-    if (creating) return null;
+    if (creatingRef.current) return null;
+    creatingRef.current = true;
     setCreating(true);
     try {
+      console.log('[DialogueCreate] handleStartChat: 发送消息时无活跃对话, message=' + message);
+      console.trace();
       const res = await createDialogue('新对话');
+      const data = (res.data as any)?.data || res.data;
       const newDialogue: Dialogue = {
-        id: (res.data as any)?.data?.dialogueId || res.data.dialogueId,
+        id: data.dialogueId || data.id,
         title: '新对话',
         status: 'active',
-        updatedAt: new Date().toISOString(),
+        updatedAt: data.updatedAt || new Date().toISOString(),
         meetingId: null,
       };
       setActiveDialogue(newDialogue);
+      setFreshDialogue(true);
       refreshDialogues();
       return newDialogue;
     } catch {
       antMsg.error('创建对话失败');
       return null;
     } finally {
+      creatingRef.current = false;
       setCreating(false);
     }
   };
@@ -139,24 +158,30 @@ const App: React.FC = () => {
   };
 
   const handleCreateDialogue = async (): Promise<Dialogue | null> => {
-    if (creating) return null;
+    if (creatingRef.current) return null;
+    creatingRef.current = true;
     setCreating(true);
     try {
+      console.log('[DialogueCreate] handleCreateDialogue: 上传文件时无活跃对话');
+      console.trace();
       const res = await createDialogue('新对话');
+      const data = (res.data as any)?.data || res.data;
       const newDialogue: Dialogue = {
-        id: (res.data as any)?.data?.dialogueId || res.data.dialogueId,
+        id: data.dialogueId || data.id,
         title: '新对话',
         status: 'active',
-        updatedAt: new Date().toISOString(),
+        updatedAt: data.updatedAt || new Date().toISOString(),
         meetingId: null,
       };
       setActiveDialogue(newDialogue);
+      setFreshDialogue(true);
       refreshDialogues();
       return newDialogue;
     } catch {
       antMsg.error('创建对话失败');
       return null;
     } finally {
+      creatingRef.current = false;
       setCreating(false);
     }
   };
@@ -195,8 +220,10 @@ const App: React.FC = () => {
 
   const formatDate = (dateStr: string) => {
     // 后端返回的日期无时区标记（如 2026-07-10T17:33:12），
-    // 补上 +08:00 按中国时区解析
-    return new Date(dateStr + '+08:00').toLocaleString('zh-CN', {
+    // 补上 +08:00 按中国时区解析。
+    // 前端生成的 toISOString() 带 Z 后缀，需先去掉。
+    const normalized = dateStr.replace(/Z$/, '');
+    return new Date(normalized + '+08:00').toLocaleString('zh-CN', {
       year: 'numeric', month: '2-digit', day: '2-digit',
       hour: '2-digit', minute: '2-digit', hour12: false,
     });
@@ -453,9 +480,11 @@ const App: React.FC = () => {
       <Content style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
         <DialoguePanel
           activeDialogue={activeDialogue}
+          freshDialogue={freshDialogue}
           onDialogueUpdated={handleDialogueUpdated}
           onStartChat={handleStartChat}
           onCreateDialogue={handleCreateDialogue}
+          onDialogueUsed={handleDialogueUsed}
         />
       </Content>
 

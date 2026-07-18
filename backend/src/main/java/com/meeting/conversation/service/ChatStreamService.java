@@ -34,6 +34,7 @@ public class ChatStreamService {
     @Qualifier("meetingAssistantAgent") private final HarnessAgent agent;
     private final ObjectMapper objectMapper;
     private final DialoguePersistenceService dialoguePersistenceService;
+    private final SessionService sessionService;
 
     /**
      * 执行流式对话：agent.streamEvents() → SSE 事件流 → 持久化。
@@ -168,6 +169,7 @@ public class ChatStreamService {
             dialoguePersistenceService.persistUserMessage(dialogueId, originalQuestion, messageFiles);
             dialoguePersistenceService.persistAssistantResponse(dialogueId, fullResponse.toString(),
                     thinkingText.toString(), new ArrayList<>(toolCalls.values()), null);
+            sessionService.autoTitleIfNeeded(dialogueId, originalQuestion);
         } catch (Exception e) {
             log.warn("Failed to persist for dialogue {}: {}", dialogueId, e.getMessage());
         }

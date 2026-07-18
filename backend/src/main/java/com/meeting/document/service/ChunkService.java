@@ -55,19 +55,9 @@ public class ChunkService {
             segments = chunkStrategy.chunk(text, ragProperties.getChunk(), docForChunk.getTitle());
             log.info("Document {} chunked into {} segments", documentId, segments.size());
 
-            // 2.5 清理 chunk 内容中的 overlap 标记
-            for (ChunkSegment segment : segments) {
-                String cleaned = segment.getContent()
-                        .replaceAll("\\[overlap\\]\\n?", "")
-                        .strip();
-                segment.setContent(cleaned);
-            }
-
-            // 3. 生成 embedding（网络 I/O，无事务）
-            List<float[]> embeddings = new ArrayList<>(segments.size());
-            for (ChunkSegment segment : segments) {
-                embeddings.add(embeddingService.generateEmbedding(segment.getContent()));
-            }
+            // 3. 批量生成 embedding（一次 API 调用，网络 I/O，无事务）
+            List<String> contents = segments.stream().map(ChunkSegment::getContent).toList();
+            List<float[]> embeddings = embeddingService.generateEmbeddings(contents);
 
             // 4. 批量入库（短事务）
             transactionTemplate.executeWithoutResult(status -> {

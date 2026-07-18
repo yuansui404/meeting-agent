@@ -20,7 +20,6 @@ class GenericChunkStrategyTest {
         strategy = new GenericChunkStrategy();
         config = new RagProperties.Chunk();
         config.setSize(512);
-        config.setOverlap(0);
     }
 
     @Test
