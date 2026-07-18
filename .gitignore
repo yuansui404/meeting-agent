@@ -18,6 +18,8 @@ docker/postgres/data/
 .idea/tasks.xml
 .idea/shelf/
 .idea/dictionaries/
+.idea/dataSource/
+.idea/dbnavigator.xml
 *.iml
 !backend/meeting-agent.iml
 !meeting-agent-root.iml
