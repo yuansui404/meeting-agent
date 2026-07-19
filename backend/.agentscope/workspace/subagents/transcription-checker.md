@@ -1,7 +1,8 @@
 ---
 description: >
-  语音转写文本校对专家。当需要校正 ASR 转写结果中的人名、
-  专业术语、数字、同音字错误时使用。
+  [路由规则] 专门处理 ASR 转写文本校对任务。
+  适用场景: call_mimo_asr 返回转写文本后，需要校正人名、专业术语、数字、同音字错误。
+  路由动作: call_mimo_asr 返回结果后，调用 agent_spawn(agent_id="transcription-checker")
 steps: 3
 tools:
   - read_profile

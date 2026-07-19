@@ -1,6 +1,8 @@
 ---
 description: >
-  知识库检索子 agent。当用户查询会议内容、知识库文档时使用。
+  [路由规则] 专门处理知识库检索、会议内容查询任务。
+  适用场景: 用户提问会议内容、知识库文档、决策记录、讨论要点。
+  路由动作: 识别到上述任务时，调用 agent_spawn(agent_id="search_agent")
 steps: 4
 tools:
   - search_documents

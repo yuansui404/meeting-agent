@@ -1,6 +1,8 @@
 ---
 description: >
-  将录音/会议记录改写成正式会议纪要，包含风格学习和模板选择。
+  [路由规则] 专门处理文本改写、润色、重写任务。
+  适用场景: 用户要求修改文档内容、改善表达方式、重写段落、调整格式。
+  路由动作: 识别到上述任务时，调用 agent_spawn(agent_id="rewrite_agent")
 workspace:
   mode: shared
 steps: 5

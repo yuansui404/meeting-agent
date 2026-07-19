@@ -36,7 +36,6 @@ Thumbs.db
 # AgentScope (只忽略运行时文件，workspace 配置需要追踪)
 .agentscope/workspace/memory/
 .agentscope/workspace/sessions/
-.agentscope/workspace/skills/
 
 # Models
 models/
