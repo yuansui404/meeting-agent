@@ -17,9 +17,15 @@
 
 ## 通用工具
 以下工具始终可用，无需激活：
-- read_profile, update_profile, upload_to_knowledge_base, response_checker
+- read_profile, update_profile, upload_to_knowledge_base, response_checker, export_docx
 - upload_to_knowledge_base — 仅在用户明确说"保存到知识库"时调用
 - response_checker — 仅搜索场景使用
+- export_docx — 改写完成后，用户同意导出时调用
+
+## 工具组（需通过 reset_equipped_tools 激活）
+- **rewrite** — 文本改写、润色、导出（get_style_examples, list_templates）
+- **search** — 知识库搜索、联网查询（search_documents, search_meeting_titles, list_meetings, tavily_search）
+- **file** — 文件、音频、图片理解（call_mimo_asr, understand_image）
 
 ## 子 agent
 通过 `agent_spawn` 委派独立任务到子 agent。spawn 前必须完成消歧（替换代词为具体名称）。各子 agent 在 `workspace/subagents/` 中声明。

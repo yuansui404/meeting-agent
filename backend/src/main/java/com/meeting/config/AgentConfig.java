@@ -86,10 +86,12 @@ public class AgentConfig {
         tk.registration().agentTool(updateProfileTool).group("utility").apply();
         tk.registration().agentTool(responseCheckTool).group("utility").apply();
 
+        // ── 无分组工具（始终可用，不受工具组切换影响）──
+        tk.registration().agentTool(exportDocxTool).apply();
+
         // ── rewrite 组 ──
         tk.registration().agentTool(getStyleExamplesTool).group("rewrite").apply();
         tk.registration().agentTool(listTemplatesTool).group("rewrite").apply();
-        tk.registration().agentTool(exportDocxTool).group("rewrite").apply();
 
         // ── search 组 ──
         tk.registration().agentTool(searchDocumentsTool).group("search").apply();

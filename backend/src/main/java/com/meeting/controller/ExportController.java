@@ -36,12 +36,12 @@ public class ExportController {
             throw BusinessException.notFound("导出文件不存在");
         }
 
-        // Find file matching {fileId}_*.docx
+        // Find file matching {fileId}_*.md
         Path filePath;
         try (Stream<Path> files = Files.list(exportDir)) {
             filePath = files.filter(p -> {
                         String name = p.getFileName().toString();
-                        return name.startsWith(fileId + "_") && name.endsWith(".docx");
+                        return name.startsWith(fileId + "_") && name.endsWith(".md");
                     })
                     .findFirst()
                     .orElse(null);
@@ -63,9 +63,9 @@ public class ExportController {
                 .replaceFirst("^[0-9a-f-]+_", "");
 
         return ResponseEntity.ok()
-                .contentType(MediaType.valueOf("application/vnd.openxmlformats-officedocument.wordprocessingml.document"))
+                .contentType(MediaType.parseMediaType("text/markdown; charset=utf-8"))
                 .header(HttpHeaders.CONTENT_DISPOSITION,
-                        "attachment; filename*=UTF-8''" + downloadFilename)
+                        "inline; filename*=UTF-8''" + downloadFilename)
                 .body(resource);
     }
 }
