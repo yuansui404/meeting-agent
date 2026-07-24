@@ -22,7 +22,7 @@ public class FullTextSearchRepository {
         String sql = """
             SELECT c.id, c.document_id, c.content, c.chunk_index, c.speaker, c.metadata,
                    ts_rank(c.content_tsv, to_tsquery('chinese', replace(plainto_tsquery('chinese', ?)::text, ' & ', ' | '))) AS score
-            FROM document_chunk c
+            FROM document_chunk_v2 c
             WHERE c.content_tsv @@ to_tsquery('chinese', replace(plainto_tsquery('chinese', ?)::text, ' & ', ' | '))
             ORDER BY score DESC
             LIMIT ?

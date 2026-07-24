@@ -108,6 +108,27 @@ ALTER TABLE document_chunk ADD COLUMN content_tsv tsvector
 CREATE INDEX IF NOT EXISTS idx_chunk_content_tsv ON document_chunk USING gin (content_tsv);
 
 -- ============================================================
+-- 文档分块表 v2（含标题冗余）
+-- ============================================================
+CREATE TABLE IF NOT EXISTS document_chunk_v2 (
+    id BIGSERIAL PRIMARY KEY,
+    document_id BIGINT NOT NULL REFERENCES document(id) ON DELETE CASCADE,
+    content TEXT NOT NULL,
+    embedding VECTOR(1024),
+    chunk_index INT NOT NULL,
+    speaker VARCHAR(100),
+    metadata TEXT DEFAULT '{}',
+    created_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_chunk_v2_document_id ON document_chunk_v2(document_id);
+CREATE INDEX IF NOT EXISTS idx_chunk_v2_embedding ON document_chunk_v2 USING hnsw (embedding vector_cosine_ops) WITH (m = 16, ef_construction = 200);
+
+ALTER TABLE document_chunk_v2 ADD COLUMN content_tsv tsvector
+    GENERATED ALWAYS AS (to_tsvector('chinese', coalesce(content, ''))) STORED;
+CREATE INDEX IF NOT EXISTS idx_chunk_v2_content_tsv ON document_chunk_v2 USING gin (content_tsv);
+
+-- ============================================================
 -- 模板配置表
 -- ============================================================
 CREATE TABLE IF NOT EXISTS template_config (

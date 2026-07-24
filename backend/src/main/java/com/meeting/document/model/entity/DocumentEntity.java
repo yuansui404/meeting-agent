@@ -53,7 +53,7 @@ public class DocumentEntity {
 
     @OneToMany(mappedBy = "document", cascade = CascadeType.ALL, orphanRemoval = true)
     @JsonIgnore
-    private List<DocumentChunkEntity> chunks = new ArrayList<>();
+    private List<DocumentChunkV2Entity> chunks = new ArrayList<>();
 
     @PrePersist
     protected void onCreate() {

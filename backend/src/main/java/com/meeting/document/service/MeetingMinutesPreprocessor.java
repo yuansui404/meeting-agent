@@ -44,6 +44,10 @@ public class MeetingMinutesPreprocessor {
 
             // Skip title: non-empty lines before first ## heading
             if (!titleSkipped && !trimmed.isEmpty() && !MD_HEADING.matcher(trimmed).find()) {
+                // Capture the first line as meeting title, then continue skipping
+                if (!metadata.containsKey("meeting_title")) {
+                    metadata.put("meeting_title", trimmed);
+                }
                 continue;
             }
             if (!titleSkipped && MD_HEADING.matcher(trimmed).find()) {

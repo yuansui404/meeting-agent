@@ -76,11 +76,15 @@ public class TranscriptionService {
         }
     }
 
+    private static final long ASR_TOTAL_TIMEOUT_MS = 30 * 60 * 1000L; // 30 分钟整体超时
+
     public String callMiMoASR(String audioPath) {
         Path path = Path.of(audioPath);
         if (!Files.exists(path)) {
             return "转写失败: 音频文件不存在 " + audioPath;
         }
+
+        long startTime = System.currentTimeMillis();
 
         try {
             // 1. Get audio duration via ffprobe, split into segments if needed
@@ -102,6 +106,10 @@ public class TranscriptionService {
             int segIndex = 0;
             double segStart = 0;
             for (double splitAt : splitPoints) {
+                if (System.currentTimeMillis() - startTime > ASR_TOTAL_TIMEOUT_MS) {
+                    log.warn("ASR overall timeout reached after {} segments, stopping", segIndex);
+                    break;
+                }
                 Path segPath = path.resolveSibling(path.getFileName() + ".seg" + segIndex + ".mp3");
                 try {
                     ProcessBuilder pb = new ProcessBuilder(
@@ -134,8 +142,8 @@ public class TranscriptionService {
                 }
             }
 
-            // Last segment (if any remaining audio)
-            if (segStart < durationSec) {
+            // Last segment (if any remaining audio and not timed out)
+            if (segStart < durationSec && System.currentTimeMillis() - startTime <= ASR_TOTAL_TIMEOUT_MS) {
                 Path segPath = path.resolveSibling(path.getFileName() + ".seg" + segIndex + ".mp3");
                 try {
                     ProcessBuilder pb = new ProcessBuilder(
@@ -293,7 +301,8 @@ public class TranscriptionService {
                 }
 
                 int responseCode = conn.getResponseCode();
-                if (responseCode == 429 && attempt < maxRetries - 1) {
+                boolean isRetryable = (responseCode == 429 || responseCode >= 500);
+                if (isRetryable && attempt < maxRetries - 1) {
                     lastResponseCode = responseCode;
                     String errorBody = "(no error body)";
                     try (InputStream errStream = conn.getErrorStream()) {
@@ -302,7 +311,7 @@ public class TranscriptionService {
                         }
                     }
                     lastErrorBody = errorBody;
-                    log.warn("MiMo ASR rate limited (429), will retry: {}", errorBody);
+                    log.warn("MiMo ASR retryable error ({}), will retry: {}", responseCode, errorBody);
                     continue;
                 }
 
@@ -335,7 +344,7 @@ public class TranscriptionService {
         }
 
         log.warn("MiMo ASR failed after {} retries: HTTP {}", maxRetries, lastResponseCode);
-        return "转写失败: 限流重试 " + maxRetries + " 次后仍失败 (" + lastResponseCode + "): " + lastErrorBody;
+        return "转写失败: 重试 " + maxRetries + " 次后仍失败 (" + lastResponseCode + "): " + lastErrorBody;
     }
 
 }

@@ -48,6 +48,10 @@ rag:
   chunk:
     strategy: structural
     size: 512
+  search:
+    method: hybrid                    # vector-only | hybrid
+    rerank-enabled: true
+    query-rewrite-enabled: true
   retrieval:
     vector-topk: 20
     fts-topk: 20
@@ -70,6 +74,13 @@ rag:
     summary-trigger: 3000
     max-visible-messages: 10
     max-context-tokens: 32000
+  retry:
+    max-attempts: 3
+    initial-delay-ms: 1000
+    multiplier: 2.0
+  circuit-breaker:
+    failure-threshold: 3
+    cooldown-ms: 60000
 
 file:
   upload-dir: ${user.home}/meeting-agent/uploads
@@ -122,6 +133,13 @@ rag:
     summary-trigger: 3000
     max-visible-messages: 10
     max-context-tokens: 32000
+  retry:
+    max-attempts: 3
+    initial-delay-ms: 1000
+    multiplier: 2.0
+  circuit-breaker:
+    failure-threshold: 3
+    cooldown-ms: 60000
 mimo:
   api-key: ${MIMO_API_KEY:}
   url: https://token-plan-cn.xiaomimimo.com

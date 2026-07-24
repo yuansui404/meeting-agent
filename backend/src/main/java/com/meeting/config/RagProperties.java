@@ -8,9 +8,12 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 public class RagProperties {
     private Chunk chunk = new Chunk();
     private Retrieval retrieval = new Retrieval();
+    private Search search = new Search();
     private Evidence evidence = new Evidence();
     private TimeDecay timeDecay = new TimeDecay();
     private Conversation conversation = new Conversation();
+    private Retry retry = new Retry();
+    private CircuitBreaker circuitBreaker = new CircuitBreaker();
 
     @Data
     public static class Chunk {
@@ -25,6 +28,16 @@ public class RagProperties {
         private int rrfK = 60;
         private boolean rerankEnabled = false;
         private int rerankTopk = 5;
+    }
+
+    @Data
+    public static class Search {
+        /** 搜索方法：vector-only | hybrid */
+        private String method = "hybrid";
+        /** 是否开启 BGE 重排序 */
+        private boolean rerankEnabled = true;
+        /** 是否开启查询改写/分解 */
+        private boolean queryRewriteEnabled = true;
     }
 
     @Data
@@ -50,5 +63,23 @@ public class RagProperties {
         private int summaryTrigger = 3000;
         private int maxVisibleMessages = 10;
         private int maxContextTokens = 32000;
+    }
+
+    @Data
+    public static class Retry {
+        /** 最大重试次数（含首次） */
+        private int maxAttempts = 3;
+        /** 首次重试延迟（毫秒） */
+        private long initialDelayMs = 1000;
+        /** 退避倍数 */
+        private double multiplier = 2.0;
+    }
+
+    @Data
+    public static class CircuitBreaker {
+        /** 连续失败多少次后熔断 */
+        private int failureThreshold = 3;
+        /** 熔断冷却时间（毫秒） */
+        private long cooldownMs = 60000;
     }
 }

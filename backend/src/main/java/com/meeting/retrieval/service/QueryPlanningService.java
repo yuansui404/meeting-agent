@@ -2,6 +2,8 @@ package com.meeting.retrieval.service;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.meeting.common.RetryUtils;
+import com.meeting.config.RagProperties;
 import io.agentscope.core.message.Msg;
 import io.agentscope.core.message.SystemMessage;
 import io.agentscope.core.message.TextBlock;
@@ -37,11 +39,13 @@ public class QueryPlanningService {
 
     private final OpenAIChatModel chatModel;
     private final ObjectMapper objectMapper;
+    private final RagProperties ragProperties;
 
     public QueryPlanningService(@Qualifier("nonStreamingOpenAIChatModel") OpenAIChatModel chatModel,
-                                ObjectMapper objectMapper) {
+                                ObjectMapper objectMapper, RagProperties ragProperties) {
         this.chatModel = chatModel;
         this.objectMapper = objectMapper;
+        this.ragProperties = ragProperties;
     }
 
     public enum TimeIntent {
@@ -67,13 +71,19 @@ public class QueryPlanningService {
                     new UserMessage(originalQuery)
             );
 
-            ChatResponse response = chatModel.stream(messages, null,
-                    GenerateOptions.builder()
-                            .stream(false)
-                            .temperature(0.1)
-                            .maxTokens(2048)
-                            .build()
-            ).blockLast();
+            RagProperties.Retry retryConfig = ragProperties.getRetry();
+            ChatResponse response = RetryUtils.retryWithBackoff("QueryPlanning",
+                    retryConfig.getMaxAttempts(), retryConfig.getInitialDelayMs(), () -> {
+                        ChatResponse r = chatModel.stream(messages, null,
+                                GenerateOptions.builder()
+                                        .stream(false)
+                                        .temperature(0.1)
+                                        .maxTokens(2048)
+                                        .build()
+                        ).blockLast();
+                        if (r == null) throw new RuntimeException("Query planning returned null response");
+                        return r;
+                    });
 
             String content = response.getContent().stream()
                     .filter(TextBlock.class::isInstance)

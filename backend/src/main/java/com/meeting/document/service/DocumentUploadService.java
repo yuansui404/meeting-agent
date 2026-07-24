@@ -29,7 +29,7 @@ public class DocumentUploadService {
 
     private final DocumentRepository documentRepository;
     private final DocumentParserService documentParserService;
-    private final ChunkService chunkService;
+    private final ChunkServiceV2 chunkServiceV2;
     private final FileProperties fileProperties;
     private final MeetingMinutesPreprocessor meetingMinutesPreprocessor;
     private final AttendeeProfileUpdater attendeeProfileUpdater;
@@ -95,9 +95,10 @@ public class DocumentUploadService {
             // 提取的元数据写入 DocumentEntity
             if (meta.containsKey("meeting_date")) doc.setMeetingDate((LocalDate) meta.get("meeting_date"));
             if (meta.containsKey("participants")) doc.setParticipants((String) meta.get("participants"));
+            if (meta.containsKey("meeting_title")) doc.setTitle((String) meta.get("meeting_title"));
 
             // 保存清洗后的 markdown 到磁盘
-            String mdPath = saveMarkdownFile(doc.getFilePath(), text);
+            String mdPath = saveMarkdownFile(doc.getFilePath(), result.cleanedText());
             if (mdPath != null) {
                 doc.setMdFilePath(mdPath);
             }
@@ -105,7 +106,7 @@ public class DocumentUploadService {
             doc.setStatus("COMPLETED");
             documentRepository.save(doc);
 
-            chunkService.processDocument(documentId, result.cleanedText());
+            chunkServiceV2.processDocument(documentId, result.cleanedText());
 
             // 提取与会人并增量更新用户画像
             attendeeProfileUpdater.updateFromDocument(result, doc);
@@ -151,8 +152,9 @@ public class DocumentUploadService {
     public void delete(Long id) {
         DocumentEntity doc = documentRepository.findById(id)
                 .orElseThrow(() -> BusinessException.notFound("文档不存在"));
-        // 先用原生 SQL 删除 chunks，避免 Hibernate 加载 VECTOR 列
+        // 删除 chunks（两个表）
         documentRepository.deleteChunksByDocumentId(id);
+        documentRepository.deleteChunksV2ByDocumentId(id);
         documentRepository.deleteById(id);
         // 删除物理文件
         if (doc.getFilePath() != null) {

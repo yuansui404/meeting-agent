@@ -96,4 +96,4 @@ com.meeting/
 
 - 完成某项任务后更新 `docs/superpowers/开发计划.md`
 - 开发计划没有的任务需要进行添加
-- 提交时排除 docs 目录（git commit 不带 docs 变更）
+- 提交时排除 docs 目录和 scripts/eval/test_cases.json（git commit 不带这些变更）

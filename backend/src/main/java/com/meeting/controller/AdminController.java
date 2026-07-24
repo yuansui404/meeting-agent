@@ -2,6 +2,12 @@ package com.meeting.controller;
 
 import com.meeting.common.ApiResponse;
 import com.meeting.common.BusinessException;
+import com.meeting.controller.dto.response.SearchHitVO;
+import com.meeting.controller.dto.response.SearchResponseVO;
+import com.meeting.document.repository.DocumentRepository;
+import com.meeting.document.service.ChunkService;
+import com.meeting.document.service.DocumentUploadService;
+import com.meeting.retrieval.service.HybridSearchService;
 import io.agentscope.core.agent.RuntimeContext;
 import io.agentscope.harness.agent.HarnessAgent;
 import io.agentscope.harness.agent.subagent.task.BackgroundTask;
@@ -9,14 +15,19 @@ import io.agentscope.harness.agent.subagent.task.TaskRepository;
 import io.agentscope.harness.agent.subagent.task.TaskStatus;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.io.IOException;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
@@ -32,6 +43,11 @@ public class AdminController {
 
     private final HarnessAgent meetingAssistantAgent;
     private final TaskRepository taskRepository;
+    private final HybridSearchService hybridSearchService;
+    private final DocumentRepository documentRepository;
+    private final ChunkService chunkService;
+    private final DocumentUploadService documentUploadService;
+    private final JdbcTemplate jdbcTemplate;
 
     // ============ Subagent 管理 ============
 
@@ -244,6 +260,81 @@ public class AdminController {
             log.error("Failed to list tasks", e);
             throw BusinessException.processingFailed("Failed to list tasks", e);
         }
+    }
+
+    // ============ RAG 搜索（用于评测） ============
+
+    @GetMapping("/search")
+    public ApiResponse<SearchResponseVO> search(@RequestParam String query) {
+        HybridSearchService.SearchResult result = hybridSearchService.search(query);
+        List<SearchHitVO> hits = result.chunks().stream()
+                .map(c -> new SearchHitVO(
+                        c.getFileName() != null ? c.getFileName() : String.valueOf(c.getDocumentId()),
+                        c.getContent(),
+                        c.getFinalScore(),
+                        c.getSpeaker(),
+                        c.getParticipants(),
+                        c.getTopic(),
+                        c.getSectionHeading(),
+                        c.getDocumentId() != null ? c.getDocumentId().intValue() : null
+                ))
+                .toList();
+        return ApiResponse.ok(new SearchResponseVO(
+                result.evidenceLevel(),
+                result.strategyUsed(),
+                result.totalCandidates(),
+                result.queryUsed(),
+                hits
+        ));
+    }
+
+    // ============ 老 chunk 测试 ============
+
+    @PostMapping("/reimport")
+    @Transactional
+    public ApiResponse<Void> reimportChunks(@RequestParam Long documentId) {
+        var doc = documentUploadService.getById(documentId);
+        if (doc.getMdFilePath() == null) {
+            throw BusinessException.notFound("清洗后的 markdown 文件不存在");
+        }
+        try {
+            String text = Files.readString(Path.of(doc.getMdFilePath()));
+            documentRepository.deleteChunksByDocumentId(documentId);
+            chunkService.processDocument(documentId, text);
+            return ApiResponse.ok(null, "老 chunk 导入完成");
+        } catch (IOException e) {
+            throw BusinessException.processingFailed("读取清洗后的 markdown 文件失败", e);
+        }
+    }
+
+    @GetMapping("/search-old")
+    public ApiResponse<SearchResponseVO> searchOld(@RequestParam String query) {
+        String sql = """
+            SELECT c.id, c.document_id, c.content, c.chunk_index, c.speaker, c.metadata
+            FROM document_chunk c
+            WHERE c.content_tsv @@ to_tsquery('chinese', replace(plainto_tsquery('chinese', ?)::text, ' & ', ' | '))
+            ORDER BY ts_rank(c.content_tsv, to_tsquery('chinese', replace(plainto_tsquery('chinese', ?)::text, ' & ', ' | '))) DESC
+            LIMIT ?
+            """;
+
+        List<SearchHitVO> hits = jdbcTemplate.query(sql,
+                ps -> {
+                    ps.setString(1, query);
+                    ps.setString(2, query);
+                    ps.setInt(3, 10);
+                },
+                (rs, rowNum) -> new SearchHitVO(
+                        rs.getString("content"),
+                        rs.getString("content"),
+                        0.0,
+                        rs.getString("speaker"),
+                        null,
+                        null,
+                        null,
+                        rs.getInt("document_id")
+                ));
+
+        return ApiResponse.ok(new SearchResponseVO("NONE", "DIRECT", hits.size(), query, hits));
     }
 
     // ============ 私有辅助方法 ============

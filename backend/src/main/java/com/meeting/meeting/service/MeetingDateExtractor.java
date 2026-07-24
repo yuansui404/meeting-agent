@@ -1,6 +1,8 @@
 package com.meeting.meeting.service;
 
+import com.meeting.common.RetryUtils;
 import com.meeting.config.DeepSeekProperties;
+import com.meeting.config.RagProperties;
 import io.agentscope.core.formatter.openai.dto.OpenAIMessage;
 import io.agentscope.core.formatter.openai.dto.OpenAIRequest;
 import io.agentscope.core.formatter.openai.dto.OpenAIResponse;
@@ -28,6 +30,7 @@ public class MeetingDateExtractor {
 
     private final OpenAIClient openAIClient;
     private final DeepSeekProperties deepSeekProps;
+    private final RagProperties ragProperties;
 
     /**
      * Extract meeting date from document/transcription text using LLM.
@@ -55,7 +58,10 @@ public class MeetingDateExtractor {
                     .maxTokens(64)
                     .build();
 
-            OpenAIResponse response = openAIClient.call(deepSeekProps.getApiKey(), deepSeekProps.getUrl(), request);
+            RagProperties.Retry retryConfig = ragProperties.getRetry();
+            OpenAIResponse response = RetryUtils.retryWithBackoff("MeetingDateExtractor",
+                    retryConfig.getMaxAttempts(), retryConfig.getInitialDelayMs(), () ->
+                            openAIClient.call(deepSeekProps.getApiKey(), deepSeekProps.getUrl(), request));
             String content = response.getFirstChoice().getMessage().getContentAsString();
 
             if (content == null || content.isBlank() || "null".equals(content.trim())) {

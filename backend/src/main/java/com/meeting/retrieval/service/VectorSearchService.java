@@ -2,7 +2,7 @@ package com.meeting.retrieval.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.meeting.document.model.VectorSearchHit;
-import com.meeting.document.repository.DocumentChunkRepository;
+import com.meeting.document.repository.DocumentChunkV2Repository;
 import com.meeting.retrieval.model.ChunkMetadataParser;
 import com.meeting.retrieval.model.ChunkResult;
 import com.meeting.llm.service.EmbeddingService;
@@ -18,7 +18,7 @@ import java.util.List;
 @RequiredArgsConstructor
 public class VectorSearchService {
 
-    private final DocumentChunkRepository chunkRepository;
+    private final DocumentChunkV2Repository chunkV2Repository;
     private final EmbeddingService embeddingService;
     private final ObjectMapper objectMapper;
 
@@ -28,7 +28,7 @@ public class VectorSearchService {
         String embeddingStr = floatArrayToString(queryVector);
         String vectorStr = "[" + embeddingStr + "]";
 
-        List<VectorSearchHit> hits = chunkRepository.vectorSearch(vectorStr, topK);
+        List<VectorSearchHit> hits = chunkV2Repository.vectorSearch(vectorStr, topK);
 
         List<ChunkResult> results = new ArrayList<>();
         for (int i = 0; i < hits.size(); i++) {

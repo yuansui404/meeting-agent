@@ -23,4 +23,8 @@ public interface DocumentRepository extends JpaRepository<DocumentEntity, Long> 
     @Modifying
     @Query(value = "DELETE FROM document_chunk WHERE document_id = :id", nativeQuery = true)
     void deleteChunksByDocumentId(@Param("id") Long id);
+
+    @Modifying
+    @Query(value = "DELETE FROM document_chunk_v2 WHERE document_id = :id", nativeQuery = true)
+    void deleteChunksV2ByDocumentId(@Param("id") Long id);
 }

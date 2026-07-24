@@ -1,6 +1,8 @@
 package com.meeting.agent;
 
+import com.meeting.common.RetryUtils;
 import com.meeting.config.DeepSeekProperties;
+import com.meeting.config.RagProperties;
 import io.agentscope.core.formatter.openai.dto.OpenAIMessage;
 import io.agentscope.core.formatter.openai.dto.OpenAIRequest;
 import io.agentscope.core.formatter.openai.dto.OpenAIResponse;
@@ -37,6 +39,7 @@ public class ResponseCheckTool implements AgentTool {
 
     private final OpenAIClient openAIClient;
     private final DeepSeekProperties deepSeekProps;
+    private final RagProperties ragProperties;
 
     @Override
     public String getName() {
@@ -109,8 +112,10 @@ public class ResponseCheckTool implements AgentTool {
                         .maxTokens(512)
                         .build();
 
-                OpenAIResponse response = openAIClient.call(
-                        deepSeekProps.getApiKey(), deepSeekProps.getUrl(), request);
+                RagProperties.Retry retryConfig = ragProperties.getRetry();
+                OpenAIResponse response = RetryUtils.retryWithBackoff("ResponseCheck",
+                        retryConfig.getMaxAttempts(), retryConfig.getInitialDelayMs(), () ->
+                                openAIClient.call(deepSeekProps.getApiKey(), deepSeekProps.getUrl(), request));
                 String content = response.getFirstChoice().getMessage().getContentAsString();
 
                 if (content == null || content.isBlank()) {

@@ -123,48 +123,60 @@ public class EmbeddingService {
 
     /**
      * Batch variant — sends multiple texts in one API call.
+     * Splits into sub-batches of at most {@value #BATCH_SIZE} texts to avoid API limits.
      */
     @SuppressWarnings("unchecked")
     private List<float[]> callEmbeddingApiBatch(List<String> texts) {
         log.debug("Batch embedding {} texts: provider={}, model={}", texts.size(), embeddingProps.provider(), embeddingProps.model());
-        try {
-            Map<String, Object> request = Map.of(
-                    "model", embeddingProps.model(),
-                    "input", texts
-            );
 
-            Map<String, Object> response = restClient.post()
-                    .body(request)
-                    .retrieve()
-                    .body(Map.class);
+        List<float[]> allEmbeddings = new ArrayList<>(texts.size());
+        int batchSize = 10;
 
-            if (response == null) {
-                throw new RuntimeException("Embedding API returned null response");
-            }
+        for (int offset = 0; offset < texts.size(); offset += batchSize) {
+            int end = Math.min(offset + batchSize, texts.size());
+            List<String> batchTexts = texts.subList(offset, end);
+            log.debug("  sub-batch {}-{}/{}", offset, end, texts.size());
 
-            List<Map<String, Object>> data = (List<Map<String, Object>>) response.get("data");
-            if (data == null || data.isEmpty()) {
-                throw new RuntimeException("Embedding API returned empty data");
-            }
+            try {
+                Map<String, Object> request = Map.of(
+                        "model", embeddingProps.model(),
+                        "input", batchTexts
+                );
 
-            // Sort by index to match input order (OpenAI spec guarantees index field)
-            data.sort(Comparator.comparingInt(d -> (int) d.get("index")));
+                Map<String, Object> response = restClient.post()
+                        .body(request)
+                        .retrieve()
+                        .body(Map.class);
 
-            List<float[]> embeddings = new ArrayList<>(data.size());
-            for (Map<String, Object> entry : data) {
-                List<Double> embeddingList = (List<Double>) entry.get("embedding");
-                float[] embedding = new float[embeddingList.size()];
-                for (int i = 0; i < embeddingList.size(); i++) {
-                    embedding[i] = embeddingList.get(i).floatValue();
+                if (response == null) {
+                    throw new RuntimeException("Embedding API returned null response");
                 }
-                embeddings.add(embedding);
+
+                List<Map<String, Object>> data = (List<Map<String, Object>>) response.get("data");
+                if (data == null || data.isEmpty()) {
+                    throw new RuntimeException("Embedding API returned empty data");
+                }
+
+                // Sort by index to match input order (OpenAI spec guarantees index field)
+                data.sort(Comparator.comparingInt(d -> (int) d.get("index")));
+
+                for (Map<String, Object> entry : data) {
+                    List<Double> embeddingList = (List<Double>) entry.get("embedding");
+                    float[] embedding = new float[embeddingList.size()];
+                    for (int i = 0; i < embeddingList.size(); i++) {
+                        embedding[i] = embeddingList.get(i).floatValue();
+                    }
+                    allEmbeddings.add(embedding);
+                }
+                log.debug("  sub-batch done, total so far: {}", allEmbeddings.size());
+            } catch (Exception e) {
+                log.error("Batch embedding API call failed at sub-batch {}-{} (provider={}): {}", offset, end, embeddingProps.provider(), e.getMessage(), e);
+                throw e;
             }
-            log.debug("Generated {} embeddings (dim={})", embeddings.size(), embeddings.getFirst().length);
-            return embeddings;
-        } catch (Exception e) {
-            log.error("Batch embedding API call failed (provider={}): {}", embeddingProps.provider(), e.getMessage(), e);
-            throw e;
         }
+
+        log.debug("Generated {} embeddings (dim={})", allEmbeddings.size(), allEmbeddings.getFirst().length);
+        return allEmbeddings;
     }
 
     /**

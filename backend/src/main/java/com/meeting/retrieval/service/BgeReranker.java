@@ -6,6 +6,7 @@ import ai.onnxruntime.OnnxTensor;
 import ai.onnxruntime.OrtEnvironment;
 import ai.onnxruntime.OrtLoggingLevel;
 import ai.onnxruntime.OrtSession;
+import com.meeting.config.RagProperties;
 import com.meeting.retrieval.model.ChunkResult;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -16,6 +17,8 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.stream.Collectors;
 
 @Slf4j
@@ -30,8 +33,14 @@ public class BgeReranker implements Reranker {
     private final OrtSession session;
     private final HuggingFaceTokenizer tokenizer;
     private final boolean useTokenTypeIds;
+    private final RagProperties ragProperties;
 
-    public BgeReranker() {
+    // 熔断状态
+    private final AtomicInteger consecutiveFailures = new AtomicInteger(0);
+    private final AtomicLong circuitOpenedAt = new AtomicLong(0);
+
+    public BgeReranker(RagProperties ragProperties) {
+        this.ragProperties = ragProperties;
         String modelDir = System.getenv("BGE_MODEL_DIR") != null
                 ? System.getenv("BGE_MODEL_DIR")
                 : "/models/bge-reranker";
@@ -60,6 +69,12 @@ public class BgeReranker implements Reranker {
     public List<ChunkResult> reRank(String query, List<ChunkResult> candidates, int topN) {
         if (candidates == null || candidates.isEmpty()) return candidates;
         if (candidates.size() <= topN) return candidates;
+
+        // 检查熔断状态
+        if (isCircuitOpen()) {
+            log.warn("BGE Reranker circuit is OPEN, skipping rerank and falling back to RRF scores");
+            return fallbackByRrf(candidates, topN);
+        }
 
         List<ChunkResult> results = new ArrayList<>();
 
@@ -152,16 +167,50 @@ public class BgeReranker implements Reranker {
                     scores[i] = (float) batch.get(i).getRrfScore();
                 }
             }
+            // 成功 — 重置连续失败计数
+            consecutiveFailures.set(0);
             return scores;
 
         } catch (Exception e) {
-            log.warn("BGE Reranker scoring failed for batch of {}: {}",
-                    batch.size(), e.getMessage());
+            int failed = consecutiveFailures.incrementAndGet();
+            int threshold = ragProperties.getCircuitBreaker().getFailureThreshold();
+            log.warn("BGE Reranker scoring failed for batch of {} (consecutive failures: {}/{}): {}",
+                    batch.size(), failed, threshold, e.getMessage());
+
+            // 达到阈值 → 打开熔断
+            if (failed >= threshold) {
+                long cooldownMs = ragProperties.getCircuitBreaker().getCooldownMs();
+                circuitOpenedAt.set(System.currentTimeMillis());
+                log.error("BGE Reranker circuit OPENED after {} consecutive failures, cooling down for {}ms",
+                        failed, cooldownMs);
+            }
+
             float[] fallback = new float[batch.size()];
             for (int i = 0; i < batch.size(); i++) {
                 fallback[i] = (float) batch.get(i).getRrfScore();
             }
             return fallback;
         }
+    }
+
+    private boolean isCircuitOpen() {
+        long openedAt = circuitOpenedAt.get();
+        if (openedAt == 0) return false;
+        long cooldownMs = ragProperties.getCircuitBreaker().getCooldownMs();
+        if (System.currentTimeMillis() - openedAt > cooldownMs) {
+            // 冷却期结束 → 半开，允许下次尝试
+            log.info("BGE Reranker circuit HALF-OPEN, will retry on next call");
+            circuitOpenedAt.set(0);
+            consecutiveFailures.set(0);
+            return false;
+        }
+        return true;
+    }
+
+    private List<ChunkResult> fallbackByRrf(List<ChunkResult> candidates, int topN) {
+        return candidates.stream()
+                .sorted((a, b) -> Double.compare(b.getRrfScore(), a.getRrfScore()))
+                .limit(topN)
+                .collect(Collectors.toList());
     }
 }
