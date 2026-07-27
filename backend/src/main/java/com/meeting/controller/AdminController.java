@@ -271,7 +271,6 @@ public class AdminController {
                 .map(c -> new SearchHitVO(
                         c.getFileName() != null ? c.getFileName() : String.valueOf(c.getDocumentId()),
                         c.getContent(),
-                        c.getFinalScore(),
                         c.getSpeaker(),
                         c.getParticipants(),
                         c.getTopic(),
@@ -326,7 +325,6 @@ public class AdminController {
                 (rs, rowNum) -> new SearchHitVO(
                         rs.getString("content"),
                         rs.getString("content"),
-                        0.0,
                         rs.getString("speaker"),
                         null,
                         null,

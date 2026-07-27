@@ -34,7 +34,7 @@ public class HybridSearchService {
     public SearchResult search(String query) {
         TtlMdcAdapter.setLayer("RETRIEVAL");
         try {
-            // 1. 查询规划
+            // 1. 查询规划（调用一次llm）
             QueryPlanningService.QueryPlan plan = planQuery(query);
             log.info("Query plan: strategy={}, rewritten={}, timeIntent={}, timeRange={}",
                     plan.strategy(), plan.rewrittenQuery(), plan.timeIntent(), plan.timeRange());
@@ -42,7 +42,7 @@ public class HybridSearchService {
             // 2. 执行检索管线
             SearchContext context = executePipeline(query, plan);
 
-            // 3. 低置信度重试：证据不足时改写 query 再试一次
+            // 3. 低置信度重试
             if (shouldRetry(context)) {
                 log.info("Evidence level {} is below SUFFICIENT, retrying with rewritten query",
                         context.getEvidenceLevel());

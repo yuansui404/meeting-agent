@@ -28,6 +28,10 @@ public class RagProperties {
         private int rrfK = 60;
         private boolean rerankEnabled = false;
         private int rerankTopk = 5;
+        /** 向量检索相似度硬底线，低于此值直接丢弃 */
+        private double vectorSimilarityFloor = 0.4;
+        /** 向量检索相对落差，最高分 - 此值 = 动态下限 */
+        private double vectorSimilarityDrop = 0.25;
     }
 
     @Data

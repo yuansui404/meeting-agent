@@ -3,7 +3,7 @@ package com.meeting.config;
 import com.meeting.agent.*;
 import com.meeting.conversation.middleware.FileContextMiddleware;
 import com.meeting.conversation.middleware.ProfileIndexMiddleware;
-import com.meeting.conversation.middleware.SearchCheckReminderMiddleware;
+import com.meeting.conversation.middleware.SearchResponseCheckMiddleware;
 import com.meeting.knowledgebase.tool.UploadToKnowledgeBaseTool;
 import com.meeting.state.PgAgentStateStore;
 import io.agentscope.core.formatter.openai.DeepSeekFormatter;
@@ -138,7 +138,7 @@ public class AgentConfig {
                                               PgAgentStateStore pgAgentStateStore,
                                               FileContextMiddleware fileContextMiddleware,
                                               ProfileIndexMiddleware profileIndexMiddleware,
-                                              SearchCheckReminderMiddleware searchCheckReminderMiddleware) {
+                                              SearchResponseCheckMiddleware searchResponseCheckMiddleware) {
         return HarnessAgent.builder()
                 .name("MeetingAssistant")
                 .description("会议纪要智能助手，支持子 agent 委派")
@@ -165,7 +165,7 @@ public class AgentConfig {
                 .disableFilesystemTools()
                 .middleware(profileIndexMiddleware)
                 .middleware(fileContextMiddleware)
-                .middleware(searchCheckReminderMiddleware)
+                .middleware(searchResponseCheckMiddleware)
                 .build();
     }
 

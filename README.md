@@ -4,16 +4,16 @@
 
 ## 技术栈
 
-| 层级 | 技术选型                                      |
-|------|-------------------------------------------|
-| 前端 | React 18 + Ant Design 5 + TypeScript      |
-| 后端 | Spring Boot 3.2 + Java 21 + JPA           |
-| Agent | AgentScope (HarnessAgent + Subagent 委派)   |
+| 层级 | 技术选型 |
+|------|----------|
+| 前端 | React 18 + Ant Design 5 + TypeScript |
+| 后端 | Spring Boot 3.2 + Java 21 + JPA + JdbcTemplate |
+| Agent | AgentScope (HarnessAgent + Subagent 委派) |
 | LLM | DeepSeek（对话/改写/Rerank）、ZhiPu GLM-4V（图片理解） |
-| ASR | MiMo-V2.5-ASR（语音转文字）                      |
-| 向量存储 | PostgreSQL + pgvector（cosine distance）    |
-| 配置中心 | Nacos                                     |
-| 部署 | Docker Compose                            |
+| ASR | MiMo-V2.5-ASR（语音转文字） |
+| 向量存储 | PostgreSQL + pgvector（cosine distance） |
+| 配置中心 | Nacos |
+| 部署 | Docker Compose |
 
 ## 系统架构
 
@@ -46,18 +46,21 @@
 
 ### 1. Agent 智能体
 
-基于 AgentScope 构建，封装 10 类工具，支持 subagent 动态委派：
+基于 AgentScope 构建，封装 12 类工具，支持 subagent 动态委派：
 
 | 工具 | 说明 |
 |------|------|
-| `search_documents` | 混合 RAG 搜索（全文+向量+RRF 融合），带证据评估和引用 |
+| `search_documents` | 混合 RAG 搜索（全文+向量+RRF 融合+rerank），带证据评估和引用 |
 | `search_knowledge_base` | 知识库向量相似度搜索 |
 | `list_meetings` | 分页查询会议列表 |
 | `search_meeting_titles` | 会议标题关键词搜索 |
 | `read_profile` / `update_profile` | 用户画像读写 |
 | `call_mimo_asr` | MiMo ASR 语音转写 |
 | `understand_image` | 多模态图片理解（ZhiPu GLM-4V） |
-| `upload_to_knowledge_base` | 上传对话到知识库（含用户确认流程） |
+| `export_docx` | 导出会议纪要 |
+| `get_style_examples` | 获取风格范例 |
+| `list_templates` | 模板列表查询 |
+| `response_check` | 搜索结果检查（低置信度提示用户） |
 | Tavily MCP | 联网搜索（MCP 协议接入） |
 
 ### 2. RAG 多阶段检索管线
@@ -105,18 +108,20 @@ DeepSeek LLM 重排序（batch=10, score 0-10）
 meeting-agent/
 ├── backend/                          # Spring Boot 后端
 │   └── src/main/java/com/meeting/
-│       ├── agent/                    # AgentScope Tool 实现（10 个工具）
+│       ├── agent/                    # AgentScope Tool 实现（12 个工具）
 │       ├── config/                   # @Configuration + @ConfigurationProperties
-│       ├── controller/               # REST API + DTO
+│       ├── controller/               # REST API + DTO（request/response）
 │       ├── conversation/             # 会话领域：Session, Dialogue, Rewrite, Style
 │       ├── document/                 # 文档 ETL：上传 → 解析 → 分块 → 向量化
+│       ├── eval/                     # 检索评估（EvalRunner + EvalLlmClient）
 │       ├── knowledgebase/            # 知识库上传 + 风格范例管理
-│       ├── llm/                      # LLM 基础设施：Embedding, Vectorization, IntentClassifier
+│       ├── llm/                      # LLM 基础设施：Embedding, Vectorization
 │       ├── meeting/                  # 会议实体 + MeetingDateExtractor
 │       ├── retrieval/                # RAG 检索管线（8 阶段）
 │       │   ├── algorithm/            # RRF, 时间衰减, 去重, 证据评估, 引用构建
 │       │   └── service/              # HybridSearchService, Vector/FullText Search, Reranker
 │       ├── state/                    # PgAgentStateStore（状态持久化）
+│       ├── template/                 # 模板管理
 │       ├── transcription/            # MiMo ASR 调用, 文件处理, 音频提取
 │       ├── user/                     # 用户画像 + 记忆存储
 │       └── common/                   # ApiResponse, BusinessException, GlobalExceptionHandler

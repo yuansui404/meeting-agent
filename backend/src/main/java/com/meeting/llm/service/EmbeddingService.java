@@ -83,7 +83,7 @@ public class EmbeddingService {
     }
 
     /**
-     * Call OpenAI-compatible embedding API (works with OpenAI, DeepSeek, and other compatible providers).
+     * 调用 OpenAI 兼容的 Embedding API，将文本转为向量。
      */
     @SuppressWarnings("unchecked")
     private float[] callEmbeddingApi(String text) {
@@ -122,8 +122,9 @@ public class EmbeddingService {
     }
 
     /**
-     * Batch variant — sends multiple texts in one API call.
-     * Splits into sub-batches of at most {@value #BATCH_SIZE} texts to avoid API limits.
+     * 批量向量化：一次 API 调用发送多个文本。
+     * 按每批 10 条拆分，避免 API 单次请求体限制。
+     * 返回的 embedding 按输入顺序排序（通过 OpenAI API 返回的 index 字段）。
      */
     @SuppressWarnings("unchecked")
     private List<float[]> callEmbeddingApiBatch(List<String> texts) {

@@ -29,6 +29,13 @@ cd docker && docker compose up -d
 # 本地开发（仅启动基础设施）
 cd docker && docker compose up -d postgres redis nacos
 cd backend && mvn spring-boot:run
+
+# 本地全栈启动（基础设施 + 后端）
+cd docker && docker compose up -d postgres redis nacos
+cd backend && mvn spring-boot:run -q
+
+# 前端单独启动
+cd frontend && PORT=3000 BROWSER=none npm start
 ```
 
 ## Architecture
@@ -39,42 +46,58 @@ Spring Boot 3.2 + Java 21，按业务领域组织为独立模块，每个模块�
 
 ```
 com.meeting/
-├── controller/          # REST API（request record / response VO），统一 ApiResponse<T> 响应
-├── conversation/        # 会话领域：Session, Dialogue, Rewrite, Style
-│   ├── middleware/      # Agent 中间件：FileContext, ProfileIndex, SearchCheckReminder
-│   └── service/         # ChatStreamService（SSE 流式）, DocxExportService, StyleLearningService
-├── document/            # 文档 ETL：上传 → 解析 → 分块（ChunkStrategy）→ 向量化
-├── knowledgebase/       # 知识库上传 + UploadToKnowledgeBaseTool
-├── llm/                 # EmbeddingService（向量化）
-├── meeting/             # MeetingDateExtractor
-├── retrieval/           # RAG 检索管线（8 阶段）
-│   ├── algorithm/       # RrfMerger, TimeDecayScorer, DocumentDeduplicator, EvidenceEvaluator, CitationBuilder
-│   └── service/         # HybridSearchService, QueryPlanningService, FullTextSearch, VectorSearch, Reranker
-├── transcription/       # MiMo ASR 调用 + 文件处理 + 音频提取
-├── user/                # 用户画像读写
-├── agent/               # AgentScope Tool 实现（11 个 @Component AgentTool）：SearchDocuments, ListMeetings, CallMiMoAsr, UnderstandImage, ExportDocx 等
-├── template/            # 模板管理（TemplateEntity, TemplateController, TemplateService）
-├── state/               # PgAgentStateStore（对话状态持久化到 PostgreSQL JSONB）
-├── eval/                # EvalRunner（RAG 评估）
-├── config/              # @Configuration + @ConfigurationProperties（DeepSeek, Mimo, ZhiPu, Rag, File, Embedding 等）
-└── common/              # ApiResponse, BusinessException, GlobalExceptionHandler, SseEventTypes, TtlMdcAdapter, TraceIdFilter
+├── controller/        # REST API，统一 ApiResponse<T> 响应
+│   ├── dto/request/   # 请求体 record
+│   └── dto/response/  # 响应 VO（SearchHitVO 等）
+├── conversation/      # 会话领域：Session, Dialogue, Rewrite, Style
+│   ├── middleware/     # Agent 中间件：FileContext, ProfileIndex, SearchResponseCheck
+│   ├── converter/     # JPA JSON 转换器（JsonListConverter, JsonMapConverter, JsonMetadataConverter）
+│   └── service/       # ChatStreamService（SSE 流式）, DocxExportService, StyleLearningService
+├── document/          # 文档 ETL：上传 → 解析 → 分块（ChunkStrategy）→ 向量化
+├── knowledgebase/     # 知识库上传 + UploadToKnowledgeBaseTool
+├── llm/               # EmbeddingService（向量化）
+├── meeting/           # MeetingDateExtractor
+├── retrieval/         # RAG 检索管线（8 阶段）
+│   ├── algorithm/     # RrfMerger, TimeDecayScorer, DocumentDeduplicator, EvidenceEvaluator, CitationBuilder
+│   └── service/       # HybridSearchService, QueryPlanningService, FullTextSearch, VectorSearch, Reranker
+├── transcription/     # MiMo ASR 调用 + 文件处理 + 音频提取
+├── user/              # 用户画像读写
+├── agent/             # AgentScope Tool 实现（12 个 @Component AgentTool）
+├── template/          # 模板管理（TemplateEntity, TemplateController, TemplateService）
+├── state/             # PgAgentStateStore（对话状态持久化到 PostgreSQL JSONB）
+├── eval/              # EvalRunner（RAG 评估）+ EvalLlmClient
+├── config/            # @Configuration + @ConfigurationProperties（DeepSeek, Mimo, ZhiPu, Rag, File, Embedding 等）
+└── common/            # ApiResponse, BusinessException, GlobalExceptionHandler, SseEventTypes, TtlMdcAdapter, TraceIdFilter
 ```
 
 ### Key Technical Decisions
 
 - **DI**: `@RequiredArgsConstructor` + `final` 字段注入
 - **配置外化**: Nacos 管理 API 密钥和业务参数，本地 `application.yml` 仅含基础设施配置。Nacos 配置通过 `POST /actuator/refresh` 热加载
-- **Agent 架构**: HarnessAgent（agentscope）主 agent，通过 AGENTS.md 定义路由规则，按意图加载 skill（rewrite-routing / transcription-routing / search-routing）。子 agent 通过 `agent_spawn` 委派，subagent 定义在 `backend/.agentscope/workspace/subagents/`
-- **工具组机制**: 工具分为 rewrite / search / file 三组，通过 `reset_equipped_tools` 激活。通用工具（read_profile, export_docx 等）始终可用
+- **Agent 架构**: HarnessAgent（agentscope）主 agent，通过 AGENTS.md 定义路由规则，按意图加载 skill（rewrite-routing / transcription-routing / search-routing）。子 agent 通过 `agent_spawn` 委派，skill 定义在 `backend/.agentscope/workspace/skills/`，subagent 定义在 `backend/.agentscope/workspace/subagents/`。工具分为 rewrite / search / file 三组，通过 `reset_equipped_tools` 激活。通用工具（read_profile, export_docx 等）始终可用
+- **Agent 工具列表（12 个）**:
+  - `SearchDocumentsTool` — 混合 RAG 搜索（全文+向量+RRF+rerank+证据评估）
+  - `SearchMeetingTitlesTool` — 会议标题关键词搜索
+  - `ListMeetingsTool` — 分页查询会议列表
+  - `CallMiMoAsrTool` — MiMo ASR 语音转写
+  - `UnderstandImageTool` — 多模态图片理解（ZhiPu GLM-4V）
+  - `ReadProfileTool` / `UpdateProfileTool` — 用户画像读写
+  - `ExportDocxTool` — 导出会议纪要
+  - `GetStyleExamplesTool` — 获取风格范例
+  - `ListTemplatesTool` — 模板列表查询
+  - `ResponseCheckTool` — 搜索结果检查（低置信度提示）
+  - `SearchToolResponse` — 搜索结果结构化响应
 - **SSE 流式**: ChatStreamService 使用虚拟线程 + AtomicBoolean 实现前后端生命周期解耦（前端断开只停止推流，大模型继续生成完毕并持久化）
 - **SSE 事件协议**: 定义在 `SseEventTypes` — text_delta / thinking / tool_call / tool_result / done / error
 - **异常处理**: GlobalExceptionHandler 区分 SSE 请求和普通 REST 请求，SSE 请求直接写事件流而非返回 ResponseEntity
 - **MDC 追踪**: TraceIdFilter 注入 traceId，TtlMdcAdapter 支持跨线程传递，用于请求链路追踪
 - **向量存储**: MeetingVector 用 `Long meetingId` 裸外键（非 @ManyToOne），因 Hibernate 无法映射 pgvector VECTOR 列，读取走 JdbcTemplate
 - **检索管线**: QueryPlan → 全文+向量并行（CompletableFuture）→ RRF 融合（k=60）→ DeepSeek Rerank（batch=10）→ 4 级时间衰减 → 文档级去重 → 低置信度重试 → 相邻 chunk 扩展 + 证据评估
-- **测试**: 使用 H2 内存数据库，测试配置中关闭 Reranker（`rag.retrieval.rerank-enabled: false`）
+- **测试**: 使用 H2 内存数据库，测试配置中关闭 Reranker（`rag.retrieval.rerank-enabled: false`）。运行 eval 评估：`cd backend && mvn test -Dtest=EvalRunner`
+- **Eval 评估**: `EvalRunner` 从 `scripts/eval/test_cases.json` 读取测试用例，调用检索管线并评分，输出 JSON 结果到 `backend/target/eval-results/`
 - **JPA JSON 转换器**: `conversation/converter/` 下 JsonListConverter, JsonMapConverter, JsonMetadataConverter 用于 JSONB 列映射
 - **AgentScope skill 路由**: 路由规则定义在 `AGENTS.md`，skill 文件在 `backend/.agentscope/workspace/skills/`，支持 `load_skill_through_path` 运行时加载
+- **前端**: React 18 + Ant Design 5 + TypeScript，组件见 `frontend/src/components/`（DialoguePanel, SearchPanel, FileUpload, MeetingList, KnowledgeBase, ProfileManager, MemoryEditor, TemplateManagement, PreviewDrawer），API 调用层在 `frontend/src/services/`（`api.ts`, `template.ts`）
 
 ### Core Business Flows
 
@@ -95,5 +118,5 @@ com.meeting/
 ## Must Follow
 
 - 完成某项任务后更新 `docs/superpowers/开发计划.md`
-- 开发计划没有的任务需要进行添加
+- 开发计划中没有的任务需要先添加到开发计划中再进行
 - 提交时排除 docs 目录和 scripts/eval/test_cases.json（git commit 不带这些变更）

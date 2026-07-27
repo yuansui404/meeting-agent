@@ -1,5 +1,6 @@
 package com.meeting.eval;
 
+import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
@@ -16,6 +17,8 @@ import java.time.Duration;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 /**
@@ -31,15 +34,17 @@ public class EvalRunner {
 
     record TestCase(
             int id,
-            String question,
+            @JsonProperty("query") String question,
             List<Integer> groundTruthDocIds,
             String groundTruthAnswer,
-            String topic,
-            String queryType,
-            String difficulty
-    ) {}
+            List<String> tags
+    ) {
+        String topic() { return tags != null && tags.size() > 0 ? tags.get(0) : ""; }
+        String queryType() { return tags != null && tags.size() > 1 ? tags.get(1) : ""; }
+        String difficulty() { return tags != null && tags.size() > 2 ? tags.get(2) : ""; }
+    }
 
-    record SearchHit(String source, String content, double score, String speaker,
+    record SearchHit(String source, String content, String speaker,
                      String participants, String topic, String sectionHeading,
                      Integer documentId) {}
 
@@ -47,17 +52,22 @@ public class EvalRunner {
                           String queryUsed, List<SearchHit> results) {}
 
     record EvalResult(
-            int testCaseId,
-            String question,
-            double hitRate3,
-            double precision3,
-            double recall3,
-            long latencyMs,
-            String evidenceLevel,
-            int totalCandidates,
-            List<Integer> retrievedDocIds,
-            Map<String, Object> details
-    ) {}
+        int testCaseId,
+        String question,
+        double hitRate3,
+        double precision3,
+        double recall3,
+        long latencyMs,
+        String evidenceLevel,
+        int totalCandidates,
+        List<Integer> retrievedDocIds,
+        String generatedAnswer,
+        double faithfulness,
+        double answerRelevance,
+        double contextPrecision,
+        long generationLatencyMs,
+        Map<String, Object> details
+) {}
 
     record EvalRun(
             String runName,
@@ -85,11 +95,13 @@ public class EvalRunner {
     public static void main(String[] args) throws Exception {
         String runName = "eval-" + LocalDateTime.now().format(DateTimeFormatter.ofPattern("MMdd-HHmmss"));
         List<String> compare = null;
+        boolean skipLlm = false;
 
         for (int i = 0; i < args.length; i++) {
             switch (args[i]) {
                 case "--run-name" -> runName = args[++i];
                 case "--compare" -> compare = List.of(args[++i], args[++i]);
+                case "--skip-llm" -> skipLlm = true;
             }
         }
 
@@ -112,7 +124,21 @@ public class EvalRunner {
         List<TestCase> cases = mapper.readValue(testFile, new TypeReference<>() {});
         System.out.println("Loaded " + cases.size() + " test cases");
 
-        // 2. 逐条评估
+        // 2. 初始化 LLM 客户端
+        EvalLlmClient llm = null;
+        if (!skipLlm) {
+            try {
+                llm = new EvalLlmClient();
+                System.out.println("LLM client initialized (SENSENOVA_API_KEY)");
+            } catch (IllegalStateException e) {
+                System.out.println("WARN: " + e.getMessage());
+                System.out.println("LLM metrics will be skipped. Use --skip-llm to suppress this warning.");
+            }
+        } else {
+            System.out.println("LLM metrics skipped (--skip-llm)");
+        }
+
+        // 3. 逐条评估
         List<EvalResult> results = new ArrayList<>();
 
         for (TestCase c : cases) {
@@ -121,20 +147,31 @@ public class EvalRunner {
             long elapsed = System.currentTimeMillis() - t0;
 
             EvalResult result = computeMetrics(c, searchResp, elapsed);
+
+            // LLM-based evaluation
+            if (llm != null && searchResp.results() != null && !searchResp.results().isEmpty()) {
+                result = computeLlmMetrics(c, searchResp, result, llm);
+            }
+
             results.add(result);
 
-            System.out.printf("  [%2d] %-40s P@3=%.2f HitRate=%.2f%n",
-                    c.id, truncate(c.question, 40), result.precision3(), result.hitRate3());
+            String progress = String.format("  [%2d] %-40s P@3=%.2f",
+                    c.id, truncate(c.question, 40), result.precision3());
+            if (result.generatedAnswer() != null && !result.generatedAnswer().isEmpty()) {
+                progress += String.format(" F=%.2f AR=%.2f CP=%.2f",
+                        result.faithfulness(), result.answerRelevance(), result.contextPrecision());
+            }
+            System.out.println(progress);
         }
 
-        // 3. 聚合
+        // 4. 聚合
         Map<String, Object> summary = aggregate(results);
 
-        // 4. 报告
+        // 5. 报告
         printReport(runName, summary);
         printSliceAnalysis(results);
 
-        // 5. 保存结果
+        // 6. 保存结果
         saveResults(runName, summary, results);
     }
 
@@ -172,7 +209,6 @@ public class EvalRunner {
                 hits.add(new SearchHit(
                         optStr(item, "source", "未知文档"),
                         optStr(item, "content", ""),
-                        optDouble(item, "score", 0.0),
                         optStr(item, "speaker", ""),
                         optStr(item, "participants", ""),
                         optStr(item, "topic", ""),
@@ -183,6 +219,257 @@ public class EvalRunner {
         }
 
         return new SearchResponse(evidenceLevel, strategy, total, queryUsed, hits);
+    }
+
+    // ────────────────────────────── LLM 评估指标 ──────────────────────────────
+
+    static EvalResult computeLlmMetrics(TestCase c, SearchResponse resp,
+                                         EvalResult base, EvalLlmClient llm) {
+        Map<String, Object> details = new HashMap<>(base.details());
+
+        // 1. Format context from search results
+        String context = formatContext(resp.results());
+
+        // 2. Generate answer
+        long genStart = System.currentTimeMillis();
+        String generatedAnswer = generateAnswer(llm, c.question(), context);
+        long genLatency = System.currentTimeMillis() - genStart;
+
+        // 3. Compute faithfulness
+        double faithfulness = computeFaithfulness(llm, generatedAnswer, context, details);
+
+        // 4. Compute answer relevance
+        double answerRelevance = computeAnswerRelevance(llm, c.question(), generatedAnswer, details);
+
+        // 5. Compute context precision
+        double contextPrecision = computeContextPrecision(llm, c.question(), resp.results(), details);
+
+        return new EvalResult(
+                base.testCaseId(), base.question(),
+                base.hitRate3(), base.precision3(), base.recall3(),
+                base.latencyMs(), base.evidenceLevel(), base.totalCandidates(),
+                base.retrievedDocIds(),
+                generatedAnswer,
+                round(faithfulness, 4), round(answerRelevance, 4), round(contextPrecision, 4),
+                genLatency, details
+        );
+    }
+
+    static String generateAnswer(EvalLlmClient llm, String question, String context) {
+        String prompt = EvalPrompts.generationUserPrompt(question, context);
+        return llm.call(EvalPrompts.generationSystemPrompt(), prompt, 1024);
+    }
+
+    /**
+     * Faithfulness: extract atomic claims from answer, verify each against context.
+     * Score = supported_claims / total_claims.
+     * Empty or trivial answers score 1.0 (no unsupported claims).
+     */
+    static double computeFaithfulness(EvalLlmClient llm, String answer,
+                                       String context, Map<String, Object> details) {
+        if (answer == null || answer.isBlank()) {
+            details.put("faithfulness_details", Map.of("reason", "empty answer", "score", 1.0));
+            return 1.0;
+        }
+
+        // Step 1: Extract claims
+        String claimsText = llm.call(
+                EvalPrompts.claimExtractionSystemPrompt(),
+                EvalPrompts.claimExtractionUserPrompt(answer),
+                512);
+        List<String> claims = parseClaims(claimsText);
+
+        if (claims.isEmpty()) {
+            details.put("faithfulness_details", Map.of("reason", "no claims extracted", "score", 1.0));
+            return 1.0;
+        }
+
+        // Step 2: Verify claims
+        String verificationText = llm.call(
+                EvalPrompts.claimVerificationSystemPrompt(),
+                EvalPrompts.claimVerificationUserPrompt(context, claimsText),
+                512);
+        List<String> verdicts = parseVerdicts(verificationText, claims.size());
+
+        int supported = (int) verdicts.stream().filter("SUPPORTED"::equals).count();
+        int total = verdicts.size();
+        double score = total > 0 ? (double) supported / total : 1.0;
+
+        Map<String, Object> faithDetails = new LinkedHashMap<>();
+        faithDetails.put("claims", claims);
+        faithDetails.put("verdicts", verdicts);
+        faithDetails.put("supported_count", supported);
+        faithDetails.put("total_count", total);
+        details.put("faithfulness_details", faithDetails);
+
+        return score;
+    }
+
+    /**
+     * Answer Relevance: LLM-as-Judge scores how relevant the answer is to the question.
+     */
+    static double computeAnswerRelevance(EvalLlmClient llm, String question,
+                                          String answer, Map<String, Object> details) {
+        if (answer == null || answer.isBlank()) {
+            details.put("answer_relevance_details", Map.of("reason", "empty answer", "score", 0.0));
+            return 0.0;
+        }
+
+        String response = llm.call(
+                EvalPrompts.answerRelevanceSystemPrompt(),
+                EvalPrompts.answerRelevanceUserPrompt(question, answer),
+                64);
+        double score = parseScore(response);
+
+        details.put("answer_relevance_details", Map.of("raw_response", response, "score", score));
+        return score;
+    }
+
+    /**
+     * Context Precision: LLM judges relevance of each chunk, then computes AP@k.
+     */
+    static double computeContextPrecision(EvalLlmClient llm, String question,
+                                           List<SearchHit> hits, Map<String, Object> details) {
+        if (hits == null || hits.isEmpty()) {
+            details.put("context_precision_details", Map.of("reason", "no chunks", "score", 0.0));
+            return 0.0;
+        }
+
+        // Limit to top 10 chunks
+        List<SearchHit> topHits = hits.size() > 10 ? hits.subList(0, 10) : hits;
+
+        // Format chunks
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < topHits.size(); i++) {
+            SearchHit hit = topHits.get(i);
+            sb.append("文本块").append(i + 1).append("：").append(hit.content()).append("\n\n");
+        }
+
+        String response = llm.call(
+                EvalPrompts.contextPrecisionSystemPrompt(),
+                EvalPrompts.contextPrecisionUserPrompt(question, sb.toString()),
+                512);
+        List<Boolean> verdicts = parseRelevanceVerdicts(response, topHits.size());
+
+        // Compute AP@k
+        List<Map<String, Object>> chunkVerdicts = new ArrayList<>();
+        int relevantSoFar = 0;
+        double sumPrecision = 0.0;
+        for (int k = 0; k < verdicts.size(); k++) {
+            boolean relevant = verdicts.get(k);
+            Map<String, Object> cv = new LinkedHashMap<>();
+            cv.put("rank", k + 1);
+            cv.put("relevant", relevant);
+            if (relevant) {
+                relevantSoFar++;
+                double precisionAtK = (double) relevantSoFar / (k + 1);
+                cv.put("precision_at_k", precisionAtK);
+                sumPrecision += precisionAtK;
+            } else {
+                cv.put("precision_at_k", 0.0);
+            }
+            chunkVerdicts.add(cv);
+        }
+
+        int totalRelevant = (int) verdicts.stream().filter(b -> b).count();
+        double score = totalRelevant > 0 ? sumPrecision / totalRelevant : 0.0;
+
+        Map<String, Object> cpDetails = new LinkedHashMap<>();
+        cpDetails.put("chunk_verdicts", chunkVerdicts);
+        cpDetails.put("relevant_count", totalRelevant);
+        cpDetails.put("total_chunks", verdicts.size());
+        details.put("context_precision_details", cpDetails);
+
+        return score;
+    }
+
+    // ────────────────────────────── 辅助方法 ──────────────────────────────
+
+    /**
+     * Format search results into a structured context string for LLM prompts.
+     * Limits to top 10 chunks to avoid token overflow.
+     */
+    static String formatContext(List<SearchHit> hits) {
+        if (hits == null || hits.isEmpty()) return "";
+        StringBuilder sb = new StringBuilder();
+        int count = 0;
+        for (SearchHit hit : hits) {
+            if (count >= 10) break;
+            sb.append("---\n");
+            sb.append("来源：").append(hit.source() != null ? hit.source() : "未知").append("\n");
+            if (hit.speaker() != null && !hit.speaker().isBlank()) {
+                sb.append("发言人：").append(hit.speaker()).append("\n");
+            }
+            sb.append("内容：").append(hit.content()).append("\n");
+            count++;
+        }
+        return sb.toString();
+    }
+
+    /**
+     * Parse numbered claim extraction response.
+     * Lines matching "1. xxx", "2. xxx", etc.
+     */
+    static List<String> parseClaims(String response) {
+        if (response == null || response.isBlank()) return List.of();
+        List<String> claims = new ArrayList<>();
+        for (String line : response.lines().map(String::trim).toList()) {
+            if (line.matches("\\d+\\..*")) {
+                String claim = line.replaceFirst("\\d+\\.\\s*", "").trim();
+                if (!claim.isBlank()) {
+                    claims.add(claim);
+                }
+            }
+        }
+        return claims;
+    }
+
+    /**
+     * Parse numbered claim verification response.
+     * Lines matching "1: SUPPORTED", "2: NOT_SUPPORTED", etc.
+     */
+    static List<String> parseVerdicts(String response, int expectedCount) {
+        if (response == null || response.isBlank()) return List.of();
+        List<String> verdicts = new ArrayList<>();
+        for (String line : response.lines().map(String::trim).toList()) {
+            if (line.matches("\\d+:\\s*(SUPPORTED|NOT_SUPPORTED)")) {
+                String verdict = line.split(":")[1].trim();
+                verdicts.add(verdict);
+            }
+        }
+        return verdicts;
+    }
+
+    /**
+     * Parse relevance verdicts from context precision response.
+     * Lines matching "1: RELEVANT", "2: NOT_RELEVANT", etc.
+     */
+    static List<Boolean> parseRelevanceVerdicts(String response, int expectedCount) {
+        if (response == null || response.isBlank()) return List.of();
+        List<Boolean> verdicts = new ArrayList<>();
+        for (String line : response.lines().map(String::trim).toList()) {
+            if (line.matches("\\d+:\\s*(RELEVANT|NOT_RELEVANT)")) {
+                verdicts.add(line.contains("RELEVANT"));
+            }
+        }
+        return verdicts;
+    }
+
+    /**
+     * Parse a floating point score from LLM response (0.0 - 1.0).
+     */
+    static double parseScore(String response) {
+        if (response == null || response.isBlank()) return 0.0;
+        Matcher m = Pattern.compile("\\d+\\.?\\d*").matcher(response);
+        if (m.find()) {
+            try {
+                double score = Double.parseDouble(m.group());
+                return Math.max(0.0, Math.min(1.0, score));
+            } catch (NumberFormatException e) {
+                return 0.0;
+            }
+        }
+        return 0.0;
     }
 
     // ────────────────────────────── 指标计算 ──────────────────────────────
@@ -216,7 +503,7 @@ public class EvalRunner {
                 c.id(), c.question(),
                 round(hitRate3, 4), round(precision3, 4), round(recall3, 4),
                 latencyMs, resp.evidenceLevel(), resp.totalCandidates(),
-                docIds, new HashMap<>()
+                docIds, "", 0.0, 0.0, 0.0, 0, new HashMap<>()
         );
     }
 
@@ -231,6 +518,20 @@ public class EvalRunner {
                 .filter(r -> "SUFFICIENT".equals(r.evidenceLevel()) || "PARTIAL".equals(r.evidenceLevel()))
                 .count();
 
+        // LLM metrics (only for results with generated answers)
+        double avgFaithfulness = results.stream()
+                .filter(r -> r.generatedAnswer() != null && !r.generatedAnswer().isEmpty())
+                .mapToDouble(EvalResult::faithfulness).average().orElse(0);
+        double avgAnswerRelevance = results.stream()
+                .filter(r -> r.generatedAnswer() != null && !r.generatedAnswer().isEmpty())
+                .mapToDouble(EvalResult::answerRelevance).average().orElse(0);
+        double avgContextPrecision = results.stream()
+                .filter(r -> r.generatedAnswer() != null && !r.generatedAnswer().isEmpty())
+                .mapToDouble(EvalResult::contextPrecision).average().orElse(0);
+        double avgGenLatency = results.stream()
+                .filter(r -> r.generatedAnswer() != null && !r.generatedAnswer().isEmpty())
+                .mapToLong(EvalResult::generationLatencyMs).average().orElse(0);
+
         Map<String, Object> s = new LinkedHashMap<>();
         s.put("totalCases", results.size());
         s.put("avgHitRate3", round(avgHitRate, 4));
@@ -238,6 +539,10 @@ public class EvalRunner {
         s.put("avgRecall", round(avgRecall, 4));
         s.put("avgLatencyMs", Math.round(avgLatency));
         s.put("evidencePassRate", round((double) passedEvidence / results.size(), 4));
+        s.put("avgFaithfulness", round(avgFaithfulness, 4));
+        s.put("avgAnswerRelevance", round(avgAnswerRelevance, 4));
+        s.put("avgContextPrecision", round(avgContextPrecision, 4));
+        s.put("avgGenerationLatencyMs", Math.round(avgGenLatency));
         return s;
     }
 
@@ -247,12 +552,23 @@ public class EvalRunner {
         System.out.println("\n" + "=".repeat(50));
         System.out.println("  Run: " + runName);
         System.out.println("=".repeat(50));
-        System.out.printf("  Cases:        %5d%n", summary.get("totalCases"));
-        System.out.printf("  HitRate@3:    %8.0f%%%n", (double) summary.get("avgHitRate3") * 100);
-        System.out.printf("  Precision@3:  %8.4f%n", summary.get("avgPrecision"));
-        System.out.printf("  Recall@3:     %8.4f%n", summary.get("avgRecall"));
-        System.out.printf("  Avg Latency:  %8dms%n", summary.get("avgLatencyMs"));
-        System.out.printf("  E@top:        %8.0f%%%n", (double) summary.get("evidencePassRate") * 100);
+        System.out.printf("  Cases:            %5d%n", summary.get("totalCases"));
+        System.out.printf("  HitRate@3:        %8.0f%%%n", (double) summary.get("avgHitRate3") * 100);
+        System.out.printf("  Precision@3:      %8.4f%n", summary.get("avgPrecision"));
+        System.out.printf("  Recall@3:         %8.4f%n", summary.get("avgRecall"));
+        System.out.printf("  Avg Latency:      %8dms%n", summary.get("avgLatencyMs"));
+        System.out.printf("  E@top:            %8.0f%%%n", (double) summary.get("evidencePassRate") * 100);
+
+        double faithfulness = (double) summary.getOrDefault("avgFaithfulness", 0.0);
+        double answerRelevance = (double) summary.getOrDefault("avgAnswerRelevance", 0.0);
+        double contextPrecision = (double) summary.getOrDefault("avgContextPrecision", 0.0);
+        if (faithfulness > 0 || answerRelevance > 0 || contextPrecision > 0) {
+            System.out.println("  --- LLM Metrics ---");
+            System.out.printf("  Faithfulness:     %8.4f%n", faithfulness);
+            System.out.printf("  Answer Relevance: %8.4f%n", answerRelevance);
+            System.out.printf("  Context Precision:%8.4f%n", contextPrecision);
+            System.out.printf("  Gen Latency:      %8dms%n", summary.getOrDefault("avgGenerationLatencyMs", 0L));
+        }
         System.out.println("=".repeat(50));
     }
 
@@ -315,6 +631,7 @@ public class EvalRunner {
         Collections.sort(allIds);
 
         List<Double> hitRateDiffs = new ArrayList<>();
+        List<Double> faithfulnessDiffs = new ArrayList<>();
         for (int id : allIds) {
             EvalResult e1 = map1.get(id);
             EvalResult e2 = map2.get(id);
@@ -323,10 +640,27 @@ public class EvalRunner {
             String marker = diff > 0.01 ? "▲" : (diff < -0.01 ? "▼" : "─");
             long latDiff = e2.latencyMs() - e1.latencyMs();
             String latStr = Math.abs(latDiff) > 10 ? String.format("lat=%d→%dms (%+d)", e1.latencyMs(), e2.latencyMs(), latDiff) : "";
-            System.out.printf("  %s [%2d] %-45s HitRate: %.3f→%.3f (%+.3f)  EV: %s→%s  %s%n",
+
+            // LLM metrics delta
+            String llmStr = "";
+            if (e2.generatedAnswer() != null && !e2.generatedAnswer().isEmpty()
+                    && e1.generatedAnswer() != null && !e1.generatedAnswer().isEmpty()) {
+                double fDiff = e2.faithfulness() - e1.faithfulness();
+                double arDiff = e2.answerRelevance() - e1.answerRelevance();
+                double cpDiff = e2.contextPrecision() - e1.contextPrecision();
+                faithfulnessDiffs.add(fDiff);
+                llmStr = String.format(" F:%.3f→%.3f(%+.3f)", e1.faithfulness(), e2.faithfulness(), fDiff);
+                if (Math.abs(arDiff) > 0.01 || Math.abs(cpDiff) > 0.01) {
+                    llmStr += String.format(" AR:%.2f→%.2f CP:%.2f→%.2f",
+                            e1.answerRelevance(), e2.answerRelevance(),
+                            e1.contextPrecision(), e2.contextPrecision());
+                }
+            }
+
+            System.out.printf("  %s [%2d] %-45s HitRate: %.3f→%.3f (%+.3f)  EV: %s→%s  %s%s%n",
                     marker, id, truncate(e1.question(), 45),
                     e1.hitRate3(), e2.hitRate3(), diff,
-                    e1.evidenceLevel(), e2.evidenceLevel(), latStr);
+                    e1.evidenceLevel(), e2.evidenceLevel(), latStr, llmStr);
         }
 
         double avg1 = allIds.stream().mapToDouble(id -> map1.get(id).hitRate3()).average().orElse(0);
@@ -338,9 +672,15 @@ public class EvalRunner {
         long unchanged = hitRateDiffs.size() - improved - degraded;
 
         System.out.println("\n  --- Summary ---");
-        System.out.printf("  Avg HitRate: %.4f → %.4f (%+.4f)%n", avg1, avg2, avg2 - avg1);
-        System.out.printf("  Avg Lat:     %.0f → %.0fms (%+.0fms)%n", avgLat1, avgLat2, avgLat2 - avgLat1);
-        System.out.printf("  Cases:       %d improved, %d degraded, %d unchanged%n", improved, degraded, unchanged);
+        System.out.printf("  Avg HitRate:     %.4f → %.4f (%+.4f)%n", avg1, avg2, avg2 - avg1);
+        System.out.printf("  Avg Lat:         %.0f → %.0fms (%+.0fms)%n", avgLat1, avgLat2, avgLat2 - avgLat1);
+        System.out.printf("  Cases:           %d improved, %d degraded, %d unchanged%n", improved, degraded, unchanged);
+
+        if (!faithfulnessDiffs.isEmpty()) {
+            double avgF1 = allIds.stream().mapToDouble(id -> map1.get(id).faithfulness()).average().orElse(0);
+            double avgF2 = allIds.stream().mapToDouble(id -> map2.get(id).faithfulness()).average().orElse(0);
+            System.out.printf("  Avg Faithfulness: %.4f → %.4f (%+.4f)%n", avgF1, avgF2, avgF2 - avgF1);
+        }
     }
 
     static EvalRun loadRun(Path dir, String name) throws Exception {
@@ -383,11 +723,6 @@ public class EvalRunner {
     static int optInt(com.fasterxml.jackson.databind.JsonNode node, String field, int def) {
         var v = node.get(field);
         return v != null ? v.asInt() : def;
-    }
-
-    static double optDouble(com.fasterxml.jackson.databind.JsonNode node, String field, double def) {
-        var v = node.get(field);
-        return v != null ? v.asDouble() : def;
     }
 
     static double round(double value, int places) {

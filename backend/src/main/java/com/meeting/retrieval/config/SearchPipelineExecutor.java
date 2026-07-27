@@ -23,8 +23,6 @@ import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.core.task.TaskExecutor;
 import org.springframework.stereotype.Component;
 
-import java.time.LocalDate;
-import java.time.temporal.ChronoUnit;
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
 import java.util.stream.Collectors;
@@ -46,6 +44,8 @@ public class SearchPipelineExecutor {
     private final ObjectMapper objectMapper;
     @Qualifier("llmTaskExecutor")
     private final TaskExecutor taskExecutor;
+
+    private static final int TOPIC_EXPAND_LIMIT = 5;
 
     /**
      * 执行检索管线。
@@ -80,8 +80,6 @@ public class SearchPipelineExecutor {
         }
 
         // 4. 固定步骤
-        log.info("Pipeline step: TIME_DECAY");
-        executeTimeDecay(context);
         log.info("Pipeline step: EVIDENCE_EVAL");
         executeEvidenceEval(context);
         log.info("Pipeline step: NEIGHBOR_EXPAND");
@@ -108,6 +106,10 @@ public class SearchPipelineExecutor {
         context.setVectorResults(results);
     }
 
+    /**
+     * 全文检索：对每个子查询并行执行 FullTextSearchService。
+     * 结果参与后续 RRF 融合。
+     */
     private void executeFullTextSearch(SearchContext context) {
         int topK = ragProperties.getRetrieval().getFtsTopk();
         QueryPlanningService.QueryPlan plan = context.getQueryPlan();
@@ -139,33 +141,8 @@ public class SearchPipelineExecutor {
         context.setMerged(reranked);
     }
 
-    private void executeTimeDecay(SearchContext context) {
-        List<ChunkResult> chunks = context.getMerged();
-        if (chunks.isEmpty()) return;
-
-        QueryPlanningService.TimeIntent intent = context.getQueryPlan().timeIntent();
-        RagProperties.TimeDecay config = ragProperties.getTimeDecay();
-
-        for (ChunkResult r : chunks) {
-            double base01 = score01ForChunk(r);
-            if (config.isEnabled() && intent == QueryPlanningService.TimeIntent.RECENT
-                    && r.getMeetingDate() != null) {
-                long daysOld = ChronoUnit.DAYS.between(r.getMeetingDate(), LocalDate.now());
-                double factor;
-                if (daysOld <= config.getRecentDays())      factor = config.getRecentWeight();
-                else if (daysOld <= 90)                     factor = config.getNormalWeight();
-                else if (daysOld <= 365)                    factor = config.getOldWeight();
-                else                                        factor = config.getArchiveWeight();
-                base01 = Math.min(base01 * factor, 1.0);
-            }
-            r.setFinalScore(2.0 * base01 - 1.0);
-        }
-        context.setMerged(chunks);
-    }
-
     private void executeEvidenceEval(SearchContext context) {
-        EvidenceLevel level = evidenceEvaluator.evaluate(
-                context.getMerged(), context.getVectorResults(), context.getFtsResults());
+        EvidenceLevel level = evidenceEvaluator.evaluate(context.getMerged());
         context.setEvidenceLevel(level);
     }
 
@@ -176,7 +153,7 @@ public class SearchPipelineExecutor {
                     context.getEvidenceLevel());
             return;
         }
-        List<ChunkResult> expanded = expandNeighbors(context.getMerged());
+        List<ChunkResult> expanded = expandNeighbors(context.getMerged(), context.getEvidenceLevel());
         context.setMerged(expanded);
     }
 
@@ -193,16 +170,7 @@ public class SearchPipelineExecutor {
 
     // ── 工具方法 ──
 
-    private double score01ForChunk(ChunkResult r) {
-        if (ragProperties.getSearch().isRerankEnabled()) {
-            double s = r.getFinalScore();
-            return Math.min(Math.max((s + 1.0) / 2.0, 0.0), 1.0);
-        }
-        double maxRrf = 2.0 / (ragProperties.getRetrieval().getRrfK() + 1);
-        return Math.min(r.getRrfScore() / maxRrf, 1.0);
-    }
-
-    private List<ChunkResult> expandNeighbors(List<ChunkResult> results) {
+    private List<ChunkResult> expandNeighbors(List<ChunkResult> results, EvidenceLevel evidenceLevel) {
         List<ChunkResult> expanded = new ArrayList<>();
         Set<Long> seenIds = new HashSet<>();
 
@@ -222,6 +190,21 @@ public class SearchPipelineExecutor {
             }
         }
 
+        // PARTIAL 时构建 topic 索引，用于同议题扩展
+        boolean doTopicExpand = evidenceLevel == EvidenceLevel.PARTIAL;
+        Map<String, List<DocumentChunkV2Entity>> topicIndex = null;
+        if (doTopicExpand) {
+            topicIndex = new HashMap<>();
+            for (var entry : docChunks.entrySet()) {
+                for (var entity : entry.getValue()) {
+                    var parsed = ChunkMetadataParser.parse(entity.getMetadata(), objectMapper);
+                    if (parsed.topic() != null && !parsed.topic().isEmpty()) {
+                        topicIndex.computeIfAbsent(parsed.topic(), k -> new ArrayList<>()).add(entity);
+                    }
+                }
+            }
+        }
+
         for (ChunkResult r : results) {
             expanded.add(r);
             seenIds.add(r.getChunkId());
@@ -230,26 +213,50 @@ public class SearchPipelineExecutor {
             List<DocumentChunkV2Entity> neighbors = docChunks.get(r.getDocumentId());
             if (neighbors == null) continue;
 
+            // 1. chunkIndex 相邻扩展（始终执行）
             for (var n : neighbors) {
                 if (Math.abs(n.getChunkIndex() - r.getChunkIndex()) <= 1
                         && !seenIds.contains(n.getId())) {
                     seenIds.add(n.getId());
                     var parsed = ChunkMetadataParser.parse(n.getMetadata(), objectMapper);
-                    expanded.add(ChunkResult.builder()
-                            .chunkId(n.getId())
-                            .documentId(n.getDocumentId())
-                            .content(n.getContent())
-                            .chunkIndex(n.getChunkIndex())
-                            .speaker(n.getSpeaker())
-                            .fileName(parsed.fileName())
-                            .meetingDate(parsed.meetingDate())
-                            .participants(parsed.participants())
-                            .topic(parsed.topic())
-                            .sectionHeading(parsed.sectionHeading())
-                            .build());
+                    var expandedChunk = buildExpandedChunk(n, parsed);
+                    expanded.add(expandedChunk);
+                }
+            }
+
+            // 2. topic 扩展（仅 PARTIAL 时）
+            if (doTopicExpand && r.getTopic() != null && !r.getTopic().isEmpty()) {
+                List<DocumentChunkV2Entity> sameTopic = topicIndex.get(r.getTopic());
+                if (sameTopic != null) {
+                    int added = 0;
+                    for (var n : sameTopic) {
+                        if (added >= TOPIC_EXPAND_LIMIT) break;
+                        if (!seenIds.contains(n.getId())) {
+                            seenIds.add(n.getId());
+                            var parsed = ChunkMetadataParser.parse(n.getMetadata(), objectMapper);
+                            var expandedChunk = buildExpandedChunk(n, parsed);
+                            expanded.add(expandedChunk);
+                            added++;
+                        }
+                    }
                 }
             }
         }
         return expanded;
+    }
+
+    private ChunkResult buildExpandedChunk(DocumentChunkV2Entity entity, ChunkMetadataParser.ParsedMetadata parsed) {
+        return ChunkResult.builder()
+                .chunkId(entity.getId())
+                .documentId(entity.getDocumentId())
+                .content(entity.getContent())
+                .chunkIndex(entity.getChunkIndex())
+                .speaker(entity.getSpeaker())
+                .fileName(parsed.fileName())
+                .meetingDate(parsed.meetingDate())
+                .participants(parsed.participants())
+                .topic(parsed.topic())
+                .sectionHeading(parsed.sectionHeading())
+                .build();
     }
 }

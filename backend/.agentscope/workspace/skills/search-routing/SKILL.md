@@ -11,9 +11,14 @@ description: 知识库/会议内容搜索 — 路由 skill
 ### Step 1: 委托 search_agent
 立即调用 `agent_spawn(agent_id="search_agent")`，无需做任何准备工作。
 
-### Step 2: 结果校验
-search_agent 返回结果后，调用 `response_checker` 校验回答是否忠实于检索资料。
-校验通过后再回复用户。
+### Step 2: 结果校验（强制）
+search_agent 返回结果后，你必须严格按以下三步执行：
+
+1. **草拟回答** — 根据检索结果起草回答
+2. **调用 `response_checker`** — 传入 `userQuestion`、`searchResults`、`draftResponse` 进行忠实度校验
+3. **校验通过再回复** — 校验结果为 PASS 后才能回复用户。若 FAIL 需修正回答后重新校验
+
+此步骤**不可跳过**。校验通过前不得回复用户。
 
 ### 禁止行为
 - ❌ 不要用自己的知识直接回答，必须搜索知识库

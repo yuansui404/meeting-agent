@@ -13,6 +13,12 @@ import java.time.LocalDateTime;
 @Table(name = "document_chunk_v2", indexes = {
     @Index(name = "idx_dc_v2_document_id", columnList = "document_id")
 })
+/**
+ * 向量搜索：余弦距离最近邻检索。
+ * embedding <=> CAST(:embedding AS vector) 是 pgvector 的余弦距离运算符，值域 [0,2]。
+ * 1 - 距离 转为 [-1,1] 的相似度，越大越相似。
+ * WHERE embedding IS NOT NULL 排除没有向量的记录（如纯元数据块）。
+ */
 @NamedNativeQuery(
     name = "DocumentChunkV2Entity.vectorSearch",
     query = """
@@ -25,6 +31,11 @@ import java.time.LocalDateTime;
         """,
     resultSetMapping = "VectorSearchHitV2Mapping"
 )
+/**
+ * styleExemplarSearch 用于改写风格示例匹配，与 vectorSearch 的区别：
+ * 1. ORDER BY 直接按相似度降序（而非按距离升序，实际效果等价）
+ * 2. 检索结果用于风格模仿而非语义检索，不参与后续 RRF 融合
+ */
 @NamedNativeQuery(
     name = "DocumentChunkV2Entity.styleExemplarSearch",
     query = """
@@ -65,6 +76,7 @@ public class DocumentChunkV2Entity {
     @Column(columnDefinition = "TEXT", nullable = false)
     private String content;
 
+    /** 1024 维 pgvector 向量，由 EmbeddingService 生成，供余弦距离检索 */
     @Column(columnDefinition = "VECTOR(1024)")
     private float[] embedding;
 
@@ -74,6 +86,7 @@ public class DocumentChunkV2Entity {
     @Column(length = 100)
     private String speaker;
 
+    /** 分块元数据 JSON：document_title, meeting_date, participants, topic, section_heading */
     @Column(columnDefinition = "TEXT")
     private String metadata;
 

@@ -20,6 +20,7 @@ import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.stream.Collectors;
+import java.util.stream.IntStream;
 
 @Slf4j
 @Component
@@ -34,6 +35,9 @@ public class BgeReranker implements Reranker {
     private final HuggingFaceTokenizer tokenizer;
     private final boolean useTokenTypeIds;
     private final RagProperties ragProperties;
+
+    /** 检测到的 logit 维度，缓存避免重复探测 */
+    private volatile Integer detectedNumLogits = null;
 
     // 熔断状态
     private final AtomicInteger consecutiveFailures = new AtomicInteger(0);
@@ -65,10 +69,14 @@ public class BgeReranker implements Reranker {
         }
     }
 
+    /**
+     * 对候选结果进行重排序。
+     * 用 cross-encoder 模型对 (query, chunk) 逐对打分，按分数降序重排，取 topN。
+     * 分数仅用于内部排序，不写入 ChunkResult。
+     */
     @Override
     public List<ChunkResult> reRank(String query, List<ChunkResult> candidates, int topN) {
         if (candidates == null || candidates.isEmpty()) return candidates;
-        if (candidates.size() <= topN) return candidates;
 
         // 检查熔断状态
         if (isCircuitOpen()) {
@@ -76,39 +84,31 @@ public class BgeReranker implements Reranker {
             return fallbackByRrf(candidates, topN);
         }
 
-        List<ChunkResult> results = new ArrayList<>();
-
-        for (int i = 0; i < candidates.size(); i += BATCH_SIZE) {
-            int end = Math.min(i + BATCH_SIZE, candidates.size());
-            List<ChunkResult> batch = candidates.subList(i, end);
-            float[] scores = scoreBatch(query, batch);
-
-            for (int j = 0; j < batch.size(); j++) {
-                ChunkResult original = batch.get(j);
-                results.add(ChunkResult.builder()
-                        .chunkId(original.getChunkId())
-                        .documentId(original.getDocumentId())
-                        .content(original.getContent())
-                        .chunkIndex(original.getChunkIndex())
-                        .speaker(original.getSpeaker())
-                        .fileName(original.getFileName())
-                        .vectorScore(original.getVectorScore())
-                        .ftsScore(original.getFtsScore())
-                        .rrfScore(original.getRrfScore())
-                        .finalScore(scores[j])
-                        .vectorRank(original.getVectorRank())
-                        .ftsRank(original.getFtsRank())
-                        .build());
-            }
+        // 对所有候选块分批打分，scores 仅用于内部排序
+        int n = candidates.size();
+        float[] allScores = new float[n];
+        for (int i = 0; i < n; i += BATCH_SIZE) {
+            int end = Math.min(i + BATCH_SIZE, n);
+            float[] batchScores = scoreBatch(query, candidates.subList(i, end));
+            System.arraycopy(batchScores, 0, allScores, i, batchScores.length);
         }
 
-        results.sort((a, b) -> Double.compare(b.getFinalScore(), a.getFinalScore()));
-        return results.stream().limit(topN).collect(Collectors.toList());
+        // 按分数降序排列，取 topN 返回
+        return IntStream.range(0, n)
+                .boxed()
+                .sorted((a, b) -> Float.compare(allScores[b], allScores[a]))
+                .limit(topN)
+                .map(candidates::get)
+                .collect(Collectors.toList());
     }
 
+    /**
+     * 对一批 (query, chunk) 执行 ONNX 推理，返回每个 chunk 的分数用于排序。
+     * 推理失败时降级为 RRF 分数。
+     */
     private float[] scoreBatch(String query, List<ChunkResult> batch) {
         try {
-            // Encode each query-document pair and find max length
+            // 对每个 (query, chunk) 编码，确定批内最大序列长度
             List<long[]> allIds = new ArrayList<>();
             List<long[]> allMasks = new ArrayList<>();
             int maxLen = 0;
@@ -135,41 +135,60 @@ public class BgeReranker implements Reranker {
                 System.arraycopy(mask, 0, attnMask[i], 0, len);
             }
 
-            // Run inference
-            Map<String, OnnxTensor> inputs = new LinkedHashMap<>();
-            inputs.put("input_ids", OnnxTensor.createTensor(env, inputIds));
-            inputs.put("attention_mask", OnnxTensor.createTensor(env, attnMask));
-            if (useTokenTypeIds) {
-                inputs.put("token_type_ids", OnnxTensor.createTensor(env, new long[batchSize][maxLen]));
-            }
+            // Run inference with proper native memory cleanup
+            List<OnnxTensor> ownedTensors = new ArrayList<>();
+            try {
+                OnnxTensor inputIdsTensor = OnnxTensor.createTensor(env, inputIds);
+                ownedTensors.add(inputIdsTensor);
+                OnnxTensor attnMaskTensor = OnnxTensor.createTensor(env, attnMask);
+                ownedTensors.add(attnMaskTensor);
 
-            OrtSession.Result output = session.run(inputs);
-            float[][] logits = (float[][]) output.get("logits").orElseThrow().getValue();
+                Map<String, OnnxTensor> inputs = new LinkedHashMap<>();
+                inputs.put("input_ids", inputIdsTensor);
+                inputs.put("attention_mask", attnMaskTensor);
 
-            // Detect model output format: single logit (sigmoid) vs dual logit (softmax)
-            float[] scores = new float[batchSize];
-            int numLogits = logits[0].length;
-            if (numLogits == 1) {
-                log.debug("BGE reranker single-logit sigmoid scoring (logits[0].length=1)");
-                for (int i = 0; i < batchSize; i++) {
-                    scores[i] = 2.0f / (1.0f + (float) Math.exp(-logits[i][0])) - 1.0f;
+                if (useTokenTypeIds) {
+                    OnnxTensor tokenTypeTensor = OnnxTensor.createTensor(env, new long[batchSize][maxLen]);
+                    ownedTensors.add(tokenTypeTensor);
+                    inputs.put("token_type_ids", tokenTypeTensor);
                 }
-            } else if (numLogits == 2) {
-                log.debug("BGE reranker dual-logit softmax scoring (logits[0].length=2)");
-                for (int i = 0; i < batchSize; i++) {
-                    float e0 = (float) Math.exp(logits[i][0]);
-                    float e1 = (float) Math.exp(logits[i][1]);
-                    scores[i] = 2.0f * e1 / (e0 + e1) - 1.0f;
+
+                try (OrtSession.Result output = session.run(inputs)) {
+                    float[][] logits = (float[][]) output.get("logits").orElseThrow().getValue();
+
+                    // 缓存 logit 维度检测结果（同一模型不会变）
+                    if (detectedNumLogits == null) {
+                        detectedNumLogits = logits[0].length;
+                        log.info("BGE reranker detected {} logits, useTokenTypeIds={}",
+                                detectedNumLogits, useTokenTypeIds);
+                    }
+
+                    float[] scores = new float[batchSize];
+                    if (detectedNumLogits == 1) {
+                        // raw logit 单调性保持排序，无需 sigmoid
+                        for (int i = 0; i < batchSize; i++) {
+                            scores[i] = logits[i][0];
+                        }
+                    } else if (detectedNumLogits == 2) {
+                        // logit 差值（relevant - not_relevant）与 softmax 单调一致
+                        for (int i = 0; i < batchSize; i++) {
+                            scores[i] = logits[i][1] - logits[i][0];
+                        }
+                    } else {
+                        log.warn("Unexpected BGE reranker logits dimension: {} (expected 1 or 2), falling back to RRF scores", detectedNumLogits);
+                        for (int i = 0; i < batchSize; i++) {
+                            scores[i] = (float) batch.get(i).getRrfScore();
+                        }
+                    }
+                    // 成功 — 重置连续失败计数
+                    consecutiveFailures.set(0);
+                    return scores;
                 }
-            } else {
-                log.warn("Unexpected BGE reranker logits dimension: {} (expected 1 or 2), falling back to RRF scores", numLogits);
-                for (int i = 0; i < batchSize; i++) {
-                    scores[i] = (float) batch.get(i).getRrfScore();
+            } finally {
+                for (OnnxTensor t : ownedTensors) {
+                    try { t.close(); } catch (Exception ignored) {}
                 }
             }
-            // 成功 — 重置连续失败计数
-            consecutiveFailures.set(0);
-            return scores;
 
         } catch (Exception e) {
             int failed = consecutiveFailures.incrementAndGet();

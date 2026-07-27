@@ -6,11 +6,19 @@ import lombok.extern.slf4j.Slf4j;
 
 import java.time.LocalDate;
 
+/**
+ * 解析分块 metadata JSON，提取结构化字段。
+ * 所有字段都有默认值，解析失败不抛异常，保证搜索链路不因 metadata 格式问题中断。
+ */
 @Slf4j
 public final class ChunkMetadataParser {
 
     private ChunkMetadataParser() {}
 
+    /**
+     * @param metadataJson document_chunk_v2.metadata 字段的 JSON 字符串
+     * @return ParsedMetadata，缺失字段用空字符串/null 填充
+     */
     public static ParsedMetadata parse(String metadataJson, ObjectMapper objectMapper) {
         if (metadataJson == null) return new ParsedMetadata("", null, "", "", "");
         try {

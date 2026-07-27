@@ -22,6 +22,14 @@ public final class JsonUtil {
         }
     }
 
+    public static String toJson(Object obj) {
+        try {
+            return MAPPER.writeValueAsString(obj);
+        } catch (JsonProcessingException e) {
+            throw new IllegalArgumentException("JSON serialization failed", e);
+        }
+    }
+
     public static String toJsonArray(List<Map<String, Object>> items) {
         try {
             return MAPPER.writeValueAsString(items);
